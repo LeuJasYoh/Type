@@ -1,0 +1,72 @@
+{
+  "RT_GROUP_ICON": {
+    "APP": {
+      "0000": [
+        "16x16.png",
+        "24x24.png",
+        "32x32.png",
+        "48x48.png",
+        "64x64.png",
+        "128x128.png",
+        "256x256.png"
+      ]
+    }
+  },
+  "RT_MANIFEST": {
+    "#1": {
+      "0409": {
+        "identity": {
+          "name": "KBType",
+          "version": "1.1.0.0"
+        },
+        "description": "KBType - 键盘模拟输入器",
+        "minimum-os": "win7",
+        "execution-level": "as invoker",
+        "ui-access": false,
+        "auto-elevate": false,
+        "dpi-awareness": "system",
+        "disable-theming": false,
+        "disable-window-filtering": false,
+        "high-resolution-scrolling-aware": false,
+        "ultra-high-resolution-scrolling-aware": false,
+        "long-path-aware": false,
+        "printer-driver-isolation": false,
+        "gdi-scaling": false,
+        "segment-heap": false,
+        "use-common-controls-v6": true
+      }
+    }
+  },
+  "RT_VERSION": {
+    "#1": {
+      "0000": {
+        "fixed": {
+          "file_version": "1.2.0.0",
+          "product_version": "1.2.0.0"
+        },
+        "info": {
+          "0409": {
+            "CompanyName": "LeuJasYoh",
+            "FileDescription": "KBType",
+            "FileVersion": "1.2",
+            "InternalName": "KBType",
+            "LegalCopyright": "LeuJasYoh",
+            "OriginalFilename": "KBType.exe",
+            "ProductName": "KBType",
+            "ProductVersion": "1.2"
+          },
+          "0804": {
+            "CompanyName": "LeuJasYoh",
+            "FileDescription": "KBType",
+            "FileVersion": "1.2",
+            "InternalName": "KBType",
+            "LegalCopyright": "LeuJasYoh",
+            "OriginalFilename": "KBType.exe",
+            "ProductName": "KBType",
+            "ProductVersion": "1.2"
+          }
+        }
+      }
+    }
+  }
+}
