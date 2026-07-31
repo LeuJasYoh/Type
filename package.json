@@ -1,0 +1,12 @@
+{
+  "name": "kbtype",
+  "version": "1.2.0",
+  "private": true,
+  "description": "键盘模拟输入器 (Go + WebView2 + TypeScript)",
+  "scripts": {
+    "build:frontend": "tsc -p frontend/tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}
