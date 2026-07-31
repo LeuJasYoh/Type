@@ -2,7 +2,7 @@
 
 **键盘模拟输入器** —— 在文本框中输入内容，5 秒后自动模拟键盘键入到任意目标窗口。
 
-![KBType 截图](screenshot.png)
+![KBType 截图](source/screenshot.png)
 
 ---
 
@@ -70,7 +70,10 @@ KBType/
 │   │   ├── script.ts       ← 前端逻辑源码（TypeScript）
 │   │   └── global.d.ts     ← webview 全局绑定类型声明
 │   └── tsconfig.json       ← TypeScript 编译配置
-├── icon.ico                ← 圆角应用图标
+├── source/
+│   ├── icon.ico            ← 应用图标 (version.rc 引用, windres 编译进 exe)
+│   ├── icon.jpg            ← 图标源图
+│   └── screenshot.png      ← README 截图
 ├── version.rc              ← 版本/作者信息资源
 ├── version.syso            ← 编译后的资源文件 (构建产物, 不入库)
 ├── build.ps1               ← 一键构建脚本（版本号单一来源）

@@ -1,7 +1,7 @@
 #include <winver.h>
 
 // 应用程序图标
-IDI_ICON1       ICON    "icon.ico"
+IDI_ICON1       ICON    "source/icon.ico"
 
 // 版本信息
 VS_VERSION_INFO VERSIONINFO
