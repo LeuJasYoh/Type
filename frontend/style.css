@@ -140,6 +140,13 @@ body{font-family:var(--font);background:var(--bg);color:var(--text-primary);-web
 .status-bar.error .status-text{color:var(--danger)}
 .status-bar.info{border-color:var(--border-focus);background:var(--accent-light)}
 .status-bar.info .status-text{color:var(--accent)}
+/* countdown/typing: 运行中阶段(蓝) cancel: 中性灰 */
+.status-bar.countdown{border-color:var(--border-focus);background:var(--accent-light)}
+.status-bar.countdown .status-text{color:var(--accent)}
+.status-bar.typing{border-color:var(--border-focus);background:var(--accent-light)}
+.status-bar.typing .status-text{color:var(--accent)}
+.status-bar.cancel{border-color:var(--text-muted);background:var(--surface-hover)}
+.status-bar.cancel .status-text{color:var(--text-secondary)}
 
 /* ── 进度条 ── */
 .progress-wrap{height:0;overflow:hidden;transition:height .3s ease}

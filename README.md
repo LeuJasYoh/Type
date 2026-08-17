@@ -76,9 +76,10 @@ KBType/
 │   └── screenshot.png      ← README 截图
 ├── version.rc              ← 版本/作者信息资源
 ├── version.syso            ← 编译后的资源文件 (构建产物, 不入库)
+├── winres/                 ← winres 格式资源定义 (winres.json + 多尺寸 PNG)
 ├── build.ps1               ← 一键构建脚本（版本号单一来源）
 ├── go.mod / go.sum         ← Go 模块定义
-├── package.json            ← npm 定义（仅 devDependency: typescript）
+├── package.json / package-lock.json ← npm 定义（仅 devDependency: typescript）
 └── .gitignore              ← 忽略构建产物/依赖/工具元数据
 ```
 
@@ -88,7 +89,7 @@ KBType/
 
 ```powershell
 # 前置条件
-#   - Go 1.20+
+#   - Go 1.26+ (与 go.mod 声明一致)
 #   - MinGW-w64 (gcc, windres)
 #   - Node.js 16+ (仅构建期需要, 产物无需)
 #   - WebView2 库（go mod tidy 自动下载）

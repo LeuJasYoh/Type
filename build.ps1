@@ -37,6 +37,8 @@ $wj = $wj -replace '"file_version":\s*"[^"]+"',    ('"file_version": "'    + $v4
 $wj = $wj -replace '"product_version":\s*"[^"]+"', ('"product_version": "' + $v4Dot + '"')
 $wj = $wj -replace '"FileVersion":\s*"[^"]+"',     ('"FileVersion": "'     + $v2Dot + '"')
 $wj = $wj -replace '"ProductVersion":\s*"[^"]+"',  ('"ProductVersion": "'  + $v2Dot + '"')
+# manifest identity.version (嵌套在 identity 对象内, 需跨行匹配)
+$wj = $wj -replace '("identity"\s*:\s*\{[^\}]*?"version"\s*:\s*)"[^"]+"', ('$1"' + $v4Dot + '"')
 [System.IO.File]::WriteAllText("$root\winres\winres.json", $wj, $utf8NoBom)
 
 # ── 4. 编译 TypeScript 前端 ──────────────────────────

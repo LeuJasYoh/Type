@@ -169,7 +169,8 @@ el.slider.addEventListener('input', () => {
 });
 
 el.text.addEventListener('input', () => {
-  el.charCount.textContent = String(el.text.value.length);
+  // 按码点计数(与 Go 端 []rune 进度分母一致), emoji 不重复计 2
+  el.charCount.textContent = String(Array.from(el.text.value).length);
 });
 
 el.btnStart.addEventListener('click', onStart);

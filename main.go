@@ -76,29 +76,32 @@ type INPUT struct {
 // ─── Win32 DLL ─────────────────────────────────────────
 
 var (
-	user32                  = syscall.NewLazyDLL("user32.dll")
-	kernel32                = syscall.NewLazyDLL("kernel32.dll")
-	shell32                 = syscall.NewLazyDLL("shell32.dll")
-	procSendInput           = user32.NewProc("SendInput")
-	procSendMessageW        = user32.NewProc("SendMessageW")
-	procPostMessageW        = user32.NewProc("PostMessageW")
-	procOpenClipboard       = user32.NewProc("OpenClipboard")
-	procCloseClipboard      = user32.NewProc("CloseClipboard")
-	procEmptyClipboard      = user32.NewProc("EmptyClipboard")
-	procSetClipboardData    = user32.NewProc("SetClipboardData")
-	procGetClipboardData    = user32.NewProc("GetClipboardData")
-	procGlobalAlloc         = kernel32.NewProc("GlobalAlloc")
-	procGlobalLock          = kernel32.NewProc("GlobalLock")
-	procGlobalUnlock        = kernel32.NewProc("GlobalUnlock")
-	procGlobalSize          = kernel32.NewProc("GlobalSize")
-	procRtlMoveMemory       = kernel32.NewProc("RtlMoveMemory")
-	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
-	procLoadImageW          = user32.NewProc("LoadImageW")
-	procDestroyIcon         = user32.NewProc("DestroyIcon")
-	procRedrawWindow        = user32.NewProc("RedrawWindow")
-	procSHGetFileInfoW      = shell32.NewProc("SHGetFileInfoW")
-	procGetForegroundWindow = user32.NewProc("GetForegroundWindow")
-	procGetWindowTextW      = user32.NewProc("GetWindowTextW")
+	user32                       = syscall.NewLazyDLL("user32.dll")
+	kernel32                     = syscall.NewLazyDLL("kernel32.dll")
+	shell32                      = syscall.NewLazyDLL("shell32.dll")
+	procSendInput                = user32.NewProc("SendInput")
+	procSendMessageW             = user32.NewProc("SendMessageW")
+	procPostMessageW             = user32.NewProc("PostMessageW")
+	procOpenClipboard            = user32.NewProc("OpenClipboard")
+	procCloseClipboard           = user32.NewProc("CloseClipboard")
+	procEmptyClipboard           = user32.NewProc("EmptyClipboard")
+	procSetClipboardData         = user32.NewProc("SetClipboardData")
+	procGetClipboardData         = user32.NewProc("GetClipboardData")
+	procGlobalAlloc              = kernel32.NewProc("GlobalAlloc")
+	procGlobalLock               = kernel32.NewProc("GlobalLock")
+	procGlobalUnlock             = kernel32.NewProc("GlobalUnlock")
+	procGlobalSize               = kernel32.NewProc("GlobalSize")
+	procRtlMoveMemory            = kernel32.NewProc("RtlMoveMemory")
+	procGetModuleHandleW         = kernel32.NewProc("GetModuleHandleW")
+	procLoadImageW               = user32.NewProc("LoadImageW")
+	procDestroyIcon              = user32.NewProc("DestroyIcon")
+	procRedrawWindow             = user32.NewProc("RedrawWindow")
+	procSHGetFileInfoW           = shell32.NewProc("SHGetFileInfoW")
+	procGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
+	procGetWindowTextW           = user32.NewProc("GetWindowTextW")
+	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
+	procGetGUIThreadInfo         = user32.NewProc("GetGUIThreadInfo")
+	procGlobalFree               = kernel32.NewProc("GlobalFree")
 )
 
 var cancelFlag atomic.Bool
@@ -256,6 +259,41 @@ func retrySetIcon(hwnd uintptr) {
 	}()
 }
 
+// GUITHREADINFO / RECT 用于 GetGUIThreadInfo 定位焦点窗口
+type RECT struct {
+	Left, Top, Right, Bottom int32
+}
+
+type GUITHREADINFO struct {
+	cbSize        uint32
+	flags         uint32
+	hwndActive    uintptr
+	hwndFocus     uintptr
+	hwndCapture   uintptr
+	hwndMenuOwner uintptr
+	hwndMoveSize  uintptr
+	hwndCaret     uintptr
+	rcCaret       RECT
+}
+
+// focusedHWND 返回当前实际持有键盘焦点的窗口;
+// 前台顶层窗口通常只是容器(如浏览器主窗口), 直接向其发消息会被丢弃
+func focusedHWND() uintptr {
+	hwnd, _, _ := procGetForegroundWindow.Call()
+	if hwnd == 0 {
+		return 0
+	}
+	tid, _, _ := procGetWindowThreadProcessId.Call(hwnd, 0)
+	if tid != 0 {
+		var gti GUITHREADINFO
+		gti.cbSize = uint32(unsafe.Sizeof(gti))
+		if ret, _, _ := procGetGUIThreadInfo.Call(tid, uintptr(unsafe.Pointer(&gti))); ret != 0 && gti.hwndFocus != 0 {
+			return gti.hwndFocus
+		}
+	}
+	return hwnd
+}
+
 // foregroundWindowTitle 读取当前前台窗口标题(用于目标窗口预览)
 func foregroundWindowTitle() string {
 	hwnd, _, _ := procGetForegroundWindow.Call()
@@ -323,7 +361,7 @@ func sendRune(r rune) {
 // sendCharViaWMChar 通过 WM_CHAR 消息直接向前台窗口注入字符
 // 绕过 KEYEVENTF_UNICODE 对全角标点的处理 bug
 func sendCharViaWMChar(r rune) {
-	hwnd, _, _ := procGetForegroundWindow.Call()
+	hwnd := focusedHWND()
 	if hwnd == 0 {
 		// 兜底：退化为 SendInput
 		sendChar16(uint16(r))
@@ -381,6 +419,7 @@ func clipboardSetText(text string) bool {
 	}
 	ptr, _, _ := procGlobalLock.Call(hMem)
 	if ptr == 0 {
+		procGlobalFree.Call(hMem) // 加锁失败必须释放, 否则泄漏
 		return false
 	}
 	// RtlMoveMemory 批量拷贝: 源为 Go 切片指针 (Pointer->uintptr 单向转换, vet 认可),
@@ -388,6 +427,9 @@ func clipboardSetText(text string) bool {
 	procRtlMoveMemory.Call(ptr, uintptr(unsafe.Pointer(unsafe.SliceData(encoded))), uintptr(size))
 	procGlobalUnlock.Call(hMem)
 	ret, _, _ := procSetClipboardData.Call(CF_UNICODETEXT, hMem)
+	if ret == 0 {
+		procGlobalFree.Call(hMem) // 系统未接管所有权时由调用方释放
+	}
 	return ret != 0
 }
 
@@ -607,6 +649,11 @@ func main() {
 		typingStatus.Store(&TypingStatus{
 			Phase: PhaseCancel, Message: "已取消", Progress: -1,
 		})
+		// 等待后台任务真正退出(上限 2 秒), 否则"取消后立即启动"
+		// 会撞上 runningFlag 互斥而报"已有任务在运行中"
+		for i := 0; i < 40 && runningFlag.Load(); i++ {
+			time.Sleep(50 * time.Millisecond)
+		}
 		return "cancelled", nil
 	})
 
