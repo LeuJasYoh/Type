@@ -1,4 +1,4 @@
-# build.ps1 — 一键构建 KBType
+# build.ps1 — 一键构建 Type
 # 版本号单一来源: main.go 中的 `version` 变量, 此处自动同步到
 # version.rc / winres.json 资源文件; 前端 TypeScript 经 tsc 编译为
 # frontend/script.js 后嵌入, 再 windres + go build。
@@ -52,14 +52,14 @@ npx tsc -p frontend/tsconfig.json
 if ($LASTEXITCODE -ne 0) { throw "tsc 失败 (exit $LASTEXITCODE)" }
 
 # ── 5. 编译资源与可执行文件 ───────────────────────────
-Write-Host "构建 KBType v$ver ..."
+Write-Host "构建 Type v$ver ..."
 windres -o version.syso version.rc
 if ($LASTEXITCODE -ne 0) { throw "windres 失败 (exit $LASTEXITCODE)" }
-go build -ldflags="-H windowsgui -s -w" -o KBType.exe .
+go build -ldflags="-H windowsgui -s -w" -o Type.exe .
 if ($LASTEXITCODE -ne 0) { throw "go build 失败 (exit $LASTEXITCODE)" }
 
-$f = Get-Item "KBType.exe"
+$f = Get-Item "Type.exe"
 $v = $f.VersionInfo
-Write-Host "构建完成: KBType.exe ($([math]::Round($f.Length / 1KB, 1)) KB)"
+Write-Host "构建完成: Type.exe ($([math]::Round($f.Length / 1KB, 1)) KB)"
 Write-Host "  FileVersion:    $($v.FileVersion)"
 Write-Host "  ProductVersion: $($v.ProductVersion)"

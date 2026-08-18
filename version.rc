@@ -18,12 +18,12 @@ BEGIN
         BLOCK "040904B0"
         BEGIN
             VALUE "CompanyName",      "LeuJasYoh"
-            VALUE "FileDescription",  "KBType - Keyboard Input Simulator"
+            VALUE "FileDescription",  "Type - Keyboard Input Simulator"
             VALUE "FileVersion",      "1.2.0.0"
-            VALUE "InternalName",     "KBType"
+            VALUE "InternalName",     "Type"
             VALUE "LegalCopyright",   "Copyright (C) 2025 LeuJasYoh"
-            VALUE "OriginalFilename", "KBType.exe"
-            VALUE "ProductName",      "KBType"
+            VALUE "OriginalFilename", "Type.exe"
+            VALUE "ProductName",      "Type"
             VALUE "ProductVersion",   "1.2.0"
         END
     END

@@ -1,6 +1,6 @@
 # ── 构建产物 ───────────────────────────────
 # go build 产物
-KBType.exe
+Type.exe
 *.exe
 # windres 生成
 *.syso

@@ -1,8 +1,8 @@
-# KBType
+# Type
 
 **键盘模拟输入器** —— 在文本框中输入内容，5 秒后自动模拟键盘键入到任意目标窗口。
 
-![KBType 截图](source/screenshot.png)
+![Type 截图](source/screenshot.png)
 
 ---
 
@@ -23,7 +23,7 @@
 
 ## 使用
 
-1. 双击 `KBType.exe`
+1. 双击 `Type.exe`
 2. 在文本框中输入要模拟键入的内容
 3. 勾选“绕过粘贴检测”可强制逐字符输入（默认含中文自动走剪贴板）
 4. 调节倒计时秒数
@@ -58,8 +58,8 @@ Win32 API SendInput (KEYEVENTF_UNICODE) + 剪贴板 (CF_UNICODETEXT, RtlMoveMemo
 ### 项目结构
 
 ```
-KBType/
-├── KBType.exe              ← 可执行文件 (构建产物, 不入库)
+Type/
+├── Type.exe              ← 可执行文件 (构建产物, 不入库)
 ├── main.go                 ← Go 入口 + Win32 API 调用
 ├── main_test.go            ← 单元测试 (UTF-16 拆分/ASCII/CJK 标点判定)
 ├── frontend/
@@ -94,7 +94,7 @@ KBType/
 #   - Node.js 16+ (仅构建期需要, 产物无需)
 #   - WebView2 库（go mod tidy 自动下载）
 
-cd KBType
+cd Type
 npm install                # 安装 typescript (仅首次)
 go mod tidy
 
@@ -104,7 +104,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 # 或手动分步:
 npx tsc -p frontend/tsconfig.json   # 编译 TypeScript → frontend/script.js
 windres -o version.syso version.rc
-go build -ldflags="-H windowsgui -s -w" -o KBType.exe .
+go build -ldflags="-H windowsgui -s -w" -o Type.exe .
 ```
 
 ---

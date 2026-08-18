@@ -16,10 +16,10 @@
     "#1": {
       "0409": {
         "identity": {
-          "name": "KBType",
+          "name": "Type",
           "version": "1.2.0.0"
         },
-        "description": "KBType - 键盘模拟输入器",
+        "description": "Type - 键盘模拟输入器",
         "minimum-os": "win7",
         "execution-level": "as invoker",
         "ui-access": false,
@@ -47,22 +47,22 @@
         "info": {
           "0409": {
             "CompanyName": "LeuJasYoh",
-            "FileDescription": "KBType",
+            "FileDescription": "Type",
             "FileVersion": "1.2",
-            "InternalName": "KBType",
+            "InternalName": "Type",
             "LegalCopyright": "LeuJasYoh",
-            "OriginalFilename": "KBType.exe",
-            "ProductName": "KBType",
+            "OriginalFilename": "Type.exe",
+            "ProductName": "Type",
             "ProductVersion": "1.2"
           },
           "0804": {
             "CompanyName": "LeuJasYoh",
-            "FileDescription": "KBType",
+            "FileDescription": "Type",
             "FileVersion": "1.2",
-            "InternalName": "KBType",
+            "InternalName": "Type",
             "LegalCopyright": "LeuJasYoh",
-            "OriginalFilename": "KBType.exe",
-            "ProductName": "KBType",
+            "OriginalFilename": "Type.exe",
+            "ProductName": "Type",
             "ProductVersion": "1.2"
           }
         }

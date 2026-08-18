@@ -505,7 +505,7 @@ func typeTextViaClipboard(text string) bool {
 func main() {
 	w := webview.New(true)
 	defer w.Destroy()
-	w.SetTitle("KBType " + version)
+	w.SetTitle("Type " + version)
 	w.SetSize(540, 400, webview.HintFixed)
 
 	// 设置窗口图标（首次 + 延迟重试）

@@ -1,4 +1,4 @@
-module kbtyper
+module Type
 
 go 1.26.5
 
