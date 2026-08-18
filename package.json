@@ -1,6 +1,6 @@
 {
   "name": "type",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "键盘模拟输入器 (Go + WebView2 + TypeScript)",
   "scripts": {

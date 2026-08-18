@@ -25,7 +25,7 @@ var styleCSS string
 //go:embed frontend/script.js
 var scriptJS string
 
-var version = "1.2"
+var version = "1.2.1"
 
 func buildHTML() string {
 	s := indexHTML
