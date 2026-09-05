@@ -20,7 +20,7 @@ import (
 //go:embed frontend/dist/index.html
 var indexHTML string
 
-var version = "1.2.1"
+var version = "1.3.0"
 
 // ─── Win32 常量与结构 ──────────────────────────────────
 
