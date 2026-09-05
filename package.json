@@ -2,6 +2,7 @@
   "name": "type",
   "version": "1.3.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "键盘模拟输入器 (Go + WebView2 + Vue 3 + Vite)",
   "scripts": {

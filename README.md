@@ -142,5 +142,5 @@ Type.exe -dev               # 终端 2: 窗口指向 dev server, 改代码即时
 
 ## 许可
 
-本项目仅供学习交流使用。
+本项目基于 [MIT License](LICENSE) 开源发布。
 
