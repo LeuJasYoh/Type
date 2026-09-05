@@ -2,11 +2,20 @@
   "name": "type",
   "version": "1.2.1",
   "private": true,
-  "description": "键盘模拟输入器 (Go + WebView2 + TypeScript)",
+  "type": "module",
+  "description": "键盘模拟输入器 (Go + WebView2 + Vue 3 + Vite)",
   "scripts": {
-    "build:frontend": "tsc -p frontend/tsconfig.json"
+    "dev": "vite",
+    "build": "vue-tsc -p frontend/tsconfig.json --noEmit && vite build"
+  },
+  "dependencies": {
+    "vue": "^3.5.0"
   },
   "devDependencies": {
-    "typescript": "^7.0.2"
+    "@vitejs/plugin-vue": "^6.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.0.0",
+    "vite-plugin-singlefile": "^2.0.0",
+    "vue-tsc": "^3.0.0"
   }
 }

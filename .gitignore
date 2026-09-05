@@ -4,8 +4,9 @@ Type.exe
 *.exe
 # windres 生成
 *.syso
-# tsc 编译产物, 由 frontend/ts/ 生成 (勿提交)
-frontend/script.js
+# Vite 构建产物 (仅 index.html 入库: go:embed 引用, 免 Node 亦可 go build/test)
+frontend/dist/*
+!frontend/dist/index.html
 
 # ── Go ────────────────────────────────────
 *.test

@@ -1,10 +1,10 @@
 # build.ps1 — 一键构建 Type
 # 版本号单一来源: main.go 中的 `version` 变量, 此处自动同步到
-# version.rc / winres.json 资源文件; 前端 TypeScript 经 tsc 编译为
-# frontend/script.js 后嵌入, 再 windres + go build。
+# version.rc / winres.json / package.json; 前端 Vue + Vite 构建为
+# frontend/dist/index.html 单文件后嵌入, 再 windres + go build。
 #
 # 用法:  powershell -ExecutionPolicy Bypass -File .\build.ps1
-# 依赖:  Go 1.20+、MinGW-w64 (windres)、Node.js 16+ (npm)
+# 依赖:  Go 1.20+、MinGW-w64 (windres)、Node.js 20+ (npm)
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -41,15 +41,21 @@ $wj = $wj -replace '"ProductVersion":\s*"[^"]+"',  ('"ProductVersion": "'  + $v2
 $wj = $wj -replace '("identity"\s*:\s*\{[^\}]*?"version"\s*:\s*)"[^"]+"', ('$1"' + $v4Dot + '"')
 [System.IO.File]::WriteAllText("$root\winres\winres.json", $wj, $utf8NoBom)
 
-# ── 4. 编译 TypeScript 前端 ──────────────────────────
-Write-Host "编译 TypeScript 前端 ..."
-if (-not (Test-Path "node_modules\typescript\package.json")) {
-    Write-Host "  首次运行: 安装 typescript ..."
+# ── 3.5 同步 package.json ────────────────────────────
+$pj = [System.IO.File]::ReadAllText("$root\package.json")
+$pj = $pj -replace '("version"\s*:\s*)"[^"]+"', ('$1"' + $ver + '"')
+[System.IO.File]::WriteAllText("$root\package.json", $pj, $utf8NoBom)
+
+# ── 4. 构建 Vue 前端 (类型检查 + Vite 单文件打包) ────
+Write-Host "构建 Vue 前端 ..."
+if (-not (Test-Path "node_modules\vite\package.json")) {
+    Write-Host "  首次运行: 安装依赖 ..."
     npm install --no-audit --no-fund
     if ($LASTEXITCODE -ne 0) { throw "npm install 失败 (exit $LASTEXITCODE)" }
 }
-npx tsc -p frontend/tsconfig.json
-if ($LASTEXITCODE -ne 0) { throw "tsc 失败 (exit $LASTEXITCODE)" }
+npm run build
+if ($LASTEXITCODE -ne 0) { throw "前端构建失败 (exit $LASTEXITCODE)" }
+if (-not (Test-Path "frontend\dist\index.html")) { throw "未找到 frontend\dist\index.html" }
 
 # ── 5. 编译资源与可执行文件 ───────────────────────────
 Write-Host "构建 Type v$ver ..."

@@ -4,7 +4,6 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -16,23 +15,12 @@ import (
 
 // ─── 嵌入前端资源 ─────────────────────────────────────
 
-//go:embed frontend/index.html
+// Vite 构建的自包含单文件 (vue-tsc + vite build 生成于 frontend/dist/)
+
+//go:embed frontend/dist/index.html
 var indexHTML string
 
-//go:embed frontend/style.css
-var styleCSS string
-
-//go:embed frontend/script.js
-var scriptJS string
-
 var version = "1.2.1"
-
-func buildHTML() string {
-	s := indexHTML
-	s = strings.ReplaceAll(s, "{{STYLE}}", styleCSS)
-	s = strings.ReplaceAll(s, "{{SCRIPT}}", scriptJS)
-	return s
-}
 
 // ─── Win32 常量与结构 ──────────────────────────────────
 
@@ -47,6 +35,8 @@ const (
 	ICON_BIG       = 1
 	IMAGE_ICON     = 1
 	LR_DEFAULTSIZE = 0x0040
+
+	SMTO_ABORTIFHUNG = 0x0002 // 目标窗口挂起时放弃消息, 不阻塞发送方
 
 	CF_UNICODETEXT = 13
 	GMEM_MOVABLE   = 0x0002
@@ -80,7 +70,7 @@ var (
 	kernel32                     = syscall.NewLazyDLL("kernel32.dll")
 	shell32                      = syscall.NewLazyDLL("shell32.dll")
 	procSendInput                = user32.NewProc("SendInput")
-	procSendMessageW             = user32.NewProc("SendMessageW")
+	procSendMessageTimeoutW      = user32.NewProc("SendMessageTimeoutW")
 	procPostMessageW             = user32.NewProc("PostMessageW")
 	procOpenClipboard            = user32.NewProc("OpenClipboard")
 	procCloseClipboard           = user32.NewProc("CloseClipboard")
@@ -367,8 +357,10 @@ func sendCharViaWMChar(r rune) {
 		sendChar16(uint16(r))
 		return
 	}
-	// WM_CHAR 的 lParam 设 1 表示模拟键盘输入
-	procSendMessageW.Call(hwnd, WM_CHAR, uintptr(r), 1)
+	// WM_CHAR 的 lParam 设 1 表示模拟键盘输入;
+	// 带超时发送, 目标窗口挂起时放弃而不是卡死输入循环
+	var result uintptr
+	procSendMessageTimeoutW.Call(hwnd, WM_CHAR, uintptr(r), 1, SMTO_ABORTIFHUNG, 1000, uintptr(unsafe.Pointer(&result)))
 	time.Sleep(2 * time.Millisecond)
 }
 
@@ -512,13 +504,11 @@ func main() {
 	hw := uintptr(w.Window())
 	retrySetIcon(hw)
 
-	html := buildHTML()
-	w.SetHtml(html)
-
 	// 初始化状态
 	typingStatus.Store(&TypingStatus{Phase: PhaseIdle})
 
 	// 绑定 Go 函数到 JS
+	// (须在加载页面前完成: 绑定的注入脚本对随后创建的文档生效)
 
 	w.Bind("startTyping", func(text string, delay int, forceSendInput bool) (string, error) {
 		if !runningFlag.CompareAndSwap(false, true) {
@@ -671,7 +661,25 @@ func main() {
 		return typingStatus.Load().(*TypingStatus)
 	})
 
+	// 加载界面: -dev 指向 Vite dev server (支持 HMR, 需先 npm run dev),
+	// 默认加载嵌入的自包含页面
+	if devMode() {
+		w.Navigate("http://localhost:5173")
+	} else {
+		w.SetHtml(indexHTML)
+	}
+
 	w.Run()
+}
+
+// devMode 是否以开发模式运行(-dev 参数)
+func devMode() bool {
+	for _, arg := range os.Args[1:] {
+		if arg == "-dev" {
+			return true
+		}
+	}
+	return false
 }
 
 // isCJKPunct 判断是否中日韩标点
