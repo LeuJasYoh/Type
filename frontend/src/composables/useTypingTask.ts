@@ -67,12 +67,13 @@ export function useTypingTask() {
       secondsLeft: delay,
     });
 
-    try {
-      // Go 端在 handler 内同步写入 countdown 状态后才返回,
-      // 因此先 await 再开轮询, 保证首个 tick 读到的必是新状态
-      await startTyping(text, delay, forceRaw);
-      startPolling();
-    } catch (err: unknown) {
+	try {
+		// Go 端在 handler 内同步写入 countdown 状态后才返回,
+		// 因此先 await 再开轮询, 保证首个 tick 读到的必是新状态
+		await startTyping(text, delay, forceRaw);
+		if (!isRunning.value) return; // 等待期间用户已取消, 不恢复轮询
+		startPolling();
+	} catch (err: unknown) {
       stopPolling();
       isRunning.value = false;
       status.value = statusOf({ phase: 'error', message: errMsg(err), progress: -1 });

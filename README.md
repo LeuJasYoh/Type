@@ -124,13 +124,20 @@ npm run dev                 # 终端 1: Vite dev server (http://localhost:5173)
 Type.exe -dev               # 终端 2: 窗口指向 dev server, 改代码即时热更新
 ```
 
-`-dev` 模式下 webview 的 Go 绑定照常工作，可完整调试 IPC 链路。
+`-dev` 模式下 webview 的 Go 绑定照常工作，可完整调试 IPC 链路。若 5173 端口被占用，设置 `TYPE_DEV_URL` 环境变量指定实际地址（如 `http://localhost:5174`）。
 
 ---
 
 ## 输入错误说明
 
 `SendInput` + `KEYEVENTF_UNICODE` 对全角标点（U+FF00~FFEF）存在系统级处理异常，表现为标点重复、后续字符被吞。**解决方案**：程序检测到文本含中文时，自动降级为剪贴板 `Ctrl+V` 模式，保证输入准确无误。
+
+---
+
+## 已知限制
+
+- **目标窗口权限** —— Windows UIPI 限制：以普通权限运行的 Type 无法向管理员权限的窗口（如管理员 CMD/PowerShell）注入输入，表现为静默无效。如需面向提权窗口，请以管理员身份运行 Type.exe。
+- **杀毒软件误报** —— 键盘模拟（SendInput）与剪贴板操作是杀软启发式扫描的常见敏感组合，若下载或运行时被误报，请添加信任或自行编译。
 
 ---
 
