@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>paste-guard</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f0f2f5;--surface:#fff;--border:#e4e7ed;--text:#1f1f1f;--text2:#5f6368;
+  --accent:#1a73e8;--accent-light:#e8f0fe;--danger:#d93025;--danger-bg:#fce8e6;
+  --ok:#188038;--ok-bg:#e6f4ea;--warn:#b06000;--warn-bg:#fef7e0;
+}
+body{font-family:system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;background:var(--bg);color:var(--text);padding:20px;line-height:1.6}
+.wrap{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+header h1{font-family:Consolas,'Courier New',monospace;font-size:18px}
+header p{color:var(--text2);font-size:13px;margin-top:2px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px}
+.card h2{font-size:14px;margin-bottom:2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.card .desc{font-size:12px;color:var(--text2);margin-bottom:10px}
+.badge{font-size:11px;font-weight:600;padding:1px 8px;border-radius:9px;white-space:nowrap}
+.badge.l1{background:var(--accent-light);color:var(--accent)}
+.badge.l2{background:var(--warn-bg);color:var(--warn)}
+.badge.l3{background:var(--danger-bg);color:var(--danger)}
+textarea{width:100%;min-height:60px;padding:10px 12px;border:1.5px solid var(--border);border-radius:6px;font:inherit;font-size:14px;resize:vertical;background:#fafbfc}
+textarea:focus{outline:none;border-color:var(--accent);background:#fff}
+input[type=text]{width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:6px;font:inherit;font-size:14px}
+input[type=text]:focus{outline:none;border-color:var(--accent)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.chip{font-size:11px;padding:2px 9px;border-radius:4px;background:var(--bg);color:var(--text2);border:1px solid var(--border)}
+.chip.ok{background:var(--ok-bg);color:var(--ok);border-color:transparent}
+.chip.warn{background:var(--warn-bg);color:var(--warn);border-color:transparent}
+.chip.bad{background:var(--danger-bg);color:var(--danger);border-color:transparent}
+button{padding:7px 16px;border:none;border-radius:6px;background:var(--accent);color:#fff;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+button:hover{background:#1557b0}
+button.ghost{background:var(--surface);color:var(--accent);border:1.5px solid var(--border)}
+#log{max-height:220px;overflow-y:auto;font-family:Consolas,monospace;font-size:11.5px;display:flex;flex-direction:column;gap:2px}
+#log div{padding:3px 8px;border-radius:4px;background:var(--bg);display:flex;gap:8px}
+#log .t{color:var(--text2);flex-shrink:0}
+#log .bad{color:var(--danger)}
+#log .warn{color:var(--warn)}
+#log .info{color:var(--text2)}
+table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:6px}
+th,td{border:1px solid var(--border);padding:5px 10px;text-align:left}
+th{background:var(--bg);font-weight:600}
+.yes{color:var(--ok);font-weight:600}.no{color:var(--danger);font-weight:600}.maybe{color:var(--warn);font-weight:600}
+footer{font-size:11px;color:var(--text2);text-align:center;padding-bottom:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>paste-guard</h1>
+    <p>测键盘模拟输入面对禁粘贴页面的表现。三档防护递增,附输入节奏分析。</p>
+  </header>
+
+  <div class="card">
+    <h2>目标文本 <span class="badge" style="background:var(--ok-bg);color:var(--ok)">不限</span></h2>
+    <p class="desc">准备用 Type 键入的内容,作为下方字段的比对基准。本框不拦任何东西。</p>
+    <input type="text" id="target" placeholder="Hello Type 2026(含中文走剪贴板模式,纯英文走逐字符)">
+  </div>
+
+  <div class="card">
+    <h2>字段 A <span class="badge l1">拦 paste 事件</span></h2>
+    <p class="desc">最基础的防粘贴:只阻止 paste 事件,Ctrl+V 的按键不拦。</p>
+    <textarea id="fieldA" placeholder="焦点放这里,再启动 Type"></textarea>
+    <div class="chips" id="chipsA"></div>
+  </div>
+
+  <div class="card">
+    <h2>字段 B <span class="badge l2">A + 按键 / 右键 / 拖放</span></h2>
+    <p class="desc">paste、Ctrl+V、Shift+Insert、右键菜单、拖放,全拦。考试系统常见配置。</p>
+    <textarea id="fieldB" placeholder="焦点放这里,再启动 Type"></textarea>
+    <div class="chips" id="chipsB"></div>
+  </div>
+
+  <div class="card">
+    <h2>字段 C <span class="badge l3">B + 节奏分析</span></h2>
+    <p class="desc">在 B 上分析输入节奏:间隔均值 &lt;20ms 且方差小、或输入事件没有邻近的键盘事件,判为注入。检验模拟键入会不会被反自动化识破。</p>
+    <textarea id="fieldC" placeholder="焦点放这里,再启动 Type"></textarea>
+    <div class="chips" id="chipsC"></div>
+    <div style="margin-top:10px"><button class="ghost" id="btnSelfTest">自检:6ms 间隔合成注入 39 字符</button></div>
+  </div>
+
+  <div class="card">
+    <h2>事件日志 <button class="ghost" id="btnClear" style="margin-left:auto;padding:3px 12px;font-size:11px">清空</button></h2>
+    <div id="log"></div>
+  </div>
+
+  <div class="card">
+    <h2>预期结果(Type 各模式)</h2>
+    <table>
+      <tr><th>模式</th><th>A</th><th>B</th><th>C</th></tr>
+      <tr><td>纯英文/数字(逐字符 SendInput)</td><td class="yes">过</td><td class="yes">过</td><td class="maybe">过,带节奏标记</td></tr>
+      <tr><td>含中文(默认,剪贴板 Ctrl+V)</td><td class="no">拦</td><td class="no">拦</td><td class="no">拦</td></tr>
+      <tr><td>含中文 + 绕过(SendInput UNICODE)</td><td class="yes">过</td><td class="yes">过</td><td class="maybe">过,带节奏标记</td></tr>
+      <tr><td>全角标点 + 绕过(WM_CHAR 路径)</td><td class="maybe">待测</td><td class="maybe">待测</td><td class="maybe">看无键输入计数</td></tr>
+    </table>
+    <p class="desc" style="margin-top:8px">步骤:填目标文本 → Type 里输入同样内容 → 启动 → 焦点点进某个字段 → 等键入完,看判定。</p>
+  </div>
+
+  <footer>paste-guard · 本地测试页,供 Type 及同类输入模拟工具验证</footer>
+</div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const targetInput = $('target');
+
+const fields = {
+  fieldA: { level: 1, chips: $('chipsA') },
+  fieldB: { level: 2, chips: $('chipsB') },
+  fieldC: { level: 3, chips: $('chipsC') },
+};
+
+const state = {};
+for (const id of Object.keys(fields)) {
+  state[id] = { blockedPaste: 0, blockedKey: 0, blockedOther: 0,
+                inputs: 0, keydowns: 0, keyless: 0, ts: [], lastKeydown: -1e9 };
+}
+
+// ─── 事件日志 ───
+const logEl = $('log');
+function log(field, msg, cls) {
+  const d = new Date();
+  const t = d.toLocaleTimeString('zh-CN', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+  const row = document.createElement('div');
+  row.innerHTML = `<span class="t">${t}</span><span class="${cls}">[${field}] ${msg}</span>`;
+  logEl.prepend(row);
+  while (logEl.children.length > 200) logEl.lastChild.remove();
+}
+$('btnClear').addEventListener('click', () => { logEl.innerHTML = ''; });
+
+// ─── 防护挂载 ───
+for (const [id, f] of Object.entries(fields)) {
+  const el = $(id);
+  el.addEventListener('paste', e => {
+    e.preventDefault();
+    state[id].blockedPaste++;
+    log(id, '拦截 paste 事件', 'bad');
+    update(id);
+  });
+  el.addEventListener('input', () => {
+    const st = state[id];
+    const now = performance.now();
+    st.inputs++;
+    st.ts.push(now);
+    if (now - st.lastKeydown > 120) st.keyless++;   // 输入事件前没有邻近的键盘事件
+    update(id);
+  });
+  if (f.level >= 2) {
+    el.addEventListener('keydown', e => {
+      const st = state[id];
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
+        e.preventDefault(); st.blockedKey++;
+        log(id, '拦截 Ctrl+V 按键', 'bad'); update(id); return;
+      }
+      if (e.shiftKey && e.key === 'Insert') {
+        e.preventDefault(); st.blockedKey++;
+        log(id, '拦截 Shift+Insert 按键', 'bad'); update(id); return;
+      }
+      st.keydowns++; st.lastKeydown = performance.now();
+    });
+    el.addEventListener('contextmenu', e => { e.preventDefault(); log(id, '拦截右键菜单', 'bad'); });
+    el.addEventListener('drop', e => {
+      e.preventDefault(); state[id].blockedOther++;
+      log(id, '拦截拖放粘贴', 'bad'); update(id);
+    });
+  }
+}
+
+// ─── 分析 ───
+function lcsLen(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] + 1 : Math.max(dp[i-1][j], dp[i][j-1]);
+  return dp[m][n];
+}
+
+function rhythmVerdict(st) {
+  const iv = [];
+  for (let i = 1; i < st.ts.length; i++) {
+    const d = st.ts[i] - st.ts[i-1];
+    if (d < 500) iv.push(d);           // 忽略 >500ms 的停顿
+  }
+  if (iv.length < 8) return null;
+  const avg = iv.reduce((a, b) => a + b, 0) / iv.length;
+  const sd = Math.sqrt(iv.reduce((a, b) => a + (b - avg) ** 2, 0) / iv.length);
+  const min = Math.min(...iv);
+  if (avg <= 20 && sd <= 6) return { cls: 'warn', text: `高频均匀注入(均 ${avg.toFixed(1)}ms · σ=${sd.toFixed(1)}ms)` };
+  if (min <= 6 && iv.length >= 5) return { cls: 'warn', text: `出现 ${min.toFixed(1)}ms 超短间隔` };
+  return { cls: 'ok', text: '人类输入节奏' };
+}
+
+function chipEl(text, cls) {
+  const s = document.createElement('span');
+  s.className = 'chip' + (cls ? ' ' + cls : '');
+  s.textContent = text;
+  return s;
+}
+
+function update(id) {
+  const st = state[id];
+  const chips = fields[id].chips;
+  chips.innerHTML = '';
+  chips.appendChild(chipEl(`拦 paste ${st.blockedPaste}`));
+  if (fields[id].level >= 2) chips.appendChild(chipEl(`拦按键 ${st.blockedKey}`));
+  chips.appendChild(chipEl(`键盘事件 ${st.keydowns}`));
+  chips.appendChild(chipEl(`输入事件 ${st.inputs}`));
+  chips.appendChild(chipEl(`无键输入 ${st.keyless}`, st.keyless > 0 ? 'warn' : ''));
+  chips.appendChild(chipEl(`无键占比 ${st.inputs ? Math.round(st.keyless / st.inputs * 100) : 0}%`, st.inputs && st.keyless / st.inputs > 0.5 ? 'warn' : ''));
+
+  const target = targetInput.value;
+  if (target) {
+    const v = $(id).value;
+    if (v === target) chips.appendChild(chipEl('与目标一致', 'ok'));
+    else {
+      const pct = target ? Math.round(lcsLen(v, target) / target.length * 100) : 0;
+      chips.appendChild(chipEl(`匹配 ${pct}%(${[...v].length}/${[...target].length} 字)`, pct === 100 ? 'ok' : ''));
+    }
+  }
+  const r = rhythmVerdict(st);
+  if (r) chips.appendChild(chipEl(r.text, r.cls));
+  const totalBlocked = st.blockedPaste + st.blockedKey + st.blockedOther;
+  if (totalBlocked > 0) chips.appendChild(chipEl(`已阻止粘贴 ${totalBlocked} 次`, 'bad'));
+}
+targetInput.addEventListener('input', () => Object.keys(fields).forEach(update));
+
+// ─── 自检:JS 高速注入(合成事件)验证节奏检测器 ───
+$('btnSelfTest').addEventListener('click', () => {
+  const el = $('fieldC');
+  el.focus();
+  const text = 'self-test-machine-injection-0123456789';
+  log('fieldC', '自检开始:6ms 间隔合成注入', 'warn');
+  let i = 0;
+  const t = setInterval(() => {
+    if (i >= text.length) { clearInterval(t); log('fieldC', '自检完成:判定栏应出现高频均匀标记', 'warn'); return; }
+    el.value += text[i];
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text[i] }));
+    i++;
+  }, 6);
+});
+
+log('system', '防护已挂载,等输入', 'info');
+</script>
+</body>
+</html>
