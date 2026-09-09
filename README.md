@@ -2,7 +2,7 @@
 
 **键盘模拟输入器** —— 在文本框中输入内容，5 秒后自动模拟键盘键入到任意目标窗口。
 
-![Type 截图](source/screenshot.png)
+![Type 截图](source/screenshot.png?v=1.3.3)
 
 ---
 
