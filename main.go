@@ -25,7 +25,7 @@ import (
 //go:embed frontend/dist/index.html
 var indexHTML string
 
-var version = "1.3.2"
+var version = "1.3.3"
 
 // ─── Win32 常量与结构 ──────────────────────────────────
 
@@ -607,7 +607,7 @@ func main() {
 	w := webview.New(true)
 	defer w.Destroy()
 	w.SetTitle("Type " + version)
-	w.SetSize(540, 400, webview.HintFixed)
+	w.SetSize(540, 450, webview.HintFixed)
 
 	// 设置窗口图标（首次 + 延迟重试）
 	hw := uintptr(w.Window())

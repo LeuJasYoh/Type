@@ -16,13 +16,17 @@ const progressWidth = computed(() => (props.progress >= 0 ? Math.min(props.progr
 </script>
 
 <template>
-  <div :class="barClass">
-    <div class="status-text">{{ message }}</div>
-  </div>
-  <!-- 进度条 -->
-  <div class="progress-wrap" :class="{ active: progressActive }">
-    <div class="progress-track">
-      <div class="progress-fill" :style="{ width: progressWidth }"></div>
+  <!-- 单一根节点: 状态栏+进度条作为一个整体参与外层 flex 布局,
+       避免收起时的进度条仍占据一个 gap 槽 -->
+  <div class="status-block">
+    <div :class="barClass">
+      <div class="status-text">{{ message }}</div>
+    </div>
+    <!-- 进度条：运行时平滑长出 -->
+    <div class="progress-wrap" :class="{ active: progressActive }">
+      <div class="progress-track">
+        <div class="progress-fill" :style="{ width: progressWidth }"></div>
+      </div>
     </div>
   </div>
 </template>
