@@ -4,7 +4,7 @@
 # frontend/dist/index.html 单文件后嵌入, 再 windres + go build。
 #
 # 用法:  powershell -ExecutionPolicy Bypass -File .\build.ps1
-# 依赖:  Go 1.20+、MinGW-w64 (windres)、Node.js 20+ (npm)
+# 依赖:  Go 1.26+、MinGW-w64 (windres)、Node.js 20+ (npm)
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path

@@ -1,3 +1,7 @@
+//go:build windows && (amd64 || arm64)
+
+// INPUT 结构体的手工填充(40 字节)仅匹配 64 位 ABI; 386 下真实布局为 28 字节,
+// SendInput 会静默注入乱码, 因此直接禁止 32 位编译
 package main
 
 import (
@@ -40,6 +44,9 @@ const (
 	SMTO_ABORTIFHUNG = 0x0002 // 目标窗口挂起时放弃消息, 不阻塞发送方
 
 	CF_UNICODETEXT = 13
+	CF_BITMAP      = 2 // 以下三者 GetClipboardData 返回 GDI 句柄而非 HGLOBAL
+	CF_PALETTE     = 9
+	CF_ENHMETAFILE = 14
 	GMEM_MOVABLE   = 0x0002
 	GMEM_ZEROINIT  = 0x0040
 	GHND           = GMEM_MOVABLE | GMEM_ZEROINIT
@@ -78,14 +85,13 @@ var (
 	procEmptyClipboard           = user32.NewProc("EmptyClipboard")
 	procSetClipboardData         = user32.NewProc("SetClipboardData")
 	procGetClipboardData         = user32.NewProc("GetClipboardData")
+	procEnumClipboardFormats     = user32.NewProc("EnumClipboardFormats")
 	procGlobalAlloc              = kernel32.NewProc("GlobalAlloc")
 	procGlobalLock               = kernel32.NewProc("GlobalLock")
 	procGlobalUnlock             = kernel32.NewProc("GlobalUnlock")
 	procGlobalSize               = kernel32.NewProc("GlobalSize")
 	procRtlMoveMemory            = kernel32.NewProc("RtlMoveMemory")
 	procGetModuleHandleW         = kernel32.NewProc("GetModuleHandleW")
-	procLoadImageW               = user32.NewProc("LoadImageW")
-	procDestroyIcon              = user32.NewProc("DestroyIcon")
 	procRedrawWindow             = user32.NewProc("RedrawWindow")
 	procSHGetFileInfoW           = shell32.NewProc("SHGetFileInfoW")
 	procGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
@@ -93,6 +99,7 @@ var (
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
 	procGetGUIThreadInfo         = user32.NewProc("GetGUIThreadInfo")
 	procGlobalFree               = kernel32.NewProc("GlobalFree")
+	procRegisterClipboardFormatW = user32.NewProc("RegisterClipboardFormatW")
 )
 
 var cancelFlag atomic.Bool
@@ -163,9 +170,6 @@ const (
 	SHGFI_SMALLICON = 0x001
 )
 
-// 缓存图标句柄
-var cachedIcon, cachedSmall uintptr
-
 // loadAppIcon 从当前 exe 提取大图标和小图标句柄
 func loadAppIcon() (hLarge, hSmall uintptr) {
 	exe, _ := os.Executable()
@@ -195,58 +199,45 @@ func loadAppIcon() (hLarge, hSmall uintptr) {
 	return fiLarge.hIcon, fiSmall.hIcon
 }
 
-func setWindowIcon(hwnd uintptr) {
-	hLarge, hSmall := loadAppIcon()
-	if hLarge == 0 && hSmall == 0 {
-		return
-	}
-
-	// 缓存
-	if hLarge != 0 {
-		cachedIcon = hLarge
-	}
-	if hSmall != 0 {
-		cachedSmall = hSmall
-	}
-
-	mi := hLarge
-	if mi == 0 {
-		mi = cachedIcon
-	}
-	si := hSmall
-	if si == 0 {
-		si = cachedSmall
-	}
-
-	// 用 PostMessage 异步发送
-	if mi != 0 {
-		procPostMessageW.Call(hwnd, WM_SETICON, ICON_BIG, mi)
-	}
-	if si != 0 {
-		procPostMessageW.Call(hwnd, WM_SETICON, ICON_SMALL, si)
+// applyWindowIcon 应用图标到窗口。
+// 所有权约定: WM_SETICON 设置的句柄归窗口所有, 替换/销毁时由系统释放, 因此
+// 仅可对同一句柄执行一次, 不可复用; 类图标(SetClassLongPtr)不转移所有权,
+// 句柄由我们持有至进程结束, 可幂等重设。标题栏与任务栏在窗口未设图标时
+// 会回退到类图标, 故重试只需重设类图标并强制重绘
+func applyWindowIcon(hwnd, hLarge, hSmall uintptr, withSetIcon bool) {
+	if withSetIcon {
+		if hLarge != 0 {
+			procPostMessageW.Call(hwnd, WM_SETICON, ICON_BIG, hLarge)
+		}
+		if hSmall != 0 {
+			procPostMessageW.Call(hwnd, WM_SETICON, ICON_SMALL, hSmall)
+		}
 	}
 
 	// 改窗口类图标
 	const GCLP_HICON = ^uintptr(13)
 	const GCLP_HICONSM = ^uintptr(33)
-	if mi != 0 {
-		user32.NewProc("SetClassLongPtrW").Call(hwnd, GCLP_HICON, mi)
+	if hLarge != 0 {
+		user32.NewProc("SetClassLongPtrW").Call(hwnd, GCLP_HICON, hLarge)
 	}
-	if si != 0 {
-		user32.NewProc("SetClassLongPtrW").Call(hwnd, GCLP_HICONSM, si)
+	if hSmall != 0 {
+		user32.NewProc("SetClassLongPtrW").Call(hwnd, GCLP_HICONSM, hSmall)
 	}
 
 	// 强制重绘标题栏
 	procRedrawWindow.Call(hwnd, 0, 0, 0x0001|0x0100)
 }
 
+// retrySetIcon 设置窗口图标: 句柄只加载一次, 常驻至进程结束;
+// 延迟重试弥补 WebView2 窗口创建早期图标未生效的情况
 func retrySetIcon(hwnd uintptr) {
-	setWindowIcon(hwnd)
+	hLarge, hSmall := loadAppIcon()
+	applyWindowIcon(hwnd, hLarge, hSmall, true)
 	go func() {
 		delays := []time.Duration{500 * time.Millisecond, 1500 * time.Millisecond, 3000 * time.Millisecond}
 		for _, d := range delays {
 			time.Sleep(d)
-			setWindowIcon(hwnd)
+			applyWindowIcon(hwnd, hLarge, hSmall, false)
 		}
 	}()
 }
@@ -478,35 +469,135 @@ func clipboardClear() bool {
 	return ret != 0
 }
 
-// restoreClipboard 仅当剪贴板仍是本次注入的文本时恢复原内容,
-// 避免覆盖用户在注入期间新复制的数据; 原内容为空则直接清空, 不留注入残留
-func restoreClipboard(prev, injected string) {
-	if clipboardGetText() != injected {
-		return
+// handleFormats: GetClipboardData 返回 GDI 句柄而非 HGLOBAL 内存块的标准格式,
+// 无法按字节复制, 快照时跳过 (延迟渲染格式 GetClipboardData 返回 0, 同样跳过)
+var handleFormats = map[uint32]struct{}{
+	CF_BITMAP:      {},
+	CF_PALETTE:     {},
+	CF_ENHMETAFILE: {},
+}
+
+// clipFormat 剪贴板单一格式的原始字节快照
+type clipFormat struct {
+	fmt  uint32
+	data []byte
+}
+
+// clipboardSnapshot 复制当前剪贴板的全部内存块型格式(文本/图片 CF_DIB/文件
+// CF_HDROP/HTML Format 等)。返回 nil 表示剪贴板打开失败(原状态未知, 调用方应
+// 放弃恢复); 返回空切片表示剪贴板原本为空, 恢复时执行清空
+func clipboardSnapshot() []clipFormat {
+	if !openClipboardWithRetry() {
+		return nil
 	}
-	if prev != "" {
-		clipboardSetText(prev)
-	} else {
-		clipboardClear()
+	defer procCloseClipboard.Call()
+
+	snap := make([]clipFormat, 0, 8)
+	for fmt := uint32(0); ; {
+		next, _, _ := procEnumClipboardFormats.Call(uintptr(fmt))
+		if next == 0 {
+			break
+		}
+		fmt = uint32(next)
+		if _, skip := handleFormats[fmt]; skip {
+			continue
+		}
+		if data, ok := readClipboardFormat(fmt); ok {
+			snap = append(snap, clipFormat{fmt: fmt, data: data})
+		}
+	}
+	return snap
+}
+
+// readClipboardFormat 读取单一格式的数据块(剪贴板已打开时调用)
+func readClipboardFormat(fmt uint32) ([]byte, bool) {
+	hMem, _, _ := procGetClipboardData.Call(uintptr(fmt))
+	if hMem == 0 {
+		return nil, false // 延迟渲染或读取失败
+	}
+	size, _, _ := procGlobalSize.Call(hMem)
+	if size == 0 {
+		return nil, false
+	}
+	ptr, _, _ := procGlobalLock.Call(hMem)
+	if ptr == 0 {
+		return nil, false
+	}
+	defer procGlobalUnlock.Call(hMem)
+	data := make([]byte, int(size))
+	procRtlMoveMemory.Call(uintptr(unsafe.Pointer(unsafe.SliceData(data))), ptr, uintptr(size))
+	return data, true
+}
+
+// writeClipboardFormats 将快照按原格式顺序写回(剪贴板已打开且已清空时调用)
+func writeClipboardFormats(snap []clipFormat) {
+	for _, cf := range snap {
+		hMem, _, _ := procGlobalAlloc.Call(GHND, uintptr(len(cf.data)))
+		if hMem == 0 {
+			continue
+		}
+		ptr, _, _ := procGlobalLock.Call(hMem)
+		if ptr == 0 {
+			procGlobalFree.Call(hMem)
+			continue
+		}
+		procRtlMoveMemory.Call(ptr, uintptr(unsafe.Pointer(unsafe.SliceData(cf.data))), uintptr(len(cf.data)))
+		procGlobalUnlock.Call(hMem)
+		if ret, _, _ := procSetClipboardData.Call(uintptr(cf.fmt), hMem); ret == 0 {
+			procGlobalFree.Call(hMem) // 系统未接管所有权时由调用方释放
+		}
 	}
 }
 
-// typeTextViaClipboard 执行剪贴板粘贴输入（两种模式共用）
+// restoreSnapshotRaw 无条件写回快照(调用方需确认剪贴板未被用户改动)
+func restoreSnapshotRaw(snap []clipFormat) {
+	if snap == nil {
+		return // 快照失败, 原状态未知, 不动剪贴板
+	}
+	if len(snap) == 0 {
+		clipboardClear()
+		return
+	}
+	if !openClipboardWithRetry() {
+		return
+	}
+	defer procCloseClipboard.Call()
+	procEmptyClipboard.Call()
+	writeClipboardFormats(snap)
+}
+
+// restoreClipboardSnapshot 恢复快照: 仅当剪贴板仍为本次注入的文本时执行,
+// 避免覆盖用户在注入期间新复制的数据; 原内容为空则直接清空, 不留注入残留
+func restoreClipboardSnapshot(snap []clipFormat, injected string) {
+	if snap == nil {
+		return
+	}
+	if clipboardGetText() != injected {
+		return // 用户期间已复制新内容
+	}
+	restoreSnapshotRaw(snap)
+}
+
+// typeTextViaClipboard 执行剪贴板粘贴输入（两种模式共用）。
+// 粘贴前快照全部剪贴板格式, 结束后原样恢复, 不销毁用户已有的
+// 图片/文件等非文本内容
 func typeTextViaClipboard(text string) bool {
-	prev := clipboardGetText()
+	snap := clipboardSnapshot()
 	if !clipboardSetText(text) {
+		// EmptyClipboard 可能已执行(分配阶段失败), 直接写回快照
+		restoreSnapshotRaw(snap)
 		return false
 	}
 	time.Sleep(100 * time.Millisecond)
 
 	if cancelFlag.Load() {
-		restoreClipboard(prev, text)
+		restoreClipboardSnapshot(snap, text)
 		return false
 	}
 	sendCtrlV()
 	time.Sleep(200 * time.Millisecond)
 
-	restoreClipboard(prev, text)
+	restoreClipboardSnapshot(snap, text)
 	return true
 }
 

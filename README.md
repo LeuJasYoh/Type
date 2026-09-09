@@ -16,7 +16,7 @@
 - **可调延迟** —— 1~10 秒倒计时，给你时间聚焦目标窗口
 - **启动/取消** —— 随时中止操作；运行中防重入，不会叠加启动
 - **实时状态** —— 倒计时显示、输入进度、完成提示
-- **可靠的剪贴板操作** —— 占用时自动重试；粘贴后仅在剪贴板未被用户改动时才恢复旧内容，避免覆盖新复制的数据
+- **可靠的剪贴板操作** —— 占用时自动重试；粘贴前快照、粘贴后恢复**全部剪贴板格式**（文本/图片/文件等），仅在剪贴板未被用户改动时执行恢复，避免覆盖新复制的数据
 - **现代化 UI** —— WebView2 + Vue 3 渲染
 
 ---
@@ -50,7 +50,7 @@
 GUI       WebView2 (Edge Chromium)
 前端      Vue 3 + TypeScript, Vite 构建为单文件 HTML (无其他运行时依赖)
 构建      vue-tsc 类型检查 + Vite (vite-plugin-singlefile) + windres + go build
-Win32 API SendInput (KEYEVENTF_UNICODE) + 剪贴板 (CF_UNICODETEXT, RtlMoveMemory) + 前台窗口检测 (GetForegroundWindow)
+Win32 API SendInput (KEYEVENTF_UNICODE) + 剪贴板 (CF_UNICODETEXT, EnumClipboardFormats 全格式快照, RtlMoveMemory) + 前台窗口检测 (GetForegroundWindow)
 图标      圆角多尺寸 ICO（Pillow 生成）
 资源      windres 编译 .rc → .syso
 ```
@@ -61,7 +61,7 @@ Win32 API SendInput (KEYEVENTF_UNICODE) + 剪贴板 (CF_UNICODETEXT, RtlMoveMemo
 Type/
 ├── Type.exe              ← 可执行文件 (构建产物, 不入库)
 ├── main.go                 ← Go 入口 + Win32 API 调用 + webview 绑定
-├── main_test.go            ← 单元测试 (UTF-16 拆分/ASCII/CJK 标点判定)
+├── main_test.go            ← 单元测试 (UTF-16 拆分/ASCII/CJK 标点/剪贴板快照)
 ├── frontend/               ← Vue 前端 (Vite 项目根)
 │   ├── index.html          ← Vite 入口
 │   ├── tsconfig.json       ← TypeScript 配置 (vue-tsc)
@@ -137,6 +137,7 @@ Type.exe -dev               # 终端 2: 窗口指向 dev server, 改代码即时
 ## 已知限制
 
 - **目标窗口权限** —— Windows UIPI 限制：以普通权限运行的 Type 无法向管理员权限的窗口（如管理员 CMD/PowerShell）注入输入，表现为静默无效。如需面向提权窗口，请以管理员身份运行 Type.exe。
+- **剪贴板特殊格式** —— 延迟渲染（delayed rendering）及句柄型格式（CF_BITMAP 等）无法同步快照，粘贴模式结束时会丢失；常见场景（截图工具、浏览器复制图片、资源管理器复制文件）均在快照恢复范围内。
 - **杀毒软件误报** —— 键盘模拟（SendInput）与剪贴板操作是杀软启发式扫描的常见敏感组合，若下载或运行时被误报，请添加信任或自行编译。
 
 ---
