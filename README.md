@@ -60,8 +60,14 @@ Win32 API SendInput (KEYEVENTF_UNICODE) + 剪贴板 (CF_UNICODETEXT, EnumClipboa
 ```
 Type/
 ├── Type.exe              ← 可执行文件 (构建产物, 不入库)
-├── main.go                 ← Go 入口 + Win32 API 调用 + webview 绑定
+├── main.go                 ← Go 入口: webview 装配与 Bind 绑定
+├── typing.go               ← 业务层: TypingService 输入状态机 + 平台能力接口
+├── win32.go                ← Win32 清单页: DLL 与 API 入口集中声明
+├── win32_keyboard.go       ← 键盘注入 (SendInput / WM_CHAR 全角标点绕行)
+├── win32_clipboard.go      ← 剪贴板全格式快照/恢复
+├── win32_window.go         ← 置顶 / 图标 / 前台窗口探测
 ├── main_test.go            ← 单元测试 (UTF-16 拆分/ASCII/CJK 标点/剪贴板快照)
+├── typing_test.go          ← 状态机单元测试 (fake 注入器/剪贴板, 不触真实系统)
 ├── frontend/               ← Vue 前端 (Vite 项目根)
 │   ├── index.html          ← Vite 入口
 │   ├── tsconfig.json       ← TypeScript 配置 (vue-tsc)
