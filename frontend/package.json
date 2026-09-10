@@ -7,7 +7,7 @@
   "description": "键盘模拟输入器 (Go + WebView2 + Vue 3 + Vite)",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc -p frontend/tsconfig.json --noEmit && vite build"
+    "build": "vue-tsc -p tsconfig.json --noEmit && vite build"
   },
   "dependencies": {
     "vue": "^3.5.0"

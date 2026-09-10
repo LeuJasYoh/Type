@@ -17,10 +17,11 @@ import (
 	"strings"
 )
 
-// 新侧(拆分后)包含旧 main.go 全部函数的文件清单
+// 新侧(当前布局)包含旧 main.go 全部函数的文件清单;
+// 比对更早历史提交时旧侧仍读根路径 main.go, 不受布局调整影响
 var newFiles = []string{
-	"main.go", "typing.go", "win32.go",
-	"win32_keyboard.go", "win32_clipboard.go", "win32_window.go",
+	"cmd/type/main.go", "cmd/type/typing.go", "cmd/type/win32.go",
+	"cmd/type/win32_keyboard.go", "cmd/type/win32_clipboard.go", "cmd/type/win32_window.go",
 }
 
 // 接口化提交后的更名: 自由函数 → 方法 (仅签名与调用点变化)

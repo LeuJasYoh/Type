@@ -5,19 +5,13 @@
 package main
 
 import (
-	_ "embed"
 	"os"
 	"sync/atomic"
 
+	"Type/internal/web"
+
 	"github.com/webview/webview_go"
 )
-
-// ─── 嵌入前端资源 ─────────────────────────────────────
-
-// Vite 构建的自包含单文件 (vue-tsc + vite build 生成于 frontend/dist/)
-
-//go:embed frontend/dist/index.html
-var indexHTML string
 
 var version = "1.3.4"
 
@@ -60,7 +54,7 @@ func main() {
 	if url := devServerURL(); url != "" {
 		w.Navigate(url)
 	} else {
-		w.SetHtml(indexHTML)
+		w.SetHtml(web.IndexHTML)
 	}
 
 	w.Run()

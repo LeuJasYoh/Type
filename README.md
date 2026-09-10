@@ -2,7 +2,7 @@
 
 **键盘模拟输入器** —— 在文本框中输入内容，5 秒后自动模拟键盘键入到任意目标窗口。
 
-![Type 截图](source/screenshot.png)
+![Type 截图](assets/screenshot.png)
 
 ---
 
@@ -59,44 +59,48 @@ Win32 API SendInput (KEYEVENTF_UNICODE) + 剪贴板 (CF_UNICODETEXT, EnumClipboa
 
 ```
 Type/
-├── Type.exe              ← 可执行文件 (构建产物, 不入库)
-├── main.go                 ← Go 入口: webview 装配与 Bind 绑定
-├── typing.go               ← 业务层: TypingService 输入状态机 + 平台能力接口
-├── win32.go                ← Win32 清单页: DLL 与 API 入口集中声明
-├── win32_keyboard.go       ← 键盘注入 (SendInput / WM_CHAR 全角标点绕行)
-├── win32_clipboard.go      ← 剪贴板全格式快照/恢复
-├── win32_window.go         ← 置顶 / 图标 / 前台窗口探测
-├── main_test.go            ← 单元测试 (UTF-16 拆分/ASCII/CJK 标点/剪贴板快照)
-├── typing_test.go          ← 状态机单元测试 (fake 注入器/剪贴板, 不触真实系统)
-├── tools/
-│   └── equivcheck/         ← 重构等价性验证 (go run ./tools/equivcheck, 逐函数比对函数体)
-├── frontend/               ← Vue 前端 (Vite 项目根)
-│   ├── index.html          ← Vite 入口
-│   ├── tsconfig.json       ← TypeScript 配置 (vue-tsc)
-│   ├── dist/
-│   │   └── index.html      ← 构建产物: 自包含单文件 (go:embed 引用, 入库)
+├── Type.exe                 ← 可执行文件 (构建产物, 输出于根目录, 不入库)
+├── cmd/type/                ← Go 入口包
+│   ├── main.go              ← webview 装配与 Bind 绑定
+│   ├── typing.go            ← 业务层: TypingService 输入状态机 + 平台能力接口
+│   ├── win32.go             ← Win32 清单页: DLL 与 API 入口集中声明
+│   ├── win32_keyboard.go    ← 键盘注入 (SendInput / WM_CHAR 全角标点绕行)
+│   ├── win32_clipboard.go   ← 剪贴板全格式快照/恢复
+│   ├── win32_window.go      ← 置顶 / 图标 / 前台窗口探测
+│   ├── main_test.go         ← 单元测试 (UTF-16 拆分/ASCII/CJK 标点/剪贴板快照)
+│   └── typing_test.go       ← 状态机单元测试 (fake 注入器/剪贴板, 不触真实系统)
+├── internal/web/            ← go:embed 前端产物包
+│   └── dist/index.html      ← Vite 构建产物: 自包含单文件 (入库)
+├── frontend/                ← Vue 前端 (自包含 Vite 项目)
+│   ├── package.json / package-lock.json ← npm 定义 (vue / vite / vue-tsc 等)
+│   ├── vite.config.ts       ← Vite 配置 (单文件打包, 产物输出 ../internal/web/dist)
+│   ├── index.html           ← Vite 入口
+│   ├── tsconfig.json        ← TypeScript 配置 (vue-tsc)
 │   └── src/
-│       ├── main.ts         ← 应用入口 (createApp)
-│       ├── App.vue         ← 界面骨架
-│       ├── style.css       ← 界面样式（书卷纸感设计系统：纸色底、墨色字、朱砂强调，明暗双主题）
-│       ├── ipc.ts          ← webview Bind 全局绑定的类型化封装
-│       ├── types.ts        ← TypingStatus/TypingPhase (与 Go 端结构对应)
+│       ├── main.ts          ← 应用入口 (createApp)
+│       ├── App.vue          ← 界面骨架
+│       ├── style.css        ← 界面样式（书卷纸感设计系统：纸色底、墨色字、朱砂强调，明暗双主题）
+│       ├── ipc.ts           ← webview Bind 全局绑定的类型化封装
+│       ├── types.ts         ← TypingStatus/TypingPhase (与 Go 端结构对应)
+│       ├── env.d.ts         ← Vite 环境类型声明
 │       ├── composables/
-│       │   └── useTypingTask.ts ← 输入任务状态机 + 状态轮询
+│       │   ├── useTypingTask.ts ← 输入任务状态机 + 状态轮询
+│       │   └── useTheme.ts      ← 明暗主题切换
 │       └── components/
 │           └── StatusBar.vue    ← 状态栏 + 进度条
-├── vite.config.ts          ← Vite 配置 (单文件打包)
-├── source/
-│   ├── icon.ico            ← 应用图标 (version.rc 引用, windres 编译进 exe)
-│   ├── icon.jpg            ← 图标源图
-│   └── screenshot.png      ← README 截图
-├── version.rc              ← 版本/作者信息资源
-├── version.syso            ← 编译后的资源文件 (构建产物, 不入库)
-├── winres/                 ← winres 格式资源定义 (winres.json + 多尺寸 PNG)
-├── build.ps1               ← 一键构建脚本（版本号单一来源）
-├── go.mod / go.sum         ← Go 模块定义
-├── package.json / package-lock.json ← npm 定义 (vue / vite / vue-tsc 等)
-└── .gitignore              ← 忽略构建产物/依赖/工具元数据
+├── assets/                  ← 静态资源与 Windows 资源定义
+│   ├── icon.ico             ← 应用图标 (version.rc 引用, windres 编译进 exe)
+│   ├── icon.jpg             ← 图标源图
+│   ├── screenshot.png       ← README 截图
+│   ├── version.rc           ← 版本/作者信息资源 (windres 编译为 cmd/type/version.syso)
+│   └── winres/              ← winres 格式资源定义 (winres.json + 多尺寸 PNG)
+├── scripts/
+│   └── build.ps1            ← 一键构建脚本（版本号单一来源）
+├── tools/
+│   └── equivcheck/          ← 重构等价性验证 (go run ./tools/equivcheck, 逐函数比对函数体)
+├── testdata/                ← 手工测试页 (paste-guard.html)
+├── go.mod / go.sum          ← Go 模块定义
+└── .gitignore               ← 忽略构建产物/依赖/工具元数据
 ```
 
 ---
@@ -111,16 +115,18 @@ Type/
 #   - WebView2 库（go mod tidy 自动下载）
 
 cd Type
-npm install                # 安装前端依赖 (仅首次)
 go mod tidy
 
 # 一键构建 (推荐): 版本号同步 → Vue 前端构建 → windres → go build
-powershell -ExecutionPolicy Bypass -File .\build.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
 
 # 或手动分步:
-npm run build                       # vue-tsc 类型检查 + Vite → frontend/dist/index.html
-windres -o version.syso version.rc
-go build -ldflags="-H windowsgui -s -w" -o Type.exe .
+cd frontend
+npm install                         # 安装前端依赖 (仅首次)
+npm run build                       # vue-tsc 类型检查 + Vite → ../internal/web/dist/index.html
+cd ..
+windres -I assets -o cmd/type/version.syso assets/version.rc
+go build -ldflags="-H windowsgui -s -w" -o Type.exe ./cmd/type
 ```
 
 ---
@@ -128,8 +134,10 @@ go build -ldflags="-H windowsgui -s -w" -o Type.exe .
 ## 前端开发模式 (HMR)
 
 ```powershell
+cd frontend
 npm run dev                 # 终端 1: Vite dev server (http://localhost:5173)
-Type.exe -dev               # 终端 2: 窗口指向 dev server, 改代码即时热更新
+cd ..
+.\Type.exe -dev             # 终端 2: 窗口指向 dev server, 改代码即时热更新
 ```
 
 `-dev` 模式下 webview 的 Go 绑定照常工作，可完整调试 IPC 链路。若 5173 端口被占用，设置 `TYPE_DEV_URL` 环境变量指定实际地址（如 `http://localhost:5174`）。

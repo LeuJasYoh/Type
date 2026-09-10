@@ -5,8 +5,8 @@ Type.exe
 # windres 生成
 *.syso
 # Vite 构建产物 (仅 index.html 入库: go:embed 引用, 免 Node 亦可 go build/test)
-frontend/dist/*
-!frontend/dist/index.html
+internal/web/dist/*
+!internal/web/dist/index.html
 
 # ── Go ────────────────────────────────────
 *.test
@@ -35,3 +35,4 @@ Thumbs.db
 # ── 工具元数据 ───────────────────────────
 .reasonix/
 reasonix.tar
+.zcode/
