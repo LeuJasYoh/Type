@@ -68,6 +68,8 @@ Type/
 ├── win32_window.go         ← 置顶 / 图标 / 前台窗口探测
 ├── main_test.go            ← 单元测试 (UTF-16 拆分/ASCII/CJK 标点/剪贴板快照)
 ├── typing_test.go          ← 状态机单元测试 (fake 注入器/剪贴板, 不触真实系统)
+├── tools/
+│   └── equivcheck/         ← 重构等价性验证 (go run ./tools/equivcheck, 逐函数比对函数体)
 ├── frontend/               ← Vue 前端 (Vite 项目根)
 │   ├── index.html          ← Vite 入口
 │   ├── tsconfig.json       ← TypeScript 配置 (vue-tsc)

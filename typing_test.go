@@ -147,6 +147,62 @@ func isTerminal(p TypingPhase) bool {
 
 // ─── 用例 ─────────────────────────────────────────────
 
+// 初始状态契约: 服务构造后即为 idle 零值状态, 前端首次轮询读到的是它
+func TestServiceInitialState(t *testing.T) {
+	svc := newTestService(&fakeInjector{}, &fakeClipboard{}, noSleep)
+	st := svc.Status()
+	if st.Phase != PhaseIdle {
+		t.Fatalf("初始 phase = %s, want idle", st.Phase)
+	}
+	if st.Message != "" || st.Progress != 0 || st.SecondsLeft != 0 || st.TargetWindow != "" {
+		t.Errorf("初始状态字段应为零值, got %+v", *st)
+	}
+}
+
+// 恢复守卫(fake 层): 剪贴板仍为注入文本才恢复; 用户已复制新内容则跳过;
+// 快照失败(nil)时原状态未知, 不动剪贴板
+func TestServiceClipboardGuard(t *testing.T) {
+	cb := &fakeClipboard{text: "用户原文本"}
+	svc := newTestService(&fakeInjector{}, cb, noSleep)
+	snap := cb.Snapshot() // 快照内容: 用户原文本
+
+	// 剪贴板仍是注入文本 → 守卫放行, 恢复原内容
+	if !cb.SetText("注入文本") {
+		t.Fatal("SetText 失败")
+	}
+	opsBefore := len(cb.ops())
+	svc.restoreClipboardSnapshot(snap, "注入文本")
+	if got := cb.GetText(); got != "用户原文本" {
+		t.Errorf("守卫放行时应恢复原文本, got %q", got)
+	}
+	if len(cb.ops()) != opsBefore+1 {
+		t.Errorf("守卫放行时应执行一次恢复, 操作数 %d → %d", opsBefore, len(cb.ops()))
+	}
+
+	// 用户在注入期间复制了新内容 → 守卫拦截, 不覆盖
+	if !cb.SetText("用户新复制的内容") {
+		t.Fatal("SetText 失败")
+	}
+	opsBefore = len(cb.ops())
+	svc.restoreClipboardSnapshot(snap, "注入文本")
+	if got := cb.GetText(); got != "用户新复制的内容" {
+		t.Errorf("守卫应拦截恢复, 剪贴板被覆盖为 %q", got)
+	}
+	if len(cb.ops()) != opsBefore {
+		t.Errorf("守卫拦截时不应有剪贴板操作, 操作数 %d → %d", opsBefore, len(cb.ops()))
+	}
+
+	// 快照失败(nil) → 原状态未知, 不动剪贴板
+	opsBefore = len(cb.ops())
+	svc.restoreClipboardSnapshot(nil, "用户新复制的内容")
+	if got := cb.GetText(); got != "用户新复制的内容" {
+		t.Errorf("nil 快照不应改动剪贴板, got %q", got)
+	}
+	if len(cb.ops()) != opsBefore {
+		t.Errorf("nil 快照不应产生剪贴板操作, 操作数 %d → %d", opsBefore, len(cb.ops()))
+	}
+}
+
 // 运行中 Start 拒绝重入, 且拒绝不影响在途任务
 func TestStartRejectsReentryWhileRunning(t *testing.T) {
 	inj := &fakeInjector{}
