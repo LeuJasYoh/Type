@@ -19,7 +19,7 @@ import (
 //go:embed frontend/dist/index.html
 var indexHTML string
 
-var version = "1.3.3"
+var version = "1.3.4"
 
 var topmostFlag atomic.Bool // 窗口置顶开关(与输入任务无关, 归装配层)
 
