@@ -101,7 +101,7 @@ Type/
 │   └── equivcheck/          ← 重构等价性验证 (go run ./tools/equivcheck, 逐函数比对函数体)
 ├── testdata/                ← 手工测试页 (paste-guard.html)
 ├── go.mod / go.sum          ← Go 模块定义
-├── pyproject.toml / uv.lock ← Python 资产管线依赖 (uv 管理, 锁定 Pillow)
+├── pyproject.toml / uv.lock / .python-version ← Python 资产管线依赖 (uv 管理, 锁定 Pillow)
 └── .gitignore               ← 忽略构建产物/依赖/工具元数据
 ```
 
