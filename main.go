@@ -6,7 +6,6 @@ package main
 
 import (
 	_ "embed"
-	"fmt"
 	"os"
 	"sync/atomic"
 
@@ -36,42 +35,13 @@ func main() {
 	hw := uintptr(w.Window())
 	retrySetIcon(hw)
 
-	// 初始化状态
-	typingStatus.Store(&TypingStatus{Phase: PhaseIdle})
+	// 业务服务: 平台能力以接口注入, Win32 实现见 win32_*.go
+	svc := newTypingService(win32Injector{}, win32Clipboard{}, win32Foreground{})
 
 	// 绑定 Go 函数到 JS
 	// (须在加载页面前完成: 绑定的注入脚本对随后创建的文档生效)
-
-	w.Bind("startTyping", func(text string, delay int, forceSendInput bool) (string, error) {
-		// 上一任务活跃且并非取消收尾: 拒绝重入
-		if runningFlag.Load() && !cancelFlag.Load() {
-			return "", fmt.Errorf("已有输入任务在运行中，请先取消或等待完成")
-		}
-		// 同步写入倒计时初态: 前端 await 本调用后才开启轮询,
-		// 保证首个 tick 必读到新状态; 过代旧任务被代数守卫拦截, 无法覆盖
-		gen := taskGen.Add(1)
-		typingStatus.Store(&TypingStatus{
-			Phase:        PhaseCountdown,
-			Message:      fmt.Sprintf("剩余 %d 秒 — 请聚焦目标窗口...", delay),
-			SecondsLeft:  delay,
-			Progress:     -1,
-			TargetWindow: foregroundWindowTitle(),
-		})
-		go runTypingTask(gen, text, delay, forceSendInput)
-		return "started", nil
-	})
-
-	w.Bind("cancelTyping", func() (string, error) {
-		// 递增代数使在途任务的所有后续状态写入作废, 取消标志则加速其退出;
-		// 此处不做等待 —— 旧实现阻塞 UI 线程最长 2 秒导致窗口冻结,
-		// "取消后立即启动"的衔接由 runTypingTask 自行等待旧任务让出 runningFlag
-		taskGen.Add(1)
-		cancelFlag.Store(true)
-		typingStatus.Store(&TypingStatus{
-			Phase: PhaseCancel, Message: "已取消", Progress: -1,
-		})
-		return "cancelled", nil
-	})
+	w.Bind("startTyping", svc.Start)
+	w.Bind("cancelTyping", svc.Cancel)
 
 	w.Bind("toggleTopmost", func() (bool, error) {
 		on := !topmostFlag.Load()
@@ -83,9 +53,7 @@ func main() {
 	})
 
 	// 前端轮询读取当前输入状态
-	w.Bind("getTypingStatus", func() *TypingStatus {
-		return typingStatus.Load().(*TypingStatus)
-	})
+	w.Bind("getTypingStatus", svc.Status)
 
 	// 加载界面: 开发模式指向 Vite dev server (支持 HMR, 需先 npm run dev),
 	// 默认加载嵌入的自包含页面

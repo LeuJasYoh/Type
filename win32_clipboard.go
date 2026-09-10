@@ -1,6 +1,7 @@
 //go:build windows && (amd64 || arm64)
 
 // ─── 剪贴板 (全格式快照/恢复) ─────────────────────────
+// Clipboard 接口的 Win32 实现 + 内存块读写辅助函数
 
 package main
 
@@ -9,6 +10,9 @@ import (
 	"unicode/utf16"
 	"unsafe"
 )
+
+// win32Clipboard Clipboard 的 Win32 实现
+type win32Clipboard struct{}
 
 const (
 	CF_UNICODETEXT = 13
@@ -32,7 +36,7 @@ func openClipboardWithRetry() bool {
 	return false
 }
 
-func clipboardSetText(text string) bool {
+func (win32Clipboard) SetText(text string) bool {
 	if !openClipboardWithRetry() {
 		return false
 	}
@@ -61,7 +65,7 @@ func clipboardSetText(text string) bool {
 	return ret != 0
 }
 
-func clipboardGetText() string {
+func (win32Clipboard) GetText() string {
 	if !openClipboardWithRetry() {
 		return ""
 	}
@@ -109,22 +113,16 @@ var handleFormats = map[uint32]struct{}{
 	CF_ENHMETAFILE: {},
 }
 
-// clipFormat 剪贴板单一格式的原始字节快照
-type clipFormat struct {
-	fmt  uint32
-	data []byte
-}
-
-// clipboardSnapshot 复制当前剪贴板的全部内存块型格式(文本/图片 CF_DIB/文件
+// Snapshot 复制当前剪贴板的全部内存块型格式(文本/图片 CF_DIB/文件
 // CF_HDROP/HTML Format 等)。返回 nil 表示剪贴板打开失败(原状态未知, 调用方应
 // 放弃恢复); 返回空切片表示剪贴板原本为空, 恢复时执行清空
-func clipboardSnapshot() []clipFormat {
+func (win32Clipboard) Snapshot() []ClipboardFormat {
 	if !openClipboardWithRetry() {
 		return nil
 	}
 	defer procCloseClipboard.Call()
 
-	snap := make([]clipFormat, 0, 8)
+	snap := make([]ClipboardFormat, 0, 8)
 	for fmt := uint32(0); ; {
 		next, _, _ := procEnumClipboardFormats.Call(uintptr(fmt))
 		if next == 0 {
@@ -135,7 +133,7 @@ func clipboardSnapshot() []clipFormat {
 			continue
 		}
 		if data, ok := readClipboardFormat(fmt); ok {
-			snap = append(snap, clipFormat{fmt: fmt, data: data})
+			snap = append(snap, ClipboardFormat{Fmt: fmt, Data: data})
 		}
 	}
 	return snap
@@ -162,9 +160,9 @@ func readClipboardFormat(fmt uint32) ([]byte, bool) {
 }
 
 // writeClipboardFormats 将快照按原格式顺序写回(剪贴板已打开且已清空时调用)
-func writeClipboardFormats(snap []clipFormat) {
+func writeClipboardFormats(snap []ClipboardFormat) {
 	for _, cf := range snap {
-		hMem, _, _ := procGlobalAlloc.Call(GHND, uintptr(len(cf.data)))
+		hMem, _, _ := procGlobalAlloc.Call(GHND, uintptr(len(cf.Data)))
 		if hMem == 0 {
 			continue
 		}
@@ -173,16 +171,16 @@ func writeClipboardFormats(snap []clipFormat) {
 			procGlobalFree.Call(hMem)
 			continue
 		}
-		procRtlMoveMemory.Call(ptr, uintptr(unsafe.Pointer(unsafe.SliceData(cf.data))), uintptr(len(cf.data)))
+		procRtlMoveMemory.Call(ptr, uintptr(unsafe.Pointer(unsafe.SliceData(cf.Data))), uintptr(len(cf.Data)))
 		procGlobalUnlock.Call(hMem)
-		if ret, _, _ := procSetClipboardData.Call(uintptr(cf.fmt), hMem); ret == 0 {
+		if ret, _, _ := procSetClipboardData.Call(uintptr(cf.Fmt), hMem); ret == 0 {
 			procGlobalFree.Call(hMem) // 系统未接管所有权时由调用方释放
 		}
 	}
 }
 
-// restoreSnapshotRaw 无条件写回快照(调用方需确认剪贴板未被用户改动)
-func restoreSnapshotRaw(snap []clipFormat) {
+// RestoreSnapshotRaw 无条件写回快照(调用方需确认剪贴板未被用户改动)
+func (win32Clipboard) RestoreSnapshotRaw(snap []ClipboardFormat) {
 	if snap == nil {
 		return // 快照失败, 原状态未知, 不动剪贴板
 	}

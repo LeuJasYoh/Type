@@ -39,6 +39,36 @@ type INPUT struct {
 
 // ─── 键盘模拟 ─────────────────────────────────────────
 
+// win32Injector TextInjector 的 Win32 实现:
+// SendInput 注入 + 全角标点 WM_CHAR 绕行
+type win32Injector struct{}
+
+// SendRune 注入单个 rune
+func (win32Injector) SendRune(r rune) {
+	if r >= 0xFF00 && r <= 0xFFEF {
+		// 全角标点 (U+FF00-FFEF) — KEYEVENTF_UNICODE 有系统级 bug
+		// 改用 WM_CHAR 直接注入到前台窗口
+		sendCharViaWMChar(r)
+		return
+	}
+	for _, u := range utf16Units(r) {
+		sendChar16(u)
+	}
+}
+
+func (win32Injector) SendEnter() { sendVK(VK_RETURN) }
+
+// SendPaste 注入 Ctrl+V
+func (win32Injector) SendPaste() {
+	inputs := [4]INPUT{
+		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: VK_CONTROL}},
+		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: VK_V}},
+		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: VK_V, dwFlags: KEYEVENTF_KEYUP}},
+		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: VK_CONTROL, dwFlags: KEYEVENTF_KEYUP}},
+	}
+	sendInput(inputs[:])
+}
+
 func sendInput(inputs []INPUT) uint32 {
 	if len(inputs) == 0 {
 		return 0
@@ -75,18 +105,6 @@ func utf16Units(r rune) []uint16 {
 	return []uint16{0xD800 | uint16(r>>10)&0x3FF, 0xDC00 | uint16(r)&0x3FF}
 }
 
-func sendRune(r rune) {
-	if r >= 0xFF00 && r <= 0xFFEF {
-		// 全角标点 (U+FF00-FFEF) — KEYEVENTF_UNICODE 有系统级 bug
-		// 改用 WM_CHAR 直接注入到前台窗口
-		sendCharViaWMChar(r)
-		return
-	}
-	for _, u := range utf16Units(r) {
-		sendChar16(u)
-	}
-}
-
 // sendCharViaWMChar 通过 WM_CHAR 消息直接向前台窗口注入字符
 // 绕过 KEYEVENTF_UNICODE 对全角标点的处理 bug
 func sendCharViaWMChar(r rune) {
@@ -107,16 +125,6 @@ func sendVK(vk uint16) {
 	inputs := [2]INPUT{
 		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: vk}},
 		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: vk, dwFlags: KEYEVENTF_KEYUP}},
-	}
-	sendInput(inputs[:])
-}
-
-func sendCtrlV() {
-	inputs := [4]INPUT{
-		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: VK_CONTROL}},
-		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: VK_V}},
-		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: VK_V, dwFlags: KEYEVENTF_KEYUP}},
-		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: VK_CONTROL, dwFlags: KEYEVENTF_KEYUP}},
 	}
 	sendInput(inputs[:])
 }

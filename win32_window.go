@@ -167,8 +167,11 @@ func focusedHWND() uintptr {
 	return hwnd
 }
 
-// foregroundWindowTitle 读取当前前台窗口标题(用于目标窗口预览)
-func foregroundWindowTitle() string {
+// win32Foreground Foreground 的 Win32 实现
+type win32Foreground struct{}
+
+// Title 读取当前前台窗口标题(用于目标窗口预览)
+func (win32Foreground) Title() string {
 	hwnd, _, _ := procGetForegroundWindow.Call()
 	if hwnd == 0 {
 		return ""
