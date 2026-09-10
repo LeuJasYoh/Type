@@ -51,7 +51,7 @@ GUI       WebView2 (Edge Chromium)
 前端      Vue 3 + TypeScript, Vite 构建为单文件 HTML (无其他运行时依赖)
 构建      vue-tsc 类型检查 + Vite (vite-plugin-singlefile) + windres + go build
 Win32 API SendInput (KEYEVENTF_UNICODE) + 剪贴板 (CF_UNICODETEXT, EnumClipboardFormats 全格式快照, RtlMoveMemory) + 前台窗口检测 (GetForegroundWindow)
-图标      圆角多尺寸 ICO（Pillow 生成）
+图标      圆角多尺寸 ICO（uv + Pillow 生成, scripts/gen_icon.py 字节级可复现）
 资源      windres 编译 .rc → .syso
 ```
 
@@ -95,11 +95,13 @@ Type/
 │   ├── version.rc           ← 版本/作者信息资源 (windres 编译为 cmd/type/version.syso)
 │   └── winres/              ← winres 格式资源定义 (winres.json + 多尺寸 PNG)
 ├── scripts/
-│   └── build.ps1            ← 一键构建脚本（版本号单一来源）
+│   ├── build.ps1            ← 一键构建脚本（版本号单一来源）
+│   └── gen_icon.py          ← 图标资产生成 (uv run, Pillow)
 ├── tools/
 │   └── equivcheck/          ← 重构等价性验证 (go run ./tools/equivcheck, 逐函数比对函数体)
 ├── testdata/                ← 手工测试页 (paste-guard.html)
 ├── go.mod / go.sum          ← Go 模块定义
+├── pyproject.toml / uv.lock ← Python 资产管线依赖 (uv 管理, 锁定 Pillow)
 └── .gitignore               ← 忽略构建产物/依赖/工具元数据
 ```
 
@@ -127,6 +129,9 @@ npm run build                       # vue-tsc 类型检查 + Vite → ../interna
 cd ..
 windres -I assets -o cmd/type/version.syso assets/version.rc
 go build -ldflags="-H windowsgui -s -w" -o Type.exe ./cmd/type
+
+# 图标资产再生成 (可选, 需 uv): 更换 assets/icon.jpg 后执行, 产物字节级可复现
+uv run scripts/gen_icon.py
 ```
 
 ---

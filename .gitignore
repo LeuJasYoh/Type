@@ -16,7 +16,7 @@ coverage.*
 # ── Node ──────────────────────────────────
 node_modules/
 
-# ── Python (仅用于生成图标) ──────────────
+# ── Python (uv 管理的图标资产生成管线) ──
 .venv/
 __pycache__/
 *.pyc

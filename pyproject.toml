@@ -1,0 +1,9 @@
+[project]
+name = "type-assets"
+version = "0.1.0"
+description = "Type 图标资产生成管线 (Pillow)"
+requires-python = ">=3.12"
+dependencies = ["pillow==12.3.0"]
+
+[tool.uv]
+package = false
