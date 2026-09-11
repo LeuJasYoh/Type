@@ -12,9 +12,9 @@
 - **两种输入模式**：
   - **逐字符模拟** —— 纯英文用 `SendInput` 快速注入，含中文时自动切换为剪贴板
   - **剪贴板粘贴** —— 用 `Ctrl+V` 粘贴，速度快，自动保存/恢复剪贴板
-- **目标窗口预览** —— 倒计时期间实时显示当前前台窗口标题，确认焦点已切对
+- **目标窗口预览** —— 倒计时期间逐秒刷新当前前台窗口标题（你切到哪个窗口就显示哪个），执行时锁定并显示实际注入目标
 - **可调延迟** —— 1~9 秒倒计时，给你时间聚焦目标窗口
-- **启动/取消** —— 随时中止操作；运行中防重入，不会叠加启动
+- **启动/取消** —— 随时中止操作；任务结束后自动复位（无需手动取消）；运行中防重入，不会叠加启动
 - **实时状态** —— 倒计时显示、输入进度、完成提示
 - **可靠的剪贴板操作** —— 占用时自动重试；粘贴前快照、粘贴后恢复**全部剪贴板格式**（文本/图片/文件等），仅在剪贴板未被用户改动时执行恢复，避免覆盖新复制的数据
 - **现代化 UI** —— WebView2 + Vue 3 渲染
@@ -50,7 +50,7 @@
 GUI       WebView2 (Edge Chromium)
 前端      Vue 3 + TypeScript, Vite 构建为单文件 HTML (无其他运行时依赖)
 构建      vue-tsc 类型检查 + Vite (vite-plugin-singlefile) + windres + go build
-CI        GitHub Actions (windows-latest): gofmt / go vet / go test + 前端产物漂移检查
+CI        GitHub Actions (windows-latest): gofmt / go vet / go test / go build + 前端产物漂移检查 + 版本同步检查
 Win32 API SendInput (KEYEVENTF_UNICODE) + 剪贴板 (CF_UNICODETEXT, EnumClipboardFormats 全格式快照, RtlMoveMemory) + 前台窗口检测 (GetForegroundWindow) + 单实例互斥体 (CreateMutexW)
 图标      圆角多尺寸 ICO（uv + Pillow 生成, scripts/gen_icon.py 字节级可复现）
 资源      windres 编译 .rc → .syso
@@ -103,7 +103,7 @@ Type/
 ├── tools/
 │   └── equivcheck/          ← 重构等价性验证 (go run ./tools/equivcheck, 逐函数比对函数体)
 ├── testdata/                ← 手工测试页 (paste-guard.html, 用法见页内注释)
-├── .github/workflows/ci.yml ← CI: gofmt / vet / test + 前端产物漂移检查
+├── .github/workflows/ci.yml ← CI: gofmt / vet / test / build + 前端产物漂移检查 + 版本同步检查
 ├── go.mod / go.sum          ← Go 模块定义
 ├── pyproject.toml / uv.lock / .python-version ← Python 资产管线依赖 (uv 管理, 锁定 Pillow)
 └── .gitignore               ← 忽略构建产物/依赖/工具元数据
@@ -174,6 +174,7 @@ go build -tags dev -o Type-dev.exe ./cmd/type   # 终端 2: 带 dev 标签构建
 - **剪贴板特殊格式** —— 延迟渲染（delayed rendering）及句柄型格式（CF_BITMAP 等）无法同步快照，粘贴模式结束时会丢失；常见场景（截图工具、浏览器复制图片、资源管理器复制文件）均在快照恢复范围内。
 - **杀毒软件误报** —— 键盘模拟（SendInput）与剪贴板操作是杀软启发式扫描的常见敏感组合，若下载或运行时被误报，请添加信任或自行编译。
 - **单实例** —— 同时只允许运行一个实例（第二个实例会提示并退出），避免两个实例争抢剪贴板与键盘焦点。
+- **焦点仍在 Type 自身时不输入** —— 倒计时结束时若焦点仍停留在 Type 窗口（未切换到目标窗口），程序会明确报错并放弃输入，不会把内容打进自己的输入框。
 
 ### 手工测试页
 

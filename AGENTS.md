@@ -35,7 +35,7 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 - `frontend/` — 自包含 Vite 项目（package.json / node_modules 都在这里，不在仓库根）
 - `assets/` — 图标源图与产物、version.rc（screenshot.png 为 README 截图）
 - `testdata/` — 手工测试页（paste-guard.html），无任何自动引用；用法写在文件头注释里
-- `.github/workflows/ci.yml` — CI：gofmt / vet / test + 前端产物漂移检查
+- `.github/workflows/ci.yml` — CI：gofmt / vet / test / build + 前端产物漂移检查 + 版本同步检查
 - **版本号单一来源**：`cmd/type/main.go` 的 `version` 变量；build.ps1 自动同步到
   version.rc / package.json——改版本只改 main.go，然后跑 build.ps1
 - **入库的前端产物必须与源码同步**：改了 `frontend/src` 就要跑 build.ps1 重新生成
@@ -60,7 +60,20 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
   `剪贴板操作失败` / `正在逐字符输入 N / M ...` / `输入完成` / `输入失败` /
   `已取消` / `启动失败：上一任务未能及时退出` / `已有输入任务在运行中，请先取消或等待完成`
 - 允许**新增**文案（如注入被拒时的 `输入中断：目标窗口拒绝了模拟按键，可能其权限高于 Type`、
-  `粘贴未生效：...`、`无内容可输入`），但不得改写上面已冻结的那些
+  `粘贴未生效：...`、`无内容可输入`、焦点未切换时的 `未切换到目标窗口：...`），
+  但不得改写上面已冻结的那些
+
+## 目标窗口与轮询（两条踩过坑的约定，勿"优化"掉）
+
+- **目标窗口语义**：预览 = 当前前台窗口逐秒刷新（用户切到哪个窗口就显示哪个，
+  含 Type 自身；不要引入"排除自身/显示占位"之类的过滤）；执行时锁定当时的前台
+  窗口并贯穿到执行与终态状态；倒计时结束焦点仍在 Type 自身时报错并零注入。
+  用户明确定调：所见即所选，程序只负责刷新
+- **前端轮询是自续链条（v1.4.0 的教训）**：`startPolling` 必须以定时器点火
+  （`setTimeout(0)`），不能直接调用 `tick`——tick 末尾用 `pollTimer !== null`
+  判断"链条继续"，而 pollTimer 只在该判断保护的分支里赋值，直接调用会让链条
+  第一拍后断裂、状态永不刷新（症状：预览不跟随、完成后启动键卡死）。
+  恢复可见/焦点时无条件重启链条，作为 WebView2 挂起定时器的兜底
 
 ## 其他
 
