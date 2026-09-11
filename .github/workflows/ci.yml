@@ -40,6 +40,11 @@ jobs:
       - name: go test
         run: go test -count=1 ./...
 
+      # 链接层在此之前不可见: go vet 只做类型检查不链接, version.syso 之类
+      # 的产物要到真正 build 才参与; CI 此前从不编译 exe
+      - name: go build
+        run: go build ./...
+
       # ── 入库的前端产物必须与源码一致 ──
       # dist/index.html 入库是刻意的(免 Node 亦可 go build), 代价是改了
       # frontend/src 却忘了重新构建时 go:embed 会静默用旧界面, 这里堵住。

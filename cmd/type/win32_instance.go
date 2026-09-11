@@ -9,14 +9,15 @@ package main
 
 import (
 	"errors"
-	"os"
-	"strconv"
 	"syscall"
 	"unsafe"
 )
 
 const (
-	// 互斥体不在 Global\ 命名空间: 多用户同时登录时各自可开一个实例
+	// 互斥体不在 Global\ 命名空间: 多用户同时登录时各自可开一个实例。
+	// 名字必须固定且不带 PID: 跨进程互斥恰恰依赖两个进程认领同一个名字,
+	// 一旦带上 PID, 每个进程的名字都互不相同, 第二个实例永远撞不上,
+	// 守卫形同虚设(初版就栽在这里)
 	instanceMutexName    = `Local\Type-KeyboardInputSimulator`
 	ERROR_ALREADY_EXISTS = 183
 )
@@ -33,38 +34,41 @@ const (
 var instanceMutex uintptr
 
 // guardSingleInstance 确保本会话中只有一个实例; 已有实例时提示并返回 false。
-// 互斥体名字带 PID: 便于测试在同一进程内复现"第二个实例"的场景,
-// 而跨进程互斥仍由 CreateMutexW 的命名空间保证
+// 返回值语义: true = 本实例可以继续启动(main 据此决定是否退出)
 func guardSingleInstance() bool {
-	ok, existed := claimInstanceMutex()
-	if !ok {
+	if !claimInstanceMutex(instanceMutexName) {
 		messageBox("Type 已在运行",
 			"另一个 Type 窗口已经打开，请使用那个窗口。\n\n"+
 				"两个实例同时输入会互相干扰：剪贴板内容可能被覆盖或丢失。")
+		return false
 	}
-	return existed
+	return true
 }
 
-// claimInstanceMutex 尝试认领单实例互斥体, 返回"可否继续启动"与"是否已有实例"。
-// 与提示框分开是为了让测试能验证判定本身: messageBox 是模态对话框,
+// claimInstanceMutex 尝试以 name 认领单实例互斥体, 返回"可否继续启动"。
+// 名字由调用方传入: 生产用固定名, 测试传入带 PID 的名字, 既复现"两个进程
+// 认领同一个名字"的场景, 又不会与真正在运行的 Type 相互干扰。
+// 与提示框分开则是为了让测试能验证判定本身: messageBox 是模态对话框,
 // 在无头 CI 上没有人点确定, 一旦被测试触发就会一直阻塞到 go test 超时
-func claimInstanceMutex() (proceed, alreadyRunning bool) {
-	name, err := syscall.UTF16PtrFromString(instanceMutexName + "-" + strconv.Itoa(os.Getpid()))
+func claimInstanceMutex(name string) (proceed bool) {
+	ptr, err := syscall.UTF16PtrFromString(name)
 	if err != nil {
-		return true, false // 构造名字都失败时放行, 不因守卫本身挡住启动
+		return true // 构造名字都失败时放行, 不因守卫本身挡住启动
 	}
 	// 必须用 LazyProc.Call 返回的 err 判断"已存在": 它是系统调用返回瞬间
 	// 取的 GetLastError, 而事后再调 syscall.GetLastError() 已被 Go 运行时
 	// 清零(实测恒为 0), 那样守卫会永远放行、形同虚设
-	h, _, callErr := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(name)))
+	h, _, callErr := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(ptr)))
 	if h == 0 {
-		return true, false // 创建失败(如权限受限)时放行, 不因守卫本身挡住启动
+		return true // 创建失败(如权限受限)时放行, 不因守卫本身挡住启动
 	}
 	if errors.Is(callErr, syscall.Errno(ERROR_ALREADY_EXISTS)) {
-		return false, true
+		// 已存在时 CreateMutexW 仍返回现有互斥体的有效句柄: 不认领就用完即关
+		procCloseHandle.Call(h)
+		return false
 	}
 	instanceMutex = h
-	return true, false
+	return true
 }
 
 // messageBox 置顶提示框, 不依赖 WebView 是否可用。

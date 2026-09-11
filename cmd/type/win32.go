@@ -42,4 +42,5 @@ var (
 	procSetClassLongPtrW         = user32.NewProc("SetClassLongPtrW")
 	procMessageBoxW              = user32.NewProc("MessageBoxW")
 	procCreateMutexW             = kernel32.NewProc("CreateMutexW")
+	procCloseHandle              = kernel32.NewProc("CloseHandle")
 )
