@@ -12,7 +12,7 @@ import (
 	"github.com/webview/webview_go"
 )
 
-var version = "1.4.1"
+var version = "1.4.2"
 
 var topmostFlag atomic.Bool // 窗口置顶开关(与输入任务无关, 归装配层)
 
