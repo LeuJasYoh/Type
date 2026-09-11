@@ -21,7 +21,9 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          # 与开发环境一致的 Node 主版本: 产品的字节级可复现性依赖它
+          # (换主版本会改变 vite/rollup 产出的转义与 chunk 命名, 见产物漂移检查)
+          node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -67,6 +69,7 @@ jobs:
             Write-Host "$artifact 与 frontend/src 不一致"
             Write-Host "  入库版本: $committed"
             Write-Host "  重新构建: $built"
+            Write-Host "  环境: node $(node --version) / vite $((npm ls vite --depth=0 --json 2>$null | ConvertFrom-Json).dependencies.vite.version)"
             Write-Host "请在本地运行 scripts/build.ps1 并提交重新生成的产物"
             exit 1
           }
