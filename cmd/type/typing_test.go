@@ -7,6 +7,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -136,10 +137,39 @@ func (f *fakeClipboard) ops() []string {
 	return append([]string(nil), f.events...)
 }
 
-// fakeForeground 固定标题的前台窗口
-type fakeForeground struct{ title string }
+// fakeForeground 固定标题的前台窗口; self 置位模拟"焦点停在 Type 自身"
+type fakeForeground struct {
+	title string
+	self  bool
+}
 
 func (f fakeForeground) Title() string { return f.title }
+func (f fakeForeground) IsSelf() bool  { return f.self }
+
+// switchableForeground 可变前台窗口: 模拟用户在倒计时期间切换目标/回看 Type
+type switchableForeground struct {
+	mu    sync.Mutex
+	title string
+	self  bool
+}
+
+func (f *switchableForeground) Title() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.title
+}
+
+func (f *switchableForeground) IsSelf() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.self
+}
+
+func (f *switchableForeground) set(title string, self bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.title, f.self = title, self
+}
 
 // ─── 测试辅助 ─────────────────────────────────────────
 
@@ -578,5 +608,98 @@ func TestEmptyTextDoesNotReportSuccess(t *testing.T) {
 	}
 	if calls := inj.calls(); len(calls) != 0 {
 		t.Errorf("空文本不应注入, got %v", calls)
+	}
+}
+
+// 目标窗口语义: 终态携带执行时锁定的目标, 执行阶段预览不再清空
+func TestTargetWindowLockedIntoFinalStatus(t *testing.T) {
+	inj := newFakeInjector()
+	svc := newTestService(inj, &fakeClipboard{}, noSleep)
+	if _, err := svc.Start("你好", 1, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	st := waitTerminal(t, svc)
+	if st.Phase != PhaseSuccess {
+		t.Fatalf("终态 phase = %s, want success", st.Phase)
+	}
+	if st.TargetWindow != "记事本" {
+		t.Errorf("终态目标窗口 = %q, want 记事本", st.TargetWindow)
+	}
+}
+
+// 倒计时结束焦点仍在 Type 自身: 报错且零注入零剪贴板操作,
+// 不把文本打进自己的输入框
+func TestSelfForegroundAbortsBeforeInjection(t *testing.T) {
+	inj := newFakeInjector()
+	cb := &fakeClipboard{}
+	svc := newTypingService(inj, cb, fakeForeground{title: "Type 测试", self: true})
+	svc.sleep = noSleep
+	if _, err := svc.Start("你好", 1, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	st := waitTerminal(t, svc)
+	if st.Phase != PhaseError {
+		t.Fatalf("终态 phase = %s, want error", st.Phase)
+	}
+	if !strings.Contains(st.Message, "未切换到目标窗口") {
+		t.Errorf("终态文案 = %q, 应说明焦点仍在 Type", st.Message)
+	}
+	if calls := inj.calls(); len(calls) != 0 {
+		t.Errorf("不应有任何注入, got %v", calls)
+	}
+	if ops := cb.ops(); len(ops) != 0 {
+		t.Errorf("不应触碰剪贴板, got %v", ops)
+	}
+}
+
+// 倒计时预览 = 最近一个非 Type 前台窗口: 中途回看 Type 不清空预览,
+// 切换目标则随之更新; 终态锁定为执行时的目标
+func TestCountdownPreviewTracksLastNonSelfWindow(t *testing.T) {
+	fg := &switchableForeground{title: "记事本"}
+	inj := newFakeInjector()
+	var mu sync.Mutex
+	var history []TypingStatus
+	var sleeps int
+	var svc *TypingService
+	svc = newTypingService(inj, &fakeClipboard{}, fg)
+	svc.sleep = func(time.Duration) {
+		sleeps++
+		switch sleeps {
+		case 1:
+			fg.set("浏览器", false) // 用户切到真正的目标
+		case 2:
+			fg.set("Type 测试", true) // 用户中途回看 Type
+		case 3:
+			fg.set("浏览器", false) // 最后一秒切回目标
+		}
+		mu.Lock()
+		history = append(history, *svc.Status())
+		mu.Unlock()
+	}
+
+	if _, err := svc.Start("你好", 3, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	st := waitTerminal(t, svc)
+	if st.Phase != PhaseSuccess {
+		t.Fatalf("终态 phase = %s, want success", st.Phase)
+	}
+	if st.TargetWindow != "浏览器" {
+		t.Errorf("终态目标 = %q, want 浏览器", st.TargetWindow)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var lastCountdown *TypingStatus
+	for i := range history {
+		if history[i].Phase == PhaseCountdown {
+			lastCountdown = &history[i]
+		}
+	}
+	if lastCountdown == nil {
+		t.Fatal("未捕获到倒计时状态")
+	}
+	if lastCountdown.TargetWindow != "浏览器" {
+		t.Errorf("回看 Type 期间预览 = %q, want 浏览器 (自身不得覆盖预览)", lastCountdown.TargetWindow)
 	}
 }

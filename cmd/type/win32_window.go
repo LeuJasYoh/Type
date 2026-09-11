@@ -167,8 +167,15 @@ func focusedHWND() uintptr {
 	return hwnd
 }
 
-// win32Foreground Foreground 的 Win32 实现
-type win32Foreground struct{}
+// win32Foreground Foreground 的 Win32 实现。
+// hwnd 为本程序主窗口句柄, 用于识别"前台是否是自己"
+type win32Foreground struct{ hwnd uintptr }
+
+// IsSelf 前台窗口是否为本程序自身
+func (f win32Foreground) IsSelf() bool {
+	hwnd, _, _ := procGetForegroundWindow.Call()
+	return hwnd != 0 && hwnd == f.hwnd
+}
 
 // Title 读取当前前台窗口标题(用于目标窗口预览)
 func (win32Foreground) Title() string {

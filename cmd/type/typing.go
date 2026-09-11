@@ -47,6 +47,9 @@ type Clipboard interface {
 // Foreground 前台窗口探测
 type Foreground interface {
 	Title() string
+	// IsSelf 前台是否为本程序主窗口: 用户点击启动后若一直停留在 Type 上,
+	// 注入会落进自己的输入框, 须能识别并阻止
+	IsSelf() bool
 }
 
 // ─── 输入状态（前端轮询读取）───────────────────────────
@@ -65,9 +68,9 @@ const (
 type TypingStatus struct {
 	Phase        TypingPhase `json:"phase"`
 	Message      string      `json:"message"`
-	Progress     int         `json:"progress"`    // 0-100，-1 表示隐藏
-	SecondsLeft  int         `json:"secondsLeft"` // 倒计时剩余
-	TargetWindow string      `json:"targetWindow"`
+	Progress     int         `json:"progress"`     // 0-100，-1 表示隐藏
+	SecondsLeft  int         `json:"secondsLeft"`  // 倒计时剩余
+	TargetWindow string      `json:"targetWindow"` // 目标窗口预览: 倒计时期间为最近非 Type 前台窗口, 执行后为锁定的实际注入目标
 }
 
 // ─── 用户可见文案(新增) ───────────────────────────────
@@ -115,6 +118,15 @@ func (s *TypingService) Status() *TypingStatus {
 	return s.typingStatus.Load().(*TypingStatus)
 }
 
+// nonSelfTitle 前台窗口标题; 前台是 Type 自身时返回空串。
+// 目标预览与执行目标都以"非自身的前台窗口"为准
+func (s *TypingService) nonSelfTitle() string {
+	if s.foreground.IsSelf() {
+		return ""
+	}
+	return s.foreground.Title()
+}
+
 // Start 启动一次输入任务(倒计时 + 注入)
 func (s *TypingService) Start(text string, delay int, forceSendInput bool) (string, error) {
 	// 上一任务活跃且并非取消收尾: 拒绝重入
@@ -129,7 +141,7 @@ func (s *TypingService) Start(text string, delay int, forceSendInput bool) (stri
 		Message:      fmt.Sprintf("剩余 %d 秒 — 请聚焦目标窗口...", delay),
 		SecondsLeft:  delay,
 		Progress:     -1,
-		TargetWindow: s.foreground.Title(),
+		TargetWindow: s.nonSelfTitle(),
 	})
 	go s.runTypingTask(gen, text, delay, forceSendInput)
 	return "started", nil
@@ -182,17 +194,24 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 	cancelled := s.cancelFlag.Load
 
 	// ── 倒计时 ──
+	// 目标预览 = 最近一个非 Type 的前台窗口: 用户看着 Type 的那一刻前台
+	// 必是 Type 自身, "实时跟随前台"在此交互流程下不可能成立(永远显示
+	// Type); 有意义的语义是"若倒计时此刻结束, 输入将落进哪个窗口"
+	targetPreview := ""
 	for i := delay; i > 0; i-- {
 		if cancelled() {
 			return // Cancel 已写入取消状态
 		}
 		sec := i
+		if t := s.nonSelfTitle(); t != "" {
+			targetPreview = t
+		}
 		setStatus(&TypingStatus{
 			Phase:        PhaseCountdown,
 			Message:      fmt.Sprintf("剩余 %d 秒 — 请聚焦目标窗口...", sec),
 			SecondsLeft:  sec,
 			Progress:     -1,
-			TargetWindow: s.foreground.Title(),
+			TargetWindow: targetPreview,
 		})
 		s.sleep(1 * time.Second)
 	}
@@ -201,6 +220,21 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 	}
 
 	s.sleep(150 * time.Millisecond)
+
+	// 执行目标锁定: 倒计时结束时的前台窗口。焦点仍在 Type 自身时注入会
+	// 落进自己的输入框 —— 明确报错, 而不是静默打错地方
+	if s.foreground.IsSelf() {
+		setStatus(&TypingStatus{
+			Phase:    PhaseError,
+			Message:  "未切换到目标窗口：倒计时结束时焦点仍在 Type，请重新启动后聚焦目标窗口",
+			Progress: -1,
+		})
+		return
+	}
+	target := s.nonSelfTitle()
+	if target == "" {
+		target = targetPreview // 标题读取失败时退回倒计时期间的最后已知目标
+	}
 
 	// ── 执行 ──
 	success := false
@@ -212,6 +246,7 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 	if containsNonASCII(text) && !forceSendInput {
 		setStatus(&TypingStatus{
 			Phase: PhaseTyping, Message: "检测到中文，正在操作剪贴板...", Progress: -1,
+			TargetWindow: target,
 		})
 		success, injected = s.typeTextViaClipboard(text)
 		if !success && !cancelled() {
@@ -222,6 +257,7 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 			}
 			setStatus(&TypingStatus{
 				Phase: PhaseTyping, Message: msg, Progress: -1,
+				TargetWindow: target,
 			})
 		}
 	} else {
@@ -230,6 +266,7 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 		total := len(runes)
 		setStatus(&TypingStatus{
 			Phase: PhaseTyping, Message: fmt.Sprintf("正在逐字符输入 0 / %d ...", total), Progress: 0,
+			TargetWindow: target,
 		})
 
 		typed := 0
@@ -251,9 +288,10 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 
 			if typed%8 == 0 || typed == total {
 				setStatus(&TypingStatus{
-					Phase:    PhaseTyping,
-					Message:  fmt.Sprintf("正在逐字符输入 %d / %d ...", typed, total),
-					Progress: typed * 100 / total,
+					Phase:        PhaseTyping,
+					Message:      fmt.Sprintf("正在逐字符输入 %d / %d ...", typed, total),
+					Progress:     typed * 100 / total,
+					TargetWindow: target,
 				})
 			}
 
@@ -271,7 +309,7 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 		if cancelled() {
 			success = false
 		} else if !ok {
-			setStatus(&TypingStatus{Phase: PhaseTyping, Message: msgPartialSendInput, Progress: -1})
+			setStatus(&TypingStatus{Phase: PhaseTyping, Message: msgPartialSendInput, Progress: -1, TargetWindow: target})
 			failMsg = msgPartialSendInput
 			success = false
 		} else {
@@ -284,17 +322,17 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 	case cancelled():
 		// Cancel 已写入取消状态
 	case success && injected:
-		setStatus(&TypingStatus{Phase: PhaseSuccess, Message: "输入完成", Progress: -1})
+		setStatus(&TypingStatus{Phase: PhaseSuccess, Message: "输入完成", Progress: -1, TargetWindow: target})
 	case success:
 		// 文本为空(或整段被剔除): 无可注入内容, 不算失败, 但也不能报"输入完成"
-		setStatus(&TypingStatus{Phase: PhaseSuccess, Message: "无内容可输入", Progress: -1})
+		setStatus(&TypingStatus{Phase: PhaseSuccess, Message: "无内容可输入", Progress: -1, TargetWindow: target})
 	default:
 		// 保留注入器给出的具体原因(如权限不足), 而不是笼统的"输入失败"
 		msg := failMsg
 		if msg == "" {
 			msg = "输入失败"
 		}
-		setStatus(&TypingStatus{Phase: PhaseError, Message: msg, Progress: -1})
+		setStatus(&TypingStatus{Phase: PhaseError, Message: msg, Progress: -1, TargetWindow: target})
 	}
 }
 

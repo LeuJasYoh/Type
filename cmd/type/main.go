@@ -33,8 +33,9 @@ func main() {
 	hw := uintptr(w.Window())
 	retrySetIcon(hw)
 
-	// 业务服务: 平台能力以接口注入, Win32 实现见 win32_*.go
-	svc := newTypingService(win32Injector{}, win32Clipboard{}, win32Foreground{})
+	// 业务服务: 平台能力以接口注入, Win32 实现见 win32_*.go;
+	// 前台探测带上自身窗口句柄, 用于目标窗口的"非自身"判定
+	svc := newTypingService(win32Injector{}, win32Clipboard{}, win32Foreground{hwnd: hw})
 
 	// 绑定 Go 函数到 JS
 	// (须在加载页面前完成: 绑定的注入脚本对随后创建的文档生效)

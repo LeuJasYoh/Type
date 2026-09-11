@@ -92,5 +92,15 @@ export function useTypingTask() {
     status.value = statusOf({ phase: 'cancel', message: '已取消', progress: -1 });
   }
 
+  // WebView2 在窗口退到后台时会整段挂起页面定时器(不只是降频): 任务执行
+  // 期间 Type 必然在后台, 轮询链条断掉后就永远读不到终止态, 界面冻结在
+  // 挂起前的最后一帧、启动键一直禁用, 只能靠"取消"复位(实测如此)。
+  // 恢复可见/焦点时若轮询已断而任务仍在跑, 立即重启轮询自愈
+  function healPolling(): void {
+    if (isRunning.value && pollTimer === null) startPolling();
+  }
+  document.addEventListener('visibilitychange', healPolling);
+  window.addEventListener('focus', healPolling);
+
   return { status, isRunning, start, cancel };
 }
