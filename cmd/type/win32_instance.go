@@ -36,25 +36,35 @@ var instanceMutex uintptr
 // 互斥体名字带 PID: 便于测试在同一进程内复现"第二个实例"的场景,
 // 而跨进程互斥仍由 CreateMutexW 的命名空间保证
 func guardSingleInstance() bool {
+	ok, existed := claimInstanceMutex()
+	if !ok {
+		messageBox("Type 已在运行",
+			"另一个 Type 窗口已经打开，请使用那个窗口。\n\n"+
+				"两个实例同时输入会互相干扰：剪贴板内容可能被覆盖或丢失。")
+	}
+	return existed
+}
+
+// claimInstanceMutex 尝试认领单实例互斥体, 返回"可否继续启动"与"是否已有实例"。
+// 与提示框分开是为了让测试能验证判定本身: messageBox 是模态对话框,
+// 在无头 CI 上没有人点确定, 一旦被测试触发就会一直阻塞到 go test 超时
+func claimInstanceMutex() (proceed, alreadyRunning bool) {
 	name, err := syscall.UTF16PtrFromString(instanceMutexName + "-" + strconv.Itoa(os.Getpid()))
 	if err != nil {
-		return true // 构造名字都失败时放行, 不因守卫本身挡住启动
+		return true, false // 构造名字都失败时放行, 不因守卫本身挡住启动
 	}
 	// 必须用 LazyProc.Call 返回的 err 判断"已存在": 它是系统调用返回瞬间
 	// 取的 GetLastError, 而事后再调 syscall.GetLastError() 已被 Go 运行时
 	// 清零(实测恒为 0), 那样守卫会永远放行、形同虚设
 	h, _, callErr := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(name)))
 	if h == 0 {
-		return true // 创建失败(如权限受限)时放行, 不因守卫本身挡住启动
+		return true, false // 创建失败(如权限受限)时放行, 不因守卫本身挡住启动
 	}
 	if errors.Is(callErr, syscall.Errno(ERROR_ALREADY_EXISTS)) {
-		messageBox("Type 已在运行",
-			"另一个 Type 窗口已经打开，请使用那个窗口。\n\n"+
-				"两个实例同时输入会互相干扰：剪贴板内容可能被覆盖或丢失。")
-		return false
+		return false, true
 	}
 	instanceMutex = h
-	return true
+	return true, false
 }
 
 // messageBox 置顶提示框, 不依赖 WebView 是否可用。

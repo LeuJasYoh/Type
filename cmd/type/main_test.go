@@ -191,18 +191,23 @@ func TestClipboardHoldsTextNul(t *testing.T) {
 	}
 }
 
-// TestGuardSingleInstance 单实例守卫: 同一进程内第二次守卫必须被拦下。
-// 互斥体名字带 PID, 因此同一测试的第二次调用就是"第二个实例"的场景,
-// 又不会与真正在运行的 Type 相互干扰
-func TestGuardSingleInstance(t *testing.T) {
-	if !guardSingleInstance() {
-		t.Fatal("首次守卫应放行(尚无同名互斥体)")
-	}
-	if guardSingleInstance() {
-		t.Error("第二次守卫应被拦下, 否则单实例形同虚设")
+// TestClaimInstanceMutex 单实例判定: 同一进程内第二次认领必须被拦下。
+// 互斥体名字带 PID, 因此第二次调用就是"第二个实例"的场景, 又不会与真正
+// 在运行的 Type 相互干扰。
+// 这里验证 claimInstanceMutex 而不是 guardSingleInstance: 后者会弹模态提示框,
+// 在无头 CI 上没人点确定, 会让 go test 一直挂到超时(已实际发生过一次)
+func TestClaimInstanceMutex(t *testing.T) {
+	proceed, already := claimInstanceMutex()
+	if !proceed || already {
+		t.Fatalf("首次认领应放行: proceed=%v already=%v", proceed, already)
 	}
 	if instanceMutex == 0 {
-		t.Error("守卫放行后应持有互斥体句柄")
+		t.Error("认领成功后应持有互斥体句柄")
+	}
+
+	proceed, already = claimInstanceMutex()
+	if proceed || !already {
+		t.Errorf("第二次认领应被拦下: proceed=%v already=%v", proceed, already)
 	}
 }
 
