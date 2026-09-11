@@ -40,7 +40,11 @@ jobs:
 
       # ── 入库的前端产物必须与源码一致 ──
       # dist/index.html 入库是刻意的(免 Node 亦可 go build), 代价是改了
-      # frontend/src 却忘了重新构建时 go:embed 会静默用旧界面, 这里堵住
+      # frontend/src 却忘了重新构建时 go:embed 会静默用旧界面, 这里堵住。
+      # 比对用 git hash-object --path=<原路径>: 它套用与 git diff 相同的
+      # 行尾归一, 因此 Windows 检出(autocrlf 使 CRLF)与 vite 产出(LF)
+      # 不会误报, 而真实的内容漂移照样能被抓住(直接比字节或比哈希都会误报,
+      # 第一版就是栽在这里)
       - name: 前端依赖
         run: npm ci
         working-directory: frontend
@@ -48,17 +52,25 @@ jobs:
       - name: 前端产物漂移检查
         shell: pwsh
         run: |
-          $before = (Get-FileHash internal/web/dist/index.html -Algorithm SHA256).Hash
+          $artifact = 'internal/web/dist/index.html'
+          $committed = git rev-parse "HEAD:$artifact"
+          if ($LASTEXITCODE -ne 0 -or -not $committed) {
+            Write-Host "无法从 HEAD 读取入库产物 $artifact"; exit 1
+          }
           npm --prefix frontend run build
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          $after = (Get-FileHash internal/web/dist/index.html -Algorithm SHA256).Hash
-          if ($before -ne $after) {
-            Write-Host "internal/web/dist/index.html 与 frontend/src 不一致"
+          $built = git hash-object "--path=$artifact" $artifact
+          if ($LASTEXITCODE -ne 0 -or -not $built) {
+            Write-Host "重新构建未产出 $artifact"; exit 1
+          }
+          if ($built -ne $committed) {
+            Write-Host "$artifact 与 frontend/src 不一致"
+            Write-Host "  入库版本: $committed"
+            Write-Host "  重新构建: $built"
             Write-Host "请在本地运行 scripts/build.ps1 并提交重新生成的产物"
-            git --no-pager diff --stat -- internal/web/dist/index.html
             exit 1
           }
-          Write-Host "前端产物与源码一致 ($before)"
+          Write-Host "前端产物与源码一致 ($committed)"
 
       # ── 版本同步须为幂等: 否则每次构建都会留下未提交改动 ──
       - name: 版本同步幂等性
