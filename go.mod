@@ -1,4 +1,4 @@
-module Type
+module github.com/LeuJasYoh/type
 
 go 1.26.5
 

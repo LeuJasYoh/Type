@@ -144,6 +144,68 @@ func TestClipboardSnapshotRoundtrip(t *testing.T) {
 	}
 }
 
+// TestEncodedText 剪贴板文本的字节表示: UTF-16LE + 结尾 NUL。
+// 内嵌 NUL 也必须原样保留——它是 holdsText 按字节比对的基础
+func TestEncodedText(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want []byte
+	}{
+		{"空串", "", []byte{0x00, 0x00}},
+		{"ASCII", "A", []byte{0x41, 0x00, 0x00, 0x00}},
+		{"CJK", "中", []byte{0x2D, 0x4E, 0x00, 0x00}},
+		{"内嵌 NUL", "A\x00B", []byte{0x41, 0x00, 0x00, 0x00, 0x42, 0x00, 0x00, 0x00}},
+	}
+	for _, c := range cases {
+		got := encodedText(c.in)
+		if !bytes.Equal(got, c.want) {
+			t.Errorf("%s: encodedText(%q) = % x, want % x", c.name, c.in, got, c.want)
+		}
+		// 结尾 NUL 终止符必须落在最后, 表示块本身不含填充
+		if n := len(got); n < 2 || got[n-1] != 0 || got[n-2] != 0 {
+			t.Errorf("%s: 末尾缺少 NUL 终止符: % x", c.name, got)
+		}
+	}
+}
+
+// TestClipboardHoldsTextNul 内嵌 NUL 的文本必须被 holdsText 精确识别。
+// 旧实现用 GetText 的字符串比较, 会在 NUL 处截断而误判为"用户已改动", 跳过恢复
+func TestClipboardHoldsTextNul(t *testing.T) {
+	cb := win32Clipboard{}
+	orig := cb.Snapshot()
+	if orig == nil {
+		t.Skip("剪贴板被占用, 无法保存原始状态")
+	}
+	defer cb.RestoreSnapshotRaw(orig)
+
+	const text = "A\x00B"
+	if !cb.SetText(text) {
+		t.Fatal("SetText 失败")
+	}
+	if !cb.HoldsText(text) {
+		t.Errorf("HoldsText(%q) = false, 内嵌 NUL 被误判为用户改动", text)
+	}
+	if cb.HoldsText("A") {
+		t.Error(`HoldsText("A") = true: 截断后的比较不应通过`)
+	}
+}
+
+// TestGuardSingleInstance 单实例守卫: 同一进程内第二次守卫必须被拦下。
+// 互斥体名字带 PID, 因此同一测试的第二次调用就是"第二个实例"的场景,
+// 又不会与真正在运行的 Type 相互干扰
+func TestGuardSingleInstance(t *testing.T) {
+	if !guardSingleInstance() {
+		t.Fatal("首次守卫应放行(尚无同名互斥体)")
+	}
+	if guardSingleInstance() {
+		t.Error("第二次守卫应被拦下, 否则单实例形同虚设")
+	}
+	if instanceMutex == 0 {
+		t.Error("守卫放行后应持有互斥体句柄")
+	}
+}
+
 // TestClipboardRestoreGuard 验证守卫: 用户在注入期间复制了新内容时不覆盖
 func TestClipboardRestoreGuard(t *testing.T) {
 	cb := win32Clipboard{}

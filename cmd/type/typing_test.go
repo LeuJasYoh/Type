@@ -10,33 +10,38 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf16"
 )
 
 // ─── fakes ────────────────────────────────────────────
 
-// fakeInjector 记录注入调用序列: "r:X"=字符, "E"=回车, "V"=粘贴
+// fakeInjector 记录注入调用序列: "r:X"=字符, "E"=回车, "V"=粘贴。
+// failAfter >= 0 时模拟系统拒绝注入(SendInput 返回 0, 典型为 UIPI),
+// 第 failAfter 个注入起返回 false 且不记录事件
 type fakeInjector struct {
-	mu     sync.Mutex
-	events []string
+	mu        sync.Mutex
+	events    []string
+	failAfter int
 }
 
-func (f *fakeInjector) SendRune(r rune) {
+func newFakeInjector() *fakeInjector { return &fakeInjector{failAfter: -1} }
+
+// record 记录一次注入并返回是否被系统接受
+func (f *fakeInjector) record(event string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.events = append(f.events, "r:"+string(r))
+	if f.failAfter >= 0 && len(f.events) >= f.failAfter {
+		return false
+	}
+	f.events = append(f.events, event)
+	return true
 }
 
-func (f *fakeInjector) SendEnter() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.events = append(f.events, "E")
-}
+func (f *fakeInjector) SendRune(r rune) bool { return f.record("r:" + string(r)) }
 
-func (f *fakeInjector) SendPaste() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.events = append(f.events, "V")
-}
+func (f *fakeInjector) SendEnter() bool { return f.record("E") }
+
+func (f *fakeInjector) SendPaste() bool { return f.record("V") }
 
 func (f *fakeInjector) calls() []string {
 	f.mu.Lock()
@@ -44,12 +49,22 @@ func (f *fakeInjector) calls() []string {
 	return append([]string(nil), f.events...)
 }
 
+func (f *fakeInjector) clear() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = nil
+}
+
 // fakeClipboard 内存剪贴板: 记录操作序列("snap"/"set"/"restore"),
-// 可配置 SetText 失败; 快照/恢复按单一文本格式往返
+// 可配置 SetText 失败; 快照/恢复按单一文本格式往返。
+// held 是"读回来的内容", 用来模拟用户在注入期间改动剪贴板: text 是
+// 程序写进去的, held 是下次读取时看到的
 type fakeClipboard struct {
 	mu      sync.Mutex
 	text    string
+	held    string
 	setFail bool
+	snap    []ClipboardFormat
 	events  []string
 }
 
@@ -61,6 +76,7 @@ func (f *fakeClipboard) SetText(text string) bool {
 		return false
 	}
 	f.text = text
+	f.held = text // 写进去的内容就是下次读回来的内容, 除非测试另行改动 held
 	return true
 }
 
@@ -70,10 +86,19 @@ func (f *fakeClipboard) GetText() string {
 	return f.text
 }
 
+func (f *fakeClipboard) HoldsText(text string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.held == text
+}
+
 func (f *fakeClipboard) Snapshot() []ClipboardFormat {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.events = append(f.events, "snap")
+	if f.snap != nil {
+		return f.snap
+	}
 	return []ClipboardFormat{{Fmt: CF_UNICODETEXT, Data: []byte(f.text)}}
 }
 
@@ -83,9 +108,26 @@ func (f *fakeClipboard) RestoreSnapshotRaw(snap []ClipboardFormat) {
 	f.events = append(f.events, "restore")
 	if len(snap) == 0 {
 		f.text = ""
+		f.held = ""
+		return
+	}
+	if f.snap != nil {
+		// 带 UTF-16LE 编码的快照(如设置失败路径的未落盘快照): 解码回文本
+		f.text = string(utf16.Decode(unitsOf(snap[0].Data)))
+		f.held = f.text
 		return
 	}
 	f.text = string(snap[0].Data)
+	f.held = f.text
+}
+
+// unitsOf 把字节流按 UTF-16LE 切回码元
+func unitsOf(raw []byte) []uint16 {
+	units := make([]uint16, 0, len(raw)/2)
+	for i := 0; i+1 < len(raw); i += 2 {
+		units = append(units, uint16(raw[i])|uint16(raw[i+1])<<8)
+	}
+	return units
 }
 
 func (f *fakeClipboard) ops() []string {
@@ -149,7 +191,7 @@ func isTerminal(p TypingPhase) bool {
 
 // 初始状态契约: 服务构造后即为 idle 零值状态, 前端首次轮询读到的是它
 func TestServiceInitialState(t *testing.T) {
-	svc := newTestService(&fakeInjector{}, &fakeClipboard{}, noSleep)
+	svc := newTestService(newFakeInjector(), &fakeClipboard{}, noSleep)
 	st := svc.Status()
 	if st.Phase != PhaseIdle {
 		t.Fatalf("初始 phase = %s, want idle", st.Phase)
@@ -163,7 +205,7 @@ func TestServiceInitialState(t *testing.T) {
 // 快照失败(nil)时原状态未知, 不动剪贴板
 func TestServiceClipboardGuard(t *testing.T) {
 	cb := &fakeClipboard{text: "用户原文本"}
-	svc := newTestService(&fakeInjector{}, cb, noSleep)
+	svc := newTestService(newFakeInjector(), cb, noSleep)
 	snap := cb.Snapshot() // 快照内容: 用户原文本
 
 	// 剪贴板仍是注入文本 → 守卫放行, 恢复原内容
@@ -205,7 +247,7 @@ func TestServiceClipboardGuard(t *testing.T) {
 
 // 运行中 Start 拒绝重入, 且拒绝不影响在途任务
 func TestStartRejectsReentryWhileRunning(t *testing.T) {
-	inj := &fakeInjector{}
+	inj := newFakeInjector()
 	release := make(chan struct{})
 	svc := newTestService(inj, &fakeClipboard{}, blockSleep(release))
 
@@ -231,7 +273,7 @@ func TestStartRejectsReentryWhileRunning(t *testing.T) {
 
 // 倒计时中取消: 零注入, 终态为 cancel
 func TestCancelDuringCountdown(t *testing.T) {
-	inj := &fakeInjector{}
+	inj := newFakeInjector()
 	release := make(chan struct{})
 	svc := newTestService(inj, &fakeClipboard{}, blockSleep(release))
 
@@ -259,7 +301,7 @@ func TestCancelDuringCountdown(t *testing.T) {
 
 // ASCII 逐字符路径: \r 剔除、\n 转回车、进度报数、成功收尾
 func TestAsciiTyping(t *testing.T) {
-	inj := &fakeInjector{}
+	inj := newFakeInjector()
 	var mu sync.Mutex
 	var history []TypingStatus
 	var svc *TypingService
@@ -301,7 +343,7 @@ func TestAsciiTyping(t *testing.T) {
 
 // 中文路径: 快照 → 写入注入文本 → 粘贴 → 恢复 的调用顺序与恢复语义
 func TestChineseTypesViaClipboard(t *testing.T) {
-	inj := &fakeInjector{}
+	inj := newFakeInjector()
 	cb := &fakeClipboard{text: "用户原文本"}
 	svc := newTestService(inj, cb, noSleep)
 
@@ -326,35 +368,9 @@ func TestChineseTypesViaClipboard(t *testing.T) {
 	}
 }
 
-// SetText 失败: 无条件写回快照, 任务以失败收尾, 不粘贴
-func TestClipboardSetFailureRestoresSnapshot(t *testing.T) {
-	inj := &fakeInjector{}
-	cb := &fakeClipboard{text: "原内容", setFail: true}
-	svc := newTestService(inj, cb, noSleep)
-
-	if _, err := svc.Start("中文", 1, false); err != nil {
-		t.Fatalf("Start 失败: %v", err)
-	}
-	st := waitTerminal(t, svc)
-	if st.Phase != PhaseError || st.Message != "输入失败" {
-		t.Fatalf("终态 = %s/%q, want error/输入失败", st.Phase, st.Message)
-	}
-
-	if calls := inj.calls(); len(calls) != 0 {
-		t.Errorf("SetText 失败不应粘贴, got %v", calls)
-	}
-	// 快照失败路径之外的无条件恢复: snap 后紧跟 restore
-	if got, want := cb.ops(), []string{"snap", "set", "restore"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("剪贴板操作序列 = %v, want %v", got, want)
-	}
-	if got := cb.GetText(); got != "原内容" {
-		t.Errorf("恢复后文本 = %q, want %q", got, "原内容")
-	}
-}
-
 // 过代守卫: 取消后立即重启, 旧任务不注入、迟到的状态写入不覆盖新任务
 func TestRestartAfterCancelSupersedesOldTask(t *testing.T) {
-	inj := &fakeInjector{}
+	inj := newFakeInjector()
 	release := make(chan struct{})
 	svc := newTestService(inj, &fakeClipboard{}, blockSleep(release))
 
@@ -380,5 +396,187 @@ func TestRestartAfterCancelSupersedesOldTask(t *testing.T) {
 	// 只有新任务注入: "新"为非 ASCII → 剪贴板粘贴一次
 	if got, want := inj.calls(), []string{"V"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("注入序列 = %v, want %v (旧任务文本不应注入)", got, want)
+	}
+}
+
+// waitIdle 等待 runningFlag 被释放
+func waitIdle(t *testing.T, svc *TypingService) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for svc.runningFlag.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("任务未及时释放运行标志")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// 补上未落盘的剪贴板快照: 单宽字符的 UTF-16LE 两字节, 模拟失败路径的恢复
+func seedSnapshot(cb *fakeClipboard, text string) {
+	units := utf16.Encode([]rune(text))
+	raw := make([]byte, len(units)*2)
+	for i, u := range units {
+		raw[i*2] = byte(u)
+		raw[i*2+1] = byte(u >> 8)
+	}
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.snap = []ClipboardFormat{{Fmt: CF_UNICODETEXT, Data: raw}}
+}
+
+// 逐字符注入被系统拒绝(UIPI 等): 立即中止, 终态给出可读原因, 不虚报"输入完成"
+func TestSendInputRejectedDuringTyping(t *testing.T) {
+	inj := newFakeInjector()
+	inj.failAfter = 2 // A B 通过, C 起被拒
+	svc := newTestService(inj, &fakeClipboard{}, noSleep)
+
+	if _, err := svc.Start("ABCDE", 1, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	st := waitTerminal(t, svc)
+	if st.Phase != PhaseError {
+		t.Fatalf("注入被拒时终态 phase = %s, want error", st.Phase)
+	}
+	if st.Message == "输入完成" || st.Message == "输入失败" {
+		t.Errorf("终态文案 = %q, 应给出具体中断原因", st.Message)
+	}
+	if got, want := inj.calls(), []string{"r:A", "r:B"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("注入序列 = %v, want %v (被拒后不应继续注入)", got, want)
+	}
+}
+
+// Ctrl+V 被系统拒绝: 报"粘贴未生效", 不报"输入完成";
+// 剪贴板已是注入文本, 守卫放行恢复原内容
+func TestSendPasteRejected(t *testing.T) {
+	inj := newFakeInjector()
+	inj.failAfter = 0
+	cb := &fakeClipboard{text: "用户原文本"}
+	svc := newTestService(inj, cb, noSleep)
+
+	if _, err := svc.Start("你好", 1, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	st := waitTerminal(t, svc)
+	if st.Phase != PhaseError {
+		t.Fatalf("粘贴被拒时终态 phase = %s, want error", st.Phase)
+	}
+	if st.Message != "输入失败" {
+		t.Errorf("终态文案 = %q, want %q", st.Message, "输入失败")
+	}
+	if got, want := cb.ops(), []string{"snap", "set", "restore"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("剪贴板操作序列 = %v, want %v", got, want)
+	}
+	if got := cb.GetText(); got != "用户原文本" {
+		t.Errorf("粘贴被拒后仍应恢复原文本, got %q", got)
+	}
+}
+
+// 上一任务不让出运行标志: 第二个任务等满 2 秒超时报错, 且不得注入任何内容。
+// 用"停在假睡眠里的真任务"占住标志, 而不是手工翻转标志位——后者会被
+// Start 的重入检查提前拦下, 根本走不到 deadline 分支
+func TestStartDeadlineWhenPreviousTaskStuck(t *testing.T) {
+	release := make(chan struct{}, 1)
+	inj := newFakeInjector()
+	svc := newTestService(inj, &fakeClipboard{}, blockSleep(release))
+
+	// 第一个任务认领标志后停在 sleep 上, 迟迟不让出
+	if _, err := svc.Start("旧任务", 1, false); err != nil {
+		t.Fatalf("首次 Start 失败: %v", err)
+	}
+	waitRunning(t, svc)
+
+	// 用户取消, 随即立刻重启: 取消只置标志不等待旧任务退出, 于是新任务
+	// 必须在"标志仍被占着"的情况下自己等——这正是 deadline 分支的现实入口
+	svc.cancelFlag.Store(true)
+	if _, err := svc.Start("新任务", 1, false); err != nil {
+		t.Fatalf("取消后应能立即重启: %v", err)
+	}
+	const timeoutMsg = "启动失败：上一任务未能及时退出"
+	// 等 deadline 报错: 此时 runningFlag 仍被旧任务占着, 不会有第二次写入竞争
+	deadline := time.Now().Add(5 * time.Second)
+	for svc.Status().Message != timeoutMsg && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if svc.Status().Message != timeoutMsg {
+		t.Fatalf("未等到超时报错, 当前状态 = %+v", *svc.Status())
+	}
+	if st := svc.Status(); st.Phase != PhaseError {
+		t.Fatalf("终态 phase = %s, want error", st.Phase)
+	}
+	if calls := inj.calls(); len(calls) != 0 {
+		t.Errorf("超时任务不应注入任何内容, got %v", calls)
+	}
+
+	// 放行旧任务: 它已过代并自行退出, 迟到的写入不得覆盖上面的错误状态
+	release <- struct{}{}
+	waitIdle(t, svc)
+	time.Sleep(20 * time.Millisecond) // 给过代任务的收尾留出窗口
+	final := svc.Status()
+	if final.Phase != PhaseError || final.Message != timeoutMsg {
+		t.Errorf("旧任务收尾覆盖了当前状态: %s/%q", final.Phase, final.Message)
+	}
+}
+
+// 剪贴板写入失败: 恢复未落盘的快照, 报"输入失败", 不粘贴
+func TestClipboardSetFailureNoInjection(t *testing.T) {
+	inj := newFakeInjector()
+	cb := &fakeClipboard{text: "原内容", setFail: true}
+	seedSnapshot(cb, "原内容")
+	svc := newTestService(inj, cb, noSleep)
+
+	if _, err := svc.Start("中文", 1, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	st := waitTerminal(t, svc)
+	if st.Phase != PhaseError || st.Message != "输入失败" {
+		t.Fatalf("终态 = %s/%q, want error/输入失败", st.Phase, st.Message)
+	}
+	if calls := inj.calls(); len(calls) != 0 {
+		t.Errorf("SetText 失败不应粘贴, got %v", calls)
+	}
+	// set 也会被尝试一次(失败), 记录在案才能证明"试过但没成"
+	if got, want := cb.ops(), []string{"snap", "set", "restore"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("剪贴板操作序列 = %v, want %v", got, want)
+	}
+	if got := cb.GetText(); got != "原内容" {
+		t.Errorf("恢复后文本 = %q, want %q", got, "原内容")
+	}
+}
+
+// 守卫按原始字节比对: held 变化即视为用户改动, 跳过恢复
+func TestRestoreGuardUsesHoldsText(t *testing.T) {
+	// text 是程序写进去的, held 是读回来的: 这里模拟"写进去之后用户又复制了别的"
+	cb := &fakeClipboard{text: "注入文本", held: "用户新复制的内容"}
+	svc := newTestService(newFakeInjector(), cb, noSleep)
+	snap := cb.Snapshot()
+
+	// 读回来的与注入文本不同 → 拦截
+	opsBefore := len(cb.ops())
+	svc.restoreClipboardSnapshot(snap, "注入文本")
+	if len(cb.ops()) != opsBefore {
+		t.Errorf("held 已变化时不应恢复, 操作数 %d → %d", opsBefore, len(cb.ops()))
+	}
+
+	// 恢复快照后读回来的就是注入文本 → 放行
+	opsBefore = len(cb.ops())
+	svc.restoreClipboardSnapshot(snap, "用户新复制的内容")
+	if len(cb.ops()) != opsBefore+1 {
+		t.Errorf("held 与参数一致时应恢复, 操作数 %d → %d", opsBefore, len(cb.ops()))
+	}
+}
+
+// 空文本: 不注入也不报"输入完成"
+func TestEmptyTextDoesNotReportSuccess(t *testing.T) {
+	inj := newFakeInjector()
+	svc := newTestService(inj, &fakeClipboard{}, noSleep)
+	if _, err := svc.Start("", 1, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	st := waitTerminal(t, svc)
+	if st.Message == "输入完成" {
+		t.Errorf("空文本不得报输入完成: %+v", st)
+	}
+	if calls := inj.calls(); len(calls) != 0 {
+		t.Errorf("空文本不应注入, got %v", calls)
 	}
 }

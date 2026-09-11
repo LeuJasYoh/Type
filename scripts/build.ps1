@@ -21,7 +21,6 @@ while ($parts.Count -lt 4) { $parts += "0" }
 $v4CSV = ($parts[0..3] -join ',')          # 1,2,0,0  (FILEVERSION)
 $v4Dot = ($parts[0..3] -join '.')          # 1.2.0.0  (资源 FileVersion)
 $v3Dot = ($parts[0..2] -join '.')          # 1.2.0    (资源 ProductVersion)
-$v2Dot = ($parts[0..1] -join '.')          # 1.2      (winres.json info)
 
 # ── 2. 同步 assets/version.rc ─────────────────────────
 $rc = [System.IO.File]::ReadAllText("$root\assets\version.rc")
@@ -32,17 +31,7 @@ $rc = $rc -replace '"ProductVersion",\s*"[^"]+"', ('"ProductVersion",   "' + $v3
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText("$root\assets\version.rc", $rc, $utf8NoBom)
 
-# ── 3. 同步 assets/winres/winres.json ─────────────────
-$wj = [System.IO.File]::ReadAllText("$root\assets\winres\winres.json")
-$wj = $wj -replace '"file_version":\s*"[^"]+"',    ('"file_version": "'    + $v4Dot + '"')
-$wj = $wj -replace '"product_version":\s*"[^"]+"', ('"product_version": "' + $v4Dot + '"')
-$wj = $wj -replace '"FileVersion":\s*"[^"]+"',     ('"FileVersion": "'     + $v2Dot + '"')
-$wj = $wj -replace '"ProductVersion":\s*"[^"]+"',  ('"ProductVersion": "'  + $v2Dot + '"')
-# manifest identity.version (嵌套在 identity 对象内, 需跨行匹配)
-$wj = $wj -replace '("identity"\s*:\s*\{[^\}]*?"version"\s*:\s*)"[^"]+"', ('$1"' + $v4Dot + '"')
-[System.IO.File]::WriteAllText("$root\assets\winres\winres.json", $wj, $utf8NoBom)
-
-# ── 3.5 同步 frontend/package.json ────────────────────
+# ── 3. 同步 frontend/package.json ─────────────────────
 $pj = [System.IO.File]::ReadAllText("$root\frontend\package.json")
 $pj = $pj -replace '("version"\s*:\s*)"[^"]+"', ('$1"' + $ver + '"')
 [System.IO.File]::WriteAllText("$root\frontend\package.json", $pj, $utf8NoBom)
@@ -78,3 +67,10 @@ $v = $f.VersionInfo
 Write-Host "构建完成: Type.exe ($([math]::Round($f.Length / 1KB, 1)) KB)"
 Write-Host "  FileVersion:    $($v.FileVersion)"
 Write-Host "  ProductVersion: $($v.ProductVersion)"
+
+# ── 6. 校验版本资源真的链进了 exe ─────────────────────
+# version.syso 缺失时 go build 依然成功, 但产物没有版本信息与图标;
+# 读回 exe 比对, 让这种静默失败在构建期就暴露
+if ($v.FileVersion -ne $v4Dot) {
+    throw "exe 版本资源异常: FileVersion = '$($v.FileVersion)', want '$v4Dot' (windres/version.syso 是否生效?)"
+}

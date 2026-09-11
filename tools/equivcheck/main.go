@@ -1,39 +1,35 @@
 // equivcheck — 重构等价性验证: 逐函数比对重构前后的函数体。
-// 按 gofmt 布局提取顶层函数, 函数体空白归一化后逐字节比对;
-// 纯搬移的函数应完全一致, 被机械变换(改名/方法化/接口调用替换)的
-// 函数会列入差异清单, 供人工逐条定位。
+// 用 go/parser 取顶层函数(旧实现用正则扫行 + 找行首 "}" 收尾, 遇到函数内的
+// 行首大括号就提前截断, 历史 rev 上只能抽出 2 个函数, 结论不可用),
+// 函数体空白归一化后逐字节比对: 纯搬移的函数应完全一致,
+// 被机械变换(改名/方法化/接口调用替换)的函数会列入差异清单, 供人工逐条定位。
 //
-// 用法: go run ./tools/equivcheck <旧rev> <新rev> [--renamed]
+// 用法:
 //
-//	--renamed 启用接口化改名映射(自由函数→方法), 用于比对接口化之后的提交
+//	go run ./tools/equivcheck <旧rev> <新rev> [选项]
+//
+//	--old-file <路径>   旧侧源文件路径 (默认 main.go; 结构整理前的历史 rev 用根路径)
+//	--renames <路径>    改名映射 JSON ({"旧函数名": "新函数名"}), 默认与本工具同目录的 renames.json
+//	--renamed           启用改名映射比对接口化之后的提交
+//
+// 新侧文件清单不在工具里写死: 直接用 git ls-tree 取该 rev 的全部 .go 文件
+// (跳过 _test.go 与 tools/ 下的工具), 因此仓库布局变化后无需同步维护清单。
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 )
-
-// 新侧(当前布局)包含旧 main.go 全部函数的文件清单;
-// 比对更早历史提交时旧侧仍读根路径 main.go, 不受布局调整影响
-var newFiles = []string{
-	"cmd/type/main.go", "cmd/type/typing.go", "cmd/type/win32.go",
-	"cmd/type/win32_keyboard.go", "cmd/type/win32_clipboard.go", "cmd/type/win32_window.go",
-}
-
-// 接口化提交后的更名: 自由函数 → 方法 (仅签名与调用点变化)
-var renames = map[string]string{
-	"clipboardSetText":      "SetText",
-	"clipboardGetText":      "GetText",
-	"clipboardSnapshot":     "Snapshot",
-	"restoreSnapshotRaw":    "RestoreSnapshotRaw",
-	"sendRune":              "SendRune",
-	"sendCtrlV":             "SendPaste",
-	"foregroundWindowTitle": "Title",
-}
 
 var funcRe = regexp.MustCompile(`^func (?:\([^)]*\) )?([A-Za-z_][A-Za-z0-9_]*)\(`)
 
@@ -45,35 +41,52 @@ func gitShow(rev, path string) (string, error) {
 	return string(out), nil
 }
 
-// extract 提取顶层函数, 返回 {函数名: 函数体(首个 { 之后的部分)}。
-// 函数体不含签名, 方法化(仅 receiver 变化)不会产生差异
-func extract(src string) map[string]string {
-	lines := strings.Split(src, "\n")
-	funcs := make(map[string]string)
-	for i := 0; i < len(lines); i++ {
-		m := funcRe.FindStringSubmatch(lines[i])
-		if m == nil {
+// gitGoFiles 列出该 rev 中参与比对的 .go 文件
+func gitGoFiles(rev string) ([]string, error) {
+	out, err := exec.Command("git", "ls-tree", "-r", "--name-only", rev).Output()
+	if err != nil {
+		return nil, fmt.Errorf("git ls-tree %s: %w", rev, err)
+	}
+	var files []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasSuffix(line, ".go") || strings.HasSuffix(line, "_test.go") {
 			continue
 		}
-		var text string
-		trimmed := strings.TrimRight(lines[i], " \t\r")
-		if strings.Contains(lines[i], "{") && strings.HasSuffix(trimmed, "}") {
-			text = lines[i] // 单行函数: gofmt 不会把 } 换到行首
-		} else {
-			j := i
-			for j < len(lines) && strings.TrimRight(lines[j], " \t\r") != "}" {
-				j++
-			}
-			if j >= len(lines) {
-				break // 文件异常截断
-			}
-			text = strings.Join(lines[i:j+1], "\n")
-			i = j
+		if strings.HasPrefix(filepath.ToSlash(line), "tools/") {
+			continue // 工具自身不属于被验证的业务代码
 		}
-		brace := strings.Index(text, "{")
-		funcs[m[1]] = text[brace+1:]
+		files = append(files, line)
 	}
-	return funcs
+	if len(files) == 0 {
+		return nil, fmt.Errorf("%s 中未找到可比对的 .go 文件", rev)
+	}
+	return files, nil
+}
+
+// extract 解析源码并返回 {函数名: 函数体文本}。
+// 函数体不含签名, 方法化(仅 receiver 变化)不会产生差异
+func extract(src string) (map[string]string, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "src.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, fmt.Errorf("解析源码失败: %w", err)
+	}
+	funcs := make(map[string]string)
+	for _, decl := range f.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Body == nil {
+			continue // 无函数体的声明(如汇编桩)不参与比对
+		}
+		// 用 fset 的偏移切出函数体原文: 只取 { 与 } 之间的内容
+		start := fset.Position(fd.Body.Lbrace).Offset
+		end := fset.Position(fd.Body.Rbrace).Offset
+		if start < 0 || end > len(src) || end <= start {
+			continue
+		}
+		funcs[fd.Name.Name] = src[start:end]
+	}
+	return funcs, nil
 }
 
 // norm 去除全部空白, 使比对只关心 token 序列
@@ -89,6 +102,12 @@ func norm(s string) string {
 	return b.String()
 }
 
+// origin 记录函数来自哪个文件的第几行, 供差异清单定位
+type origin struct {
+	file string
+	line int
+}
+
 func list(items []string) string {
 	if len(items) == 0 {
 		return "无"
@@ -96,47 +115,109 @@ func list(items []string) string {
 	return strings.Join(items, ", ")
 }
 
+const usage = `用法: go run ./tools/equivcheck <旧rev> <新rev> [--old-file <路径>] [--renames <路径>] [--renamed]`
+
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "用法: go run ./tools/equivcheck <旧rev> <新rev> [--renamed]")
+		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
 	}
 	oldRev, newRev := os.Args[1], os.Args[2]
+	oldFile := "main.go"
+	renamesFile := defaultRenamesPath()
 	useRenames := false
-	for _, a := range os.Args[3:] {
-		if a == "--renamed" {
+	for i := 3; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--renamed":
 			useRenames = true
+		case "--old-file":
+			if i+1 >= len(os.Args) {
+				fmt.Fprintln(os.Stderr, usage)
+				os.Exit(2)
+			}
+			i++
+			oldFile = os.Args[i]
+		case "--renames":
+			if i+1 >= len(os.Args) {
+				fmt.Fprintln(os.Stderr, usage)
+				os.Exit(2)
+			}
+			i++
+			renamesFile = os.Args[i]
+			useRenames = true
+		default:
+			fmt.Fprintf(os.Stderr, "未知选项: %s\n%s\n", os.Args[i], usage)
+			os.Exit(2)
 		}
 	}
 
-	oldSrc, err := gitShow(oldRev, "main.go")
+	// ── 旧侧: 单个文件 ──
+	oldSrc, err := gitShow(oldRev, oldFile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	old := extract(oldSrc)
+	old, err := extract(oldSrc)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "旧侧 %s: %v\n", oldFile, err)
+		os.Exit(1)
+	}
 
+	// ── 新侧: 该 rev 的全部业务 .go 文件 ──
+	files, err := gitGoFiles(newRev)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	merged := make(map[string]string)
-	for _, f := range newFiles {
+	where := make(map[string]origin)
+	var dupes []string
+	for _, f := range files {
 		src, err := gitShow(newRev, f)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		for k, v := range extract(src) {
-			merged[k] = v
+		funcs, err := extract(src)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "新侧 %s: %v\n", f, err)
+			os.Exit(1)
+		}
+		for name, body := range funcs {
+			if prev, exists := where[name]; exists {
+				dupes = append(dupes, fmt.Sprintf("%s(%s:%d 与 %s)", name, prev.file, prev.line, f))
+			}
+			merged[name] = body
+			where[name] = origin{file: f, line: bodyLine(src, name)}
 		}
 	}
 
+	renames := map[string]string{}
+	if useRenames {
+		if data, err := os.ReadFile(renamesFile); err == nil {
+			if err := json.Unmarshal(data, &renames); err != nil {
+				fmt.Fprintf(os.Stderr, "改名映射 %s 解析失败: %v\n", renamesFile, err)
+				os.Exit(1)
+			}
+		} else if !os.IsNotExist(err) {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		} else {
+			fmt.Fprintf(os.Stderr, "提示: 改名映射 %s 不存在, 按无映射比对\n", renamesFile)
+		}
+	}
+	if useRenames && len(renames) == 0 {
+		fmt.Fprintf(os.Stderr, "警告: 已请求 --renamed 但映射为空 (%s), 接口化改名会全部落入缺失清单\n", renamesFile)
+	}
+
+	// ── 比对 ──
 	var same, diff, missing []string
 	for name, body := range old {
-		nn := name
-		if useRenames {
-			if r, ok := renames[name]; ok {
-				nn = r
-			}
+		target := name
+		if renamed, ok := renames[name]; ok {
+			target = renamed
 		}
-		nb, ok := merged[nn]
+		nb, ok := merged[target]
 		switch {
 		case !ok:
 			missing = append(missing, name)
@@ -149,9 +230,45 @@ func main() {
 	sort.Strings(same)
 	sort.Strings(diff)
 	sort.Strings(missing)
+	sort.Strings(dupes)
 
-	fmt.Printf("%s → %s: 旧侧函数总数 %d\n", oldRev, newRev, len(old))
+	fmt.Printf("%s:%s → %s (%d 个 .go 文件): 旧侧函数总数 %d\n",
+		oldRev, oldFile, newRev, len(files), len(old))
 	fmt.Printf("  函数体归一化后逐字节一致: %d\n", len(same))
 	fmt.Printf("  函数体存在差异(需逐条定位为机械变换): %s\n", list(diff))
 	fmt.Printf("  新侧缺失: %s\n", list(missing))
+	for _, name := range diff {
+		target := name
+		if renamed, ok := renames[name]; ok {
+			target = renamed
+		}
+		// 定位用新侧函数名: 接口化改名后旧名在新侧并不存在
+		fmt.Printf("    - %s → %s\n", name, where[target].file)
+	}
+	if len(dupes) > 0 {
+		fmt.Printf("  注意: 新侧重名函数(仅比对了后者): %s\n", list(dupes))
+	}
+	if useRenames {
+		fmt.Printf("  已启用改名映射 %s (%d 条)\n", renamesFile, len(renames))
+	}
+}
+
+// defaultRenamesPath 改名映射的默认位置: 与本工具同目录。
+// 工具的工作目录是仓库根, 而映射文件是工具的私有数据, 故按源文件位置定位
+func defaultRenamesPath() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return "renames.json"
+	}
+	return filepath.Join(filepath.Dir(file), "renames.json")
+}
+
+// bodyLine 返回函数声明所在行(用于差异定位), 找不到时返回 0
+func bodyLine(src, name string) int {
+	for i, line := range strings.Split(src, "\n") {
+		if m := funcRe.FindStringSubmatch(line); m != nil && m[1] == name {
+			return i + 1
+		}
+	}
+	return 0
 }

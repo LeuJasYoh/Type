@@ -50,7 +50,8 @@
 GUI       WebView2 (Edge Chromium)
 前端      Vue 3 + TypeScript, Vite 构建为单文件 HTML (无其他运行时依赖)
 构建      vue-tsc 类型检查 + Vite (vite-plugin-singlefile) + windres + go build
-Win32 API SendInput (KEYEVENTF_UNICODE) + 剪贴板 (CF_UNICODETEXT, EnumClipboardFormats 全格式快照, RtlMoveMemory) + 前台窗口检测 (GetForegroundWindow)
+CI        GitHub Actions (windows-latest): gofmt / go vet / go test + 前端产物漂移检查
+Win32 API SendInput (KEYEVENTF_UNICODE) + 剪贴板 (CF_UNICODETEXT, EnumClipboardFormats 全格式快照, RtlMoveMemory) + 前台窗口检测 (GetForegroundWindow) + 单实例互斥体 (CreateMutexW)
 图标      圆角多尺寸 ICO（uv + Pillow 生成, scripts/gen_icon.py 字节级可复现）
 资源      windres 编译 .rc → .syso
 ```
@@ -67,7 +68,10 @@ Type/
 │   ├── win32_keyboard.go    ← 键盘注入 (SendInput / WM_CHAR 全角标点绕行)
 │   ├── win32_clipboard.go   ← 剪贴板全格式快照/恢复
 │   ├── win32_window.go      ← 置顶 / 图标 / 前台窗口探测
-│   ├── main_test.go         ← 单元测试 (UTF-16 拆分/ASCII/CJK 标点/剪贴板快照)
+│   ├── win32_instance.go    ← 单实例守卫 (具名互斥体)
+│   ├── devserver_prod.go    ← 正式构建: 恒加载嵌入页面
+│   ├── devserver_dev.go     ← dev 构建 (`-tags dev`): 指向 Vite dev server
+│   ├── main_test.go         ← 单元测试 (UTF-16 拆分/ASCII/CJK 标点/剪贴板快照与守卫)
 │   └── typing_test.go       ← 状态机单元测试 (fake 注入器/剪贴板, 不触真实系统)
 ├── internal/web/            ← go:embed 前端产物包
 │   └── dist/index.html      ← Vite 构建产物: 自包含单文件 (入库)
@@ -92,14 +96,14 @@ Type/
 │   ├── icon.ico             ← 应用图标 (version.rc 引用, windres 编译进 exe)
 │   ├── icon.jpg             ← 图标源图
 │   ├── screenshot.png       ← README 截图
-│   ├── version.rc           ← 版本/作者信息资源 (windres 编译为 cmd/type/version.syso)
-│   └── winres/              ← winres 格式资源定义 (winres.json + 多尺寸 PNG)
+│   └── version.rc           ← 版本/作者信息资源 (windres 编译为 cmd/type/version.syso)
 ├── scripts/
 │   ├── build.ps1            ← 一键构建脚本（版本号单一来源）
 │   └── gen_icon.py          ← 图标资产生成 (uv run, Pillow)
 ├── tools/
 │   └── equivcheck/          ← 重构等价性验证 (go run ./tools/equivcheck, 逐函数比对函数体)
-├── testdata/                ← 手工测试页 (paste-guard.html)
+├── testdata/                ← 手工测试页 (paste-guard.html, 用法见页内注释)
+├── .github/workflows/ci.yml ← CI: gofmt / vet / test + 前端产物漂移检查
 ├── go.mod / go.sum          ← Go 模块定义
 ├── pyproject.toml / uv.lock / .python-version ← Python 资产管线依赖 (uv 管理, 锁定 Pillow)
 └── .gitignore               ← 忽略构建产物/依赖/工具元数据
@@ -132,20 +136,31 @@ go build -ldflags="-H windowsgui -s -w" -o Type.exe ./cmd/type
 
 # 图标资产再生成 (可选, 需 uv): 更换 assets/icon.jpg 后执行, 产物字节级可复现
 uv run scripts/gen_icon.py
+
+# 代码校验 (与 CI 同款三件套)
+gofmt -l ./cmd ./internal ./tools   # 应输出为空
+go vet ./...
+go test -count=1 ./...
 ```
 
 ---
 
 ## 前端开发模式 (HMR)
 
+开发模式需**带 `dev` 构建标签编译**: 指向 dev server 的代码整体编译在该标签之后,
+正式发布的 exe 不含这段代码（环境变量无法把界面引向任意外部地址）。
+
 ```powershell
 cd frontend
 npm run dev                 # 终端 1: Vite dev server (http://localhost:5173)
 cd ..
-.\Type.exe -dev             # 终端 2: 窗口指向 dev server, 改代码即时热更新
+go build -tags dev -o Type-dev.exe ./cmd/type   # 终端 2: 带 dev 标签构建
+.\Type-dev.exe              # 改代码即时热更新
 ```
 
-`-dev` 模式下 webview 的 Go 绑定照常工作，可完整调试 IPC 链路。若 5173 端口被占用，设置 `TYPE_DEV_URL` 环境变量指定实际地址（如 `http://localhost:5174`）。
+带标签构建时，`-dev` 参数或 `TYPE_DEV_URL` 环境变量指定 dev server 地址；
+若 5173 端口被占用，用 `TYPE_DEV_URL` 指向实际地址（如 `http://localhost:5174`）。
+不带标签构建的 exe 恒加载嵌入页面，两个开关均不生效。
 
 ---
 
@@ -153,13 +168,16 @@ cd ..
 
 `SendInput` + `KEYEVENTF_UNICODE` 对全角标点（U+FF00~FFEF）存在系统级处理异常，表现为标点重复、后续字符被吞。**解决方案**：程序检测到文本含中文时，自动降级为剪贴板 `Ctrl+V` 模式，保证输入准确无误。
 
----
-
 ## 已知限制
 
-- **目标窗口权限** —— Windows UIPI 限制：以普通权限运行的 Type 无法向管理员权限的窗口（如管理员 CMD/PowerShell）注入输入，表现为静默无效。如需面向提权窗口，请以管理员身份运行 Type.exe。
+- **目标窗口权限** —— Windows UIPI 限制：以普通权限运行的 Type 无法向管理员权限的窗口（如管理员 CMD/PowerShell）注入输入，此时 `SendInput` 不产生任何按键。程序检查注入结果并明确报错（如"目标窗口拒绝了模拟按键"），不会把静默失败报成"输入完成"。如需面向提权窗口，请以管理员身份运行 Type.exe。
 - **剪贴板特殊格式** —— 延迟渲染（delayed rendering）及句柄型格式（CF_BITMAP 等）无法同步快照，粘贴模式结束时会丢失；常见场景（截图工具、浏览器复制图片、资源管理器复制文件）均在快照恢复范围内。
 - **杀毒软件误报** —— 键盘模拟（SendInput）与剪贴板操作是杀软启发式扫描的常见敏感组合，若下载或运行时被误报，请添加信任或自行编译。
+- **单实例** —— 同时只允许运行一个实例（第二个实例会提示并退出），避免两个实例争抢剪贴板与键盘焦点。
+
+### 手工测试页
+
+`testdata/paste-guard.html` 用浏览器打开即可：三档递增的防粘贴页面（只拦 paste 事件 / 追加拦 Ctrl+V、右键、拖放 / 再叠加输入节奏分析），用来验证 Type 各模式在禁粘贴页面的真实表现，页内表格列出预期结果。用法详见文件头部注释。
 
 ---
 

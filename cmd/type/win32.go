@@ -40,4 +40,6 @@ var (
 	procRegisterClipboardFormatW = user32.NewProc("RegisterClipboardFormatW")
 	procSetWindowPos             = user32.NewProc("SetWindowPos")
 	procSetClassLongPtrW         = user32.NewProc("SetClassLongPtrW")
+	procMessageBoxW              = user32.NewProc("MessageBoxW")
+	procCreateMutexW             = kernel32.NewProc("CreateMutexW")
 )

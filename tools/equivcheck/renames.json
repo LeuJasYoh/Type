@@ -1,0 +1,9 @@
+{
+  "clipboardSetText": "SetText",
+  "clipboardGetText": "GetText",
+  "clipboardSnapshot": "Snapshot",
+  "restoreSnapshotRaw": "RestoreSnapshotRaw",
+  "sendRune": "SendRune",
+  "sendCtrlV": "SendPaste",
+  "foregroundWindowTitle": "Title"
+}

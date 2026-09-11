@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bytes"
 	"time"
 	"unicode/utf16"
 	"unsafe"
@@ -36,6 +37,17 @@ func openClipboardWithRetry() bool {
 	return false
 }
 
+// encodedText CF_UNICODETEXT 的字节表示: UTF-16LE + 结尾 NUL
+func encodedText(text string) []byte {
+	units := utf16.Encode([]rune(text + "\x00"))
+	out := make([]byte, len(units)*2)
+	for i, u := range units {
+		out[i*2] = byte(u)
+		out[i*2+1] = byte(u >> 8)
+	}
+	return out
+}
+
 func (win32Clipboard) SetText(text string) bool {
 	if !openClipboardWithRetry() {
 		return false
@@ -43,8 +55,8 @@ func (win32Clipboard) SetText(text string) bool {
 	defer procCloseClipboard.Call()
 	procEmptyClipboard.Call()
 
-	encoded := utf16.Encode([]rune(text + "\x00"))
-	size := len(encoded) * 2
+	encoded := encodedText(text)
+	size := len(encoded)
 	hMem, _, _ := procGlobalAlloc.Call(GHND, uintptr(size))
 	if hMem == 0 {
 		return false
@@ -93,6 +105,33 @@ func (win32Clipboard) GetText() string {
 		n++
 	}
 	return string(utf16.Decode(buf[:n]))
+}
+
+// HoldsText 判断剪贴板当前文本是否就是 text。
+// 按原始字节比对而非 GetText 的字符串: CF_UNICODETEXT 内嵌 NUL 时 GetText 会截断,
+// 字符串比较将误判为"用户已改动"而跳过恢复
+func (win32Clipboard) HoldsText(text string) bool {
+	if !openClipboardWithRetry() {
+		return false
+	}
+	defer procCloseClipboard.Call()
+	hMem, _, _ := procGetClipboardData.Call(CF_UNICODETEXT)
+	if hMem == 0 {
+		return false
+	}
+	size, _, _ := procGlobalSize.Call(hMem)
+	if size == 0 {
+		return false
+	}
+	ptr, _, _ := procGlobalLock.Call(hMem)
+	if ptr == 0 {
+		return false
+	}
+	buf := make([]byte, int(size))
+	// 拷贝长度不超过缓冲区容量, 防止 GlobalSize 返回奇数时越界
+	procRtlMoveMemory.Call(uintptr(unsafe.Pointer(unsafe.SliceData(buf))), ptr, uintptr(len(buf)))
+	procGlobalUnlock.Call(hMem)
+	return bytes.Equal(buf, encodedText(text))
 }
 
 // clipboardClear 清空剪贴板内容

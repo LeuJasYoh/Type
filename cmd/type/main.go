@@ -5,21 +5,25 @@
 package main
 
 import (
-	"os"
 	"sync/atomic"
 
-	"Type/internal/web"
+	"github.com/LeuJasYoh/type/internal/web"
 
 	"github.com/webview/webview_go"
 )
 
-var version = "1.3.4"
+var version = "1.4.0"
 
 var topmostFlag atomic.Bool // 窗口置顶开关(与输入任务无关, 归装配层)
 
 // ─── 主程序 ───────────────────────────────────────────
 
 func main() {
+	// 单实例: 多开会让两个实例争抢剪贴板与键盘焦点, 先挡在门口
+	if !guardSingleInstance() {
+		return
+	}
+
 	w := webview.New(true)
 	defer w.Destroy()
 	w.SetTitle("Type " + version)
@@ -49,8 +53,8 @@ func main() {
 	// 前端轮询读取当前输入状态
 	w.Bind("getTypingStatus", svc.Status)
 
-	// 加载界面: 开发模式指向 Vite dev server (支持 HMR, 需先 npm run dev),
-	// 默认加载嵌入的自包含页面
+	// 加载界面: 开发构建(-tags dev)指向 Vite dev server 支持 HMR,
+	// 正式构建不含这段代码, 恒加载嵌入的自包含页面
 	if url := devServerURL(); url != "" {
 		w.Navigate(url)
 	} else {
@@ -58,18 +62,4 @@ func main() {
 	}
 
 	w.Run()
-}
-
-// devServerURL 开发模式页面地址: TYPE_DEV_URL 环境变量优先 (可指定任意端口),
-// 其次 -dev 参数 (默认 5173); 均未设置时返回空串, 即生产模式
-func devServerURL() string {
-	if u := os.Getenv("TYPE_DEV_URL"); u != "" {
-		return u
-	}
-	for _, arg := range os.Args[1:] {
-		if arg == "-dev" {
-			return "http://localhost:5173"
-		}
-	}
-	return ""
 }

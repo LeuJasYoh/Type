@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 全流程在 Windows 上跑: 代码带 windows && (amd64 || arm64) 构建约束,
+# 且 main_test.go 里有两个用例操作真实系统剪贴板
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # ── Go 三件套 ──
+      - name: gofmt
+        shell: pwsh
+        run: |
+          $bad = gofmt -l ./cmd ./internal ./tools
+          if ($bad) { Write-Host "以下文件未格式化:"; $bad; exit 1 }
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -count=1 ./...
+
+      # ── 入库的前端产物必须与源码一致 ──
+      # dist/index.html 入库是刻意的(免 Node 亦可 go build), 代价是改了
+      # frontend/src 却忘了重新构建时 go:embed 会静默用旧界面, 这里堵住
+      - name: 前端依赖
+        run: npm ci
+        working-directory: frontend
+
+      - name: 前端产物漂移检查
+        shell: pwsh
+        run: |
+          $before = (Get-FileHash internal/web/dist/index.html -Algorithm SHA256).Hash
+          npm --prefix frontend run build
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $after = (Get-FileHash internal/web/dist/index.html -Algorithm SHA256).Hash
+          if ($before -ne $after) {
+            Write-Host "internal/web/dist/index.html 与 frontend/src 不一致"
+            Write-Host "请在本地运行 scripts/build.ps1 并提交重新生成的产物"
+            git --no-pager diff --stat -- internal/web/dist/index.html
+            exit 1
+          }
+          Write-Host "前端产物与源码一致 ($before)"
+
+      # ── 版本同步须为幂等: 否则每次构建都会留下未提交改动 ──
+      - name: 版本同步幂等性
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path cmd/type/main.go -Pattern 'version\s*=\s*"([\d.]+)"').Matches[0].Groups[1].Value
+          foreach ($f in @('assets/version.rc', 'frontend/package.json')) {
+            $text = [System.IO.File]::ReadAllText($f)
+            if ($text -notmatch [regex]::Escape($ver)) { Write-Host "$f 未同步到版本 $ver"; exit 1 }
+          }
+          Write-Host "版本号 $ver 已同步到 version.rc / package.json"

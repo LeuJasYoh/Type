@@ -15,11 +15,14 @@ import (
 
 // ─── 平台能力接口(消费方定义, Win32 实现见 win32_*.go) ──
 
-// TextInjector 字符注入能力
+// TextInjector 字符注入能力。
+// 三个方法均返回"本次注入是否被系统接受": SendInput 在 UIPI 拦截(目标窗口
+// 权限更高)、工作站锁定或切到安全桌面时整体失败且不产生任何按键, 此时
+// 返回 false, 状态机据此报错而不是把静默失败当成输入完成
 type TextInjector interface {
-	SendRune(r rune) // 含全角标点 WM_CHAR 绕行
-	SendEnter()
-	SendPaste() // Ctrl+V
+	SendRune(r rune) bool // 含全角标点 WM_CHAR 绕行
+	SendEnter() bool
+	SendPaste() bool // Ctrl+V
 }
 
 // ClipboardFormat 剪贴板单一格式的原始字节快照
@@ -33,6 +36,10 @@ type ClipboardFormat struct {
 type Clipboard interface {
 	SetText(text string) bool
 	GetText() string
+	// HoldsText 剪贴板当前文本是否就是 text。按原始字节比对而非 GetText 的
+	// 字符串比较: CF_UNICODETEXT 内嵌 NUL 时字符串会在 NUL 处被截断,
+	// 守卫会误判为"用户已改动"而跳过恢复
+	HoldsText(text string) bool
 	Snapshot() []ClipboardFormat
 	RestoreSnapshotRaw(snap []ClipboardFormat) // 无条件写回(调用方需确认剪贴板未被用户改动)
 }
@@ -62,6 +69,16 @@ type TypingStatus struct {
 	SecondsLeft  int         `json:"secondsLeft"` // 倒计时剩余
 	TargetWindow string      `json:"targetWindow"`
 }
+
+// ─── 用户可见文案(新增) ───────────────────────────────
+
+const (
+	// msgPartialSendInput 注入中途被系统拒绝。绝大多数情形是 Windows UIPI:
+	// 以普通权限运行的 Type 无法向管理员权限的目标窗口注入输入
+	msgPartialSendInput = "输入中断：目标窗口拒绝了模拟按键，可能其权限高于 Type"
+	// msgPasteRejected 剪贴板写入成功但 Ctrl+V 未被接受
+	msgPasteRejected = "粘贴未生效：目标窗口拒绝了模拟按键，可能其权限高于 Type"
+)
 
 // ─── TypingService ────────────────────────────────────
 
@@ -187,14 +204,24 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 
 	// ── 执行 ──
 	success := false
+	// injected 是否有内容真正送达目标窗口。系统拒绝注入(SendInput 返回 0,
+	// 典型为 UIPI)时注入器返回 false, 此时不得报"输入完成"
+	injected := false
+	// failMsg 注入中途被拒的具体原因; 为空则终态用通用"输入失败"
+	failMsg := ""
 	if containsNonASCII(text) && !forceSendInput {
 		setStatus(&TypingStatus{
 			Phase: PhaseTyping, Message: "检测到中文，正在操作剪贴板...", Progress: -1,
 		})
-		success = s.typeTextViaClipboard(text)
+		success, injected = s.typeTextViaClipboard(text)
 		if !success && !cancelled() {
+			msg := "剪贴板操作失败"
+			if injected {
+				// 剪贴板已写入、粘贴按键被拒: 与单纯的剪贴板故障区分开
+				msg = msgPasteRejected
+			}
 			setStatus(&TypingStatus{
-				Phase: PhaseTyping, Message: "剪贴板操作失败", Progress: -1,
+				Phase: PhaseTyping, Message: msg, Progress: -1,
 			})
 		}
 	} else {
@@ -206,15 +233,20 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 		})
 
 		typed := 0
+		ok := true
 		for _, r := range runes {
 			if cancelled() {
 				break
 			}
 			if r == '\n' {
-				s.injector.SendEnter()
+				ok = s.injector.SendEnter()
 			} else {
-				s.injector.SendRune(r)
+				ok = s.injector.SendRune(r)
 			}
+			if !ok {
+				break // 注入被拒: 停止并报错, 不继续虚报进度
+			}
+			injected = true
 			typed++
 
 			if typed%8 == 0 || typed == total {
@@ -236,41 +268,59 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 			}
 			s.sleep(charDelay)
 		}
-		success = !cancelled()
+		if cancelled() {
+			success = false
+		} else if !ok {
+			setStatus(&TypingStatus{Phase: PhaseTyping, Message: msgPartialSendInput, Progress: -1})
+			failMsg = msgPartialSendInput
+			success = false
+		} else {
+			success = true
+		}
 	}
 
 	// 最终状态（前端检测到终止 phase 后停止轮询）; 过代则静默, 状态已由新操作接管
 	switch {
 	case cancelled():
 		// Cancel 已写入取消状态
-	case success:
+	case success && injected:
 		setStatus(&TypingStatus{Phase: PhaseSuccess, Message: "输入完成", Progress: -1})
+	case success:
+		// 文本为空(或整段被剔除): 无可注入内容, 不算失败, 但也不能报"输入完成"
+		setStatus(&TypingStatus{Phase: PhaseSuccess, Message: "无内容可输入", Progress: -1})
 	default:
-		setStatus(&TypingStatus{Phase: PhaseError, Message: "输入失败", Progress: -1})
+		// 保留注入器给出的具体原因(如权限不足), 而不是笼统的"输入失败"
+		msg := failMsg
+		if msg == "" {
+			msg = "输入失败"
+		}
+		setStatus(&TypingStatus{Phase: PhaseError, Message: msg, Progress: -1})
 	}
 }
 
 // typeTextViaClipboard 执行剪贴板粘贴输入（两种模式共用）。
 // 粘贴前快照全部剪贴板格式, 结束后原样恢复, 不销毁用户已有的
-// 图片/文件等非文本内容
-func (s *TypingService) typeTextViaClipboard(text string) bool {
+// 图片/文件等非文本内容。
+// 返回值: success 整体是否成功; injected 粘贴按键是否被系统接受
+// (剪贴板写入成功但目标窗口拒收按键时为 false)
+func (s *TypingService) typeTextViaClipboard(text string) (success, injected bool) {
 	snap := s.clipboard.Snapshot()
 	if !s.clipboard.SetText(text) {
 		// EmptyClipboard 可能已执行(分配阶段失败), 直接写回快照
 		s.clipboard.RestoreSnapshotRaw(snap)
-		return false
+		return false, false
 	}
 	s.sleep(100 * time.Millisecond)
 
 	if s.cancelFlag.Load() {
 		s.restoreClipboardSnapshot(snap, text)
-		return false
+		return false, false
 	}
-	s.injector.SendPaste()
+	injected = s.injector.SendPaste()
 	s.sleep(200 * time.Millisecond)
 
 	s.restoreClipboardSnapshot(snap, text)
-	return true
+	return injected, injected
 }
 
 // restoreClipboardSnapshot 恢复快照: 仅当剪贴板仍为本次注入的文本时执行,
@@ -279,7 +329,7 @@ func (s *TypingService) restoreClipboardSnapshot(snap []ClipboardFormat, injecte
 	if snap == nil {
 		return
 	}
-	if s.clipboard.GetText() != injected {
+	if !s.clipboard.HoldsText(injected) {
 		return // 用户期间已复制新内容
 	}
 	s.clipboard.RestoreSnapshotRaw(snap)

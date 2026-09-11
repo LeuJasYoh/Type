@@ -40,14 +40,19 @@ export function useTypingTask() {
         if (warmedUp && isTerminal(s.phase)) {
           stopPolling();
           isRunning.value = false;
+          return; // 终止态: 不再排下一次
         }
         warmedUp = true;
       } catch {
         // 页面关闭时可能会 reject，忽略
       }
+      // 一次跑完再排下一次, 而不是 setInterval: IPC 偶尔变慢时不会有两个
+      // 请求同时在飞, 也就不会出现旧响应盖掉新状态(进度/倒计时回跳)
+      if (pollTimer !== null) {
+        pollTimer = window.setTimeout(tick, 100);
+      }
     };
     void tick(); // 立即执行一次（仅渲染）
-    pollTimer = window.setInterval(tick, 100);
   }
 
   async function start(text: string, delay: number, forceRaw: boolean): Promise<void> {
