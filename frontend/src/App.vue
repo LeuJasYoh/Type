@@ -111,9 +111,7 @@ async function onTogglePin(): Promise<void> {
     <!-- 目标窗口预览 -->
     <div id="targetRow" class="target-row" :class="{ active: !!status.targetWindow }">
       <span class="target-label">目标窗口</span>
-      <span id="targetName" class="target-name">{{
-        status.targetWindow || (status.phase === 'countdown' ? '请切换到目标窗口…' : '—')
-      }}</span>
+      <span id="targetName" class="target-name">{{ status.targetWindow || '—' }}</span>
     </div>
 
     <!-- 状态与进度 -->

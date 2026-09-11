@@ -52,7 +52,12 @@ export function useTypingTask() {
         pollTimer = window.setTimeout(tick, 100);
       }
     };
-    void tick(); // 立即执行一次（仅渲染）
+    // 第一拍必须经由定时器启动, 不能直接调 tick: tick 末尾以
+    // "pollTimer !== null" 作为"链条仍在继续"的判据, 而 pollTimer 只在这
+    // 个判据保护的分支里被赋值 —— 直接调用会让它保持 null, 第一拍之后链条
+    // 必断, 每次任务只刷新一次状态(预览卡首帧/完成后读不到终止态, v1.4.0
+    // 轮询改造引入的根因)
+    pollTimer = window.setTimeout(() => void tick(), 0);
   }
 
   async function start(text: string, delay: number, forceRaw: boolean): Promise<void> {
@@ -92,12 +97,11 @@ export function useTypingTask() {
     status.value = statusOf({ phase: 'cancel', message: '已取消', progress: -1 });
   }
 
-  // WebView2 在窗口退到后台时会整段挂起页面定时器(不只是降频): 任务执行
-  // 期间 Type 必然在后台, 轮询链条断掉后就永远读不到终止态, 界面冻结在
-  // 挂起前的最后一帧、启动键一直禁用, 只能靠"取消"复位(实测如此)。
-  // 恢复可见/焦点时若轮询已断而任务仍在跑, 立即重启轮询自愈
+  // WebView2 在窗口退到后台时会挂起页面定时器: 恢复可见/焦点时, 只要任务
+  // 仍在跑就无条件重启轮询链(链条可能处于任意状态: 待触发被丢失、挂起中),
+  // 保证回到窗口立即可读到最新状态
   function healPolling(): void {
-    if (isRunning.value && pollTimer === null) startPolling();
+    if (isRunning.value) startPolling();
   }
   document.addEventListener('visibilitychange', healPolling);
   window.addEventListener('focus', healPolling);

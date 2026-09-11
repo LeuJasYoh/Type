@@ -18,6 +18,6 @@ export interface TypingStatus {
   progress: number;
   /** 倒计时剩余秒数 */
   secondsLeft: number;
-  /** 目标窗口预览: 倒计时期间为最近一个非 Type 的前台窗口, 执行后为锁定的实际注入目标 */
+  /** 目标窗口预览: 当前前台窗口标题(倒计时期间逐拍刷新); 执行后为锁定的实际注入目标 */
   targetWindow: string;
 }

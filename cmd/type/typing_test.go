@@ -652,9 +652,9 @@ func TestSelfForegroundAbortsBeforeInjection(t *testing.T) {
 	}
 }
 
-// 倒计时预览 = 最近一个非 Type 前台窗口: 中途回看 Type 不清空预览,
-// 切换目标则随之更新; 终态锁定为执行时的目标
-func TestCountdownPreviewTracksLastNonSelfWindow(t *testing.T) {
+// 目标预览跟随当前前台窗口(不做任何排除): 用户聚焦谁就显示谁,
+// 回看 Type 期间预览即 Type 自身; 执行后锁定为结束那一刻的窗口
+func TestCountdownPreviewFollowsCurrentForeground(t *testing.T) {
 	fg := &switchableForeground{title: "记事本"}
 	inj := newFakeInjector()
 	var mu sync.Mutex
@@ -685,21 +685,18 @@ func TestCountdownPreviewTracksLastNonSelfWindow(t *testing.T) {
 		t.Fatalf("终态 phase = %s, want success", st.Phase)
 	}
 	if st.TargetWindow != "浏览器" {
-		t.Errorf("终态目标 = %q, want 浏览器", st.TargetWindow)
+		t.Errorf("终态目标 = %q, want 浏览器(执行时锁定的前台窗口)", st.TargetWindow)
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
-	var lastCountdown *TypingStatus
+	var sawSelf bool
 	for i := range history {
-		if history[i].Phase == PhaseCountdown {
-			lastCountdown = &history[i]
+		if history[i].Phase == PhaseCountdown && history[i].TargetWindow == "Type 测试" {
+			sawSelf = true
 		}
 	}
-	if lastCountdown == nil {
-		t.Fatal("未捕获到倒计时状态")
-	}
-	if lastCountdown.TargetWindow != "浏览器" {
-		t.Errorf("回看 Type 期间预览 = %q, want 浏览器 (自身不得覆盖预览)", lastCountdown.TargetWindow)
+	if !sawSelf {
+		t.Error("回看 Type 期间的预览应为 Type 自身(不做排除), 未捕获到")
 	}
 }

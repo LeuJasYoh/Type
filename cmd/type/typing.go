@@ -70,7 +70,7 @@ type TypingStatus struct {
 	Message      string      `json:"message"`
 	Progress     int         `json:"progress"`     // 0-100，-1 表示隐藏
 	SecondsLeft  int         `json:"secondsLeft"`  // 倒计时剩余
-	TargetWindow string      `json:"targetWindow"` // 目标窗口预览: 倒计时期间为最近非 Type 前台窗口, 执行后为锁定的实际注入目标
+	TargetWindow string      `json:"targetWindow"` // 前台窗口标题, 倒计时期间逐秒刷新; 执行后为锁定的实际注入目标
 }
 
 // ─── 用户可见文案(新增) ───────────────────────────────
@@ -118,15 +118,6 @@ func (s *TypingService) Status() *TypingStatus {
 	return s.typingStatus.Load().(*TypingStatus)
 }
 
-// nonSelfTitle 前台窗口标题; 前台是 Type 自身时返回空串。
-// 目标预览与执行目标都以"非自身的前台窗口"为准
-func (s *TypingService) nonSelfTitle() string {
-	if s.foreground.IsSelf() {
-		return ""
-	}
-	return s.foreground.Title()
-}
-
 // Start 启动一次输入任务(倒计时 + 注入)
 func (s *TypingService) Start(text string, delay int, forceSendInput bool) (string, error) {
 	// 上一任务活跃且并非取消收尾: 拒绝重入
@@ -141,7 +132,7 @@ func (s *TypingService) Start(text string, delay int, forceSendInput bool) (stri
 		Message:      fmt.Sprintf("剩余 %d 秒 — 请聚焦目标窗口...", delay),
 		SecondsLeft:  delay,
 		Progress:     -1,
-		TargetWindow: s.nonSelfTitle(),
+		TargetWindow: s.foreground.Title(),
 	})
 	go s.runTypingTask(gen, text, delay, forceSendInput)
 	return "started", nil
@@ -194,24 +185,19 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 	cancelled := s.cancelFlag.Load
 
 	// ── 倒计时 ──
-	// 目标预览 = 最近一个非 Type 的前台窗口: 用户看着 Type 的那一刻前台
-	// 必是 Type 自身, "实时跟随前台"在此交互流程下不可能成立(永远显示
-	// Type); 有意义的语义是"若倒计时此刻结束, 输入将落进哪个窗口"
-	targetPreview := ""
+	// 目标预览 = 当前前台窗口逐秒刷新: 用户选择(聚焦)哪个窗口, 预览就是
+	// 哪个窗口 —— 它如实反映"若倒计时此刻结束, 输入将落进的地方"
 	for i := delay; i > 0; i-- {
 		if cancelled() {
 			return // Cancel 已写入取消状态
 		}
 		sec := i
-		if t := s.nonSelfTitle(); t != "" {
-			targetPreview = t
-		}
 		setStatus(&TypingStatus{
 			Phase:        PhaseCountdown,
 			Message:      fmt.Sprintf("剩余 %d 秒 — 请聚焦目标窗口...", sec),
 			SecondsLeft:  sec,
 			Progress:     -1,
-			TargetWindow: targetPreview,
+			TargetWindow: s.foreground.Title(),
 		})
 		s.sleep(1 * time.Second)
 	}
@@ -221,8 +207,8 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 
 	s.sleep(150 * time.Millisecond)
 
-	// 执行目标锁定: 倒计时结束时的前台窗口。焦点仍在 Type 自身时注入会
-	// 落进自己的输入框 —— 明确报错, 而不是静默打错地方
+	// 执行目标锁定: 倒计时结束时的前台窗口, 贯穿到执行与终态状态。
+	// 焦点仍在 Type 自身时注入会落进自己的输入框 —— 明确报错, 不静默打错地方
 	if s.foreground.IsSelf() {
 		setStatus(&TypingStatus{
 			Phase:    PhaseError,
@@ -231,10 +217,7 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 		})
 		return
 	}
-	target := s.nonSelfTitle()
-	if target == "" {
-		target = targetPreview // 标题读取失败时退回倒计时期间的最后已知目标
-	}
+	target := s.foreground.Title()
 
 	// ── 执行 ──
 	success := false
