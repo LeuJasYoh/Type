@@ -3,3 +3,11 @@
 *.ps1 text eol=crlf
 *.go text eol=lf
 *.ts text eol=lf
+
+# 前端源码与产物必须锁定 LF: vite 把 .vue/.css 的内容按原样嵌入单文件产物,
+# 检出时若被 autocrlf 转成 CRLF, 构建结果就随平台漂移(实测产物从 80.98 kB
+# 变成 81.00 kB, 哈希不同), 入库产物的"可复现"与漂移检查都会失真
+*.vue text eol=lf
+*.css text eol=lf
+frontend/index.html text eol=lf
+internal/web/dist/index.html text eol=lf
