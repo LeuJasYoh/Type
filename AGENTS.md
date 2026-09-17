@@ -34,7 +34,7 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 - `internal/web/` — go:embed 前端产物包（dist/index.html 入库，免 Node 亦可 go build/test）
 - `frontend/` — 自包含 Vite 项目（package.json / node_modules 都在这里，不在仓库根）
 - `assets/` — 图标源图与产物、version.rc（screenshot.png 为 README 截图）
-- `testdata/` — 手工测试页（paste-guard.html），无任何自动引用；用法写在文件头注释里
+- `testdata/` — 手工测试页（paste-guard.html / completion-guard.html），无任何自动引用；用法写在文件头注释里
 - `.github/workflows/ci.yml` — CI：gofmt / vet / test / build + 前端产物漂移检查 + 版本同步检查
 - **版本号单一来源**：`cmd/type/main.go` 的 `version` 变量；build.ps1 自动同步到
   version.rc / package.json——改版本只改 main.go，然后跑 build.ps1
@@ -54,6 +54,7 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 ## 行为契约（冻结，改动需双端同步）
 
 - webview Bind 函数名：`startTyping` / `cancelTyping` / `toggleTopmost` / `getTypingStatus`
+  （`startTyping` 参数：text, delay, forceSendInput, avoidCompletion）
 - `TypingStatus` JSON 字段与 phase 枚举值（`frontend/src/types.ts` 是其镜像）
 - 状态机用户可见文案逐字符保持——它们是发布语言的一部分
 - 已冻结文案清单：`剩余 N 秒 — 请聚焦目标窗口...` / `检测到中文，正在操作剪贴板...` /
@@ -62,6 +63,7 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 - 允许**新增**文案（如注入被拒时的 `输入中断：目标窗口拒绝了模拟按键，可能其权限高于 Type`、
   `粘贴未生效：...`、`无内容可输入`、焦点未切换时的 `未切换到目标窗口：...`），
   但不得改写上面已冻结的那些
+- 界面 pill 开关文案：`绕过粘贴检测`、`补全规避`（v1.5.0）——按钮文字同样是发布语言
 
 ## 目标窗口与轮询（两条踩过坑的约定，勿"优化"掉）
 
@@ -74,6 +76,19 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
   判断"链条继续"，而 pollTimer 只在该判断保护的分支里赋值，直接调用会让链条
   第一拍后断裂、状态永不刷新（症状：预览不跟随、完成后启动键卡死）。
   恢复可见/焦点时无条件重启链条，作为 WebView2 挂起定时器的兜底
+
+## 补全规避（v1.5.0，ESC 预消隐）
+
+- 带关键词补全的在线编辑器（学习通作业等）会把空格/回车/Tab 的键义改写为
+  "接受候选"，逐字符注入的代码因此格式损坏。弹窗无法从外部探测（网页浮层
+  不是窗口，无障碍树不可依赖），故规避模式对这三个键一律先注入 Esc、等 20ms
+  再发本键——弹窗开着则被关闭（目的达成），没开则基本无操作。这是状态无关
+  设计：不回答"弹窗在不在"，只做两种状态下都安全的动作，勿改成"探测后再 Esc"
+- 仅逐字符路径生效；剪贴板粘贴不经弹窗劫持，无此逻辑。默认关闭：无弹窗目标里
+  凭空 Esc 有副作用（浏览器全屏退出、Vim 退出插入态、关页面弹窗），前端 pill
+  开关"补全规避"经 startTyping 第 4 参传入，ESC 被拒走既有 msgPartialSendInput 路径
+- 验收/复现页 testdata/completion-guard.html（三个接受键开关 + 逐键日志 +
+  预期对比）；勿带 `?allow-paste=1` 做 Type 实测——那是停用粘贴拦截的诊断模式
 
 ## 提交前：检查文档同步（每次提交必做）
 
@@ -94,7 +109,7 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 
 - Win32 怪癖的注释保留在 win32_*.go 实现内（全角标点 WM_CHAR 绕行、GDI 句柄型
   格式跳过、图标句柄所有权约定）——它们是本代码库最有价值的文档，重构时勿删
-- 注入失败必须可见：`TextInjector` 三个方法都返回 bool（SendInput 被 UIPI 拦截时
+- 注入失败必须可见：`TextInjector` 四个方法都返回 bool（SendInput 被 UIPI 拦截时
   整体返回 0）。不要把返回值改成 void——那正是"静默失败被报成输入完成"的来源
 - 剪贴板恢复守卫用 `Clipboard.HoldsText`（按原始字节比对）而不是 `GetText` 的
   字符串比较：CF_UNICODETEXT 内嵌 NUL 时字符串会在 NUL 处截断而误判

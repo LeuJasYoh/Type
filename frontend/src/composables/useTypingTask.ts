@@ -60,7 +60,7 @@ export function useTypingTask() {
     pollTimer = window.setTimeout(() => void tick(), 0);
   }
 
-  async function start(text: string, delay: number, forceRaw: boolean): Promise<void> {
+  async function start(text: string, delay: number, forceRaw: boolean, avoidCompletion: boolean): Promise<void> {
     if (isRunning.value) return;
 
     if (!text.trim()) {
@@ -80,7 +80,7 @@ export function useTypingTask() {
     try {
       // Go 端在 handler 内同步写入 countdown 状态后才返回,
       // 因此先 await 再开轮询, 保证首个 tick 读到的必是新状态
-      await startTyping(text, delay, forceRaw);
+      await startTyping(text, delay, forceRaw, avoidCompletion);
       if (!isRunning.value) return; // 等待期间用户已取消, 不恢复轮询
       startPolling();
     } catch (err: unknown) {
