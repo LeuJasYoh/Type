@@ -2,7 +2,11 @@
 
 **键盘模拟输入器** —— 在文本框中输入内容，5 秒后自动模拟键盘键入到任意目标窗口。
 
-![Type 截图](assets/screenshot.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="assets/screenshot-light.png">
+  <img alt="Type 主界面：文本输入框、绕过粘贴检测与文本直投开关、延迟滑块，以及正在逐字符输入中的进度状态" src="assets/screenshot-light.png" width="540">
+</picture>
 
 ---
 
@@ -98,7 +102,8 @@ Type/
 ├── assets/                  ← 静态资源与 Windows 资源定义
 │   ├── icon.ico             ← 应用图标 (version.rc 引用, windres 编译进 exe)
 │   ├── icon.jpg             ← 图标源图
-│   ├── screenshot.png       ← README 截图
+│   ├── screenshot-light.png ← README 配图（浅色，兜底图）
+│   ├── screenshot-dark.png  ← README 配图（深色，随 GitHub 主题自动切换）
 │   └── version.rc           ← 版本/作者信息资源 (windres 编译为 cmd/type/version.syso)
 ├── scripts/
 │   ├── build.ps1            ← 一键构建脚本（版本号单一来源）
