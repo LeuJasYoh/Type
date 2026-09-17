@@ -22,6 +22,8 @@
         按键层 —— 该通道无 keydown, 配对与补全接受均不应触发。
   遥测: document.title 携带摘要 c=字符数 k=键盘事件 n=无键输入
         p=自动配对 a=接受候选, 供 wmcharprobe 读取注入结果(无需读屏)。
+  "导出日志"按钮: 把开关状态/统计/内容对比/逐键事件日志打包成
+        时间戳命名的 .txt 下载, 便于把测试现场完整交给他人分析。
 -->
 <html lang="zh-CN">
 <head>
@@ -127,7 +129,7 @@ footer{font-size:11px;color:var(--text2);text-align:center;padding-bottom:12px}
   </div>
 
   <div class="card">
-    <h2>事件日志 <button class="ghost" id="btnClear" style="margin-left:auto;padding:3px 12px;font-size:11px">清空</button></h2>
+    <h2>事件日志 <button class="ghost" id="btnExport" style="margin-left:auto;margin-right:6px;padding:3px 12px;font-size:11px">导出日志</button><button class="ghost" id="btnClear" style="padding:3px 12px;font-size:11px">清空</button></h2>
     <div id="log"></div>
   </div>
 
@@ -183,9 +185,12 @@ let suppressRefresh = false;
 
 // ─── 事件日志 ───
 const logEl = $('log');
+const logLines = []; // 供导出: 时间正序的完整日志(不受 DOM 展示上限影响)
 function log(msg, cls) {
   const d = new Date();
   const t = d.toLocaleTimeString('zh-CN', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+  logLines.push(`${t} ${msg}`);
+  if (logLines.length > 5000) logLines.shift();
   const row = document.createElement('div');
   const ts = document.createElement('span');
   ts.className = 't'; ts.textContent = t;
@@ -195,7 +200,51 @@ function log(msg, cls) {
   logEl.prepend(row);
   while (logEl.children.length > 300) logEl.lastChild.remove();
 }
-$('btnClear').addEventListener('click', () => { logEl.innerHTML = ''; });
+$('btnClear').addEventListener('click', () => { logEl.innerHTML = ''; logLines.length = 0; });
+
+// ─── 日志导出: 开关/统计/内容对比/逐键日志打包下载, 便于把现场交给他人分析 ───
+function buildExportText() {
+  const now = new Date();
+  const want = $('expected').value, got = editor.value;
+  let verdict = '(未填预期文本)';
+  if (want !== '') {
+    if (want === got) verdict = '完全一致';
+    else {
+      let i = 0;
+      while (i < want.length && i < got.length && want[i] === got[i]) i++;
+      verdict = `不一致: 首个差异在第 ${i + 1} 字符`;
+    }
+  }
+  return [
+    'completion-guard 事件日志导出',
+    `时间: ${now.toLocaleString('zh-CN', { hour12: false })}`,
+    `页面: ${location.href}`,
+    `模式: ${allowPaste ? '诊断模式(粘贴拦截已停用, ?allow-paste=1)' : '正常模式(粘贴被拦截)'}`,
+    `开关: 回车接受=${cfg.enterAccepts} 空格接受=${cfg.spaceAccepts} Tab接受=${cfg.tabAccepts} 括号配对=${cfg.pairBrackets} 闭括号跳过=${cfg.typeOver}`,
+    `统计: c=${[...got].length} k=${st.keydowns} n=${st.keyless} p=${st.pairs} a=${st.accepted}`,
+    `对比: ${verdict}`,
+    '--- 编辑器内容 ---',
+    got,
+    '--- 预期文本 ---',
+    want,
+    '--- 事件日志(时间正序) ---',
+    ...logLines,
+    '',
+  ].join('\n');
+}
+$('btnExport').addEventListener('click', () => {
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const name = `completion-guard-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-`
+    + `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.txt`;
+  const blob = new Blob([buildExportText()], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  log(`导出日志: ${name}(${logLines.length} 条)`, 'info');
+});
 
 const dispKey = k => (k === ' ' ? 'Space' : k === 'Enter' ? 'Enter' : `'${k}'`);
 const popupDesc = () => (st.open ? `弹窗开(${st.prefix}·选中 ${st.items[st.sel]})` : '弹窗关');
