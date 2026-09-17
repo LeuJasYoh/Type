@@ -286,7 +286,6 @@ body {
 .options-row {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 16px;
 }
 /* 药丸切换（绕过粘贴检测）：未选中墨边素底，选中朱砂晕染 + 状态点 */

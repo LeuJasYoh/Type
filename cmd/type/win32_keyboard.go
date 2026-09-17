@@ -20,7 +20,6 @@ const (
 	VK_CONTROL = 0x11
 	VK_V       = 0x56
 	VK_RETURN  = 0x0D
-	VK_ESCAPE  = 0x1B
 )
 
 type KEYBDINPUT struct {
@@ -60,10 +59,6 @@ func (win32Injector) SendRune(r rune) bool {
 }
 
 func (win32Injector) SendEnter() bool { return sendVK(VK_RETURN) }
-
-// SendEscape 注入 Esc, 用于补全规避模式: 目标编辑器的补全弹窗都把 Esc 绑定为
-// 关闭, 弹窗开着时空格/回车/Tab 的键义会被改写为"接受候选", 先关掉再发本键
-func (win32Injector) SendEscape() bool { return sendVK(VK_ESCAPE) }
 
 // SendPaste 注入 Ctrl+V, 返回是否被系统接受
 func (win32Injector) SendPaste() bool {

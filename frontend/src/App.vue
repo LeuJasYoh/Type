@@ -12,7 +12,6 @@ const { theme, toggle: toggleTheme } = useTheme();
 const text = ref('');
 const delay = ref(5);
 const forceRaw = ref(false);
-const avoidCompletion = ref(false);
 
 // 按码点计数(与 Go 端 []rune 进度分母一致), emoji 不重复计 2
 const charCount = computed(() => Array.from(text.value).length);
@@ -21,7 +20,7 @@ const charCount = computed(() => Array.from(text.value).length);
 const { status, isRunning, start, cancel } = useTypingTask();
 
 async function onStart(): Promise<void> {
-  await start(text.value, delay.value, forceRaw.value, avoidCompletion.value);
+  await start(text.value, delay.value, forceRaw.value);
 }
 
 function onCancel(): void {
@@ -90,21 +89,6 @@ async function onTogglePin(): Promise<void> {
       >
         <span class="pill-dot" aria-hidden></span>
         <span>绕过粘贴检测</span>
-      </button>
-      <button
-        id="chkAvoidCompletion"
-        type="button"
-        class="pill-toggle"
-        role="switch"
-        :class="{ on: avoidCompletion }"
-        :aria-checked="avoidCompletion"
-        :title="avoidCompletion
-          ? '当前将在空格/回车/Tab 前先发 Esc 关闭目标编辑器的补全弹窗'
-          : '点击开启: 用于带代码补全的在线编辑器(如学习通编程题)，在空格/回车/Tab 前先发 Esc 关闭补全弹窗，防止键入被替换成候选词'"
-        @click="avoidCompletion = !avoidCompletion"
-      >
-        <span class="pill-dot" aria-hidden></span>
-        <span>补全规避</span>
       </button>
       <div class="delay-slider-row">
         <span class="slider-label">延迟</span>

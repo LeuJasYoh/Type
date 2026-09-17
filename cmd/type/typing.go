@@ -22,8 +22,7 @@ import (
 type TextInjector interface {
 	SendRune(r rune) bool // 含全角标点 WM_CHAR 绕行
 	SendEnter() bool
-	SendEscape() bool // 补全规避: 关闭目标编辑器的补全弹窗
-	SendPaste() bool  // Ctrl+V
+	SendPaste() bool // Ctrl+V
 }
 
 // ClipboardFormat 剪贴板单一格式的原始字节快照
@@ -119,11 +118,8 @@ func (s *TypingService) Status() *TypingStatus {
 	return s.typingStatus.Load().(*TypingStatus)
 }
 
-// Start 启动一次输入任务(倒计时 + 注入)。
-// forceSendInput 绕过剪贴板降级强制逐字符; avoidCompletion 为补全规避:
-// 在空格/回车/Tab 前先注入 Esc, 防止目标编辑器的补全弹窗把这三个键解释为
-// "接受候选"(在线编程作业编辑器的典型行为)
-func (s *TypingService) Start(text string, delay int, forceSendInput bool, avoidCompletion bool) (string, error) {
+// Start 启动一次输入任务(倒计时 + 注入)
+func (s *TypingService) Start(text string, delay int, forceSendInput bool) (string, error) {
 	// 上一任务活跃且并非取消收尾: 拒绝重入
 	if s.runningFlag.Load() && !s.cancelFlag.Load() {
 		return "", fmt.Errorf("已有输入任务在运行中，请先取消或等待完成")
@@ -138,7 +134,7 @@ func (s *TypingService) Start(text string, delay int, forceSendInput bool, avoid
 		Progress:     -1,
 		TargetWindow: s.foreground.Title(),
 	})
-	go s.runTypingTask(gen, text, delay, forceSendInput, avoidCompletion)
+	go s.runTypingTask(gen, text, delay, forceSendInput)
 	return "started", nil
 }
 
@@ -157,7 +153,7 @@ func (s *TypingService) Cancel() (string, error) {
 
 // runTypingTask 执行一次完整的输入任务(倒计时 + 注入)。
 // 倒计时初态已由 Start 同步写入, 此处从衔接/认领 runningFlag 开始。
-func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceSendInput bool, avoidCompletion bool) {
+func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceSendInput bool) {
 	// gen 守卫的状态写入: 任务被更新一代的操作取代后, 静默停止输出
 	setStatus := func(st *TypingStatus) {
 		if gen == s.taskGen.Load() {
@@ -261,16 +257,6 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 		for _, r := range runes {
 			if cancelled() {
 				break
-			}
-			// 补全规避: 补全弹窗无法从外部探测(网页浮层不是窗口, 无障碍树不可依赖),
-			// 故对会被弹窗改写键义的键一律先注入 Esc —— 弹窗开着则被关闭(目的达成),
-			// 没开则基本无操作。等待给目标编辑器留出关弹窗的时间
-			if avoidCompletion && isCompletionAcceptKey(r) {
-				if !s.injector.SendEscape() {
-					ok = false
-					break // 注入被拒: 停止并报错, 不继续虚报进度
-				}
-				s.sleep(20 * time.Millisecond)
 			}
 			if r == '\n' {
 				ok = s.injector.SendEnter()
@@ -379,12 +365,6 @@ func containsNonASCII(s string) bool {
 		}
 	}
 	return false
-}
-
-// isCompletionAcceptKey 补全弹窗开着时键义会被改写为"接受候选"的键:
-// 空格(提交字符)、回车、Tab。其余字符弹窗只做前缀过滤, 落进文本的仍是原字符
-func isCompletionAcceptKey(r rune) bool {
-	return r == ' ' || r == '\n' || r == '\t'
 }
 
 // isCJKPunct 判断是否中日韩标点
