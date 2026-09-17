@@ -21,7 +21,6 @@ const (
 	VK_V       = 0x56
 	VK_RETURN  = 0x0D
 	VK_ESCAPE  = 0x1B
-	VK_TAB     = 0x09
 )
 
 type KEYBDINPUT struct {
@@ -63,16 +62,13 @@ func (win32Injector) SendRune(r rune) bool {
 // SendText 文本直投: 逐 UTF-16 码元经 WM_CHAR 直达前台焦点窗口 —— 不产生
 // 按键事件, 目标编辑器挂在 keydown 层的补全弹窗劫持(空格/回车被当作
 // "接受候选")与括号自动配对均无从触发。实测(Edge/Chromium 网页编辑器,
-// tools/wmcharprobe + testdata/completion-guard.html): 文本逐字符原样落盘、
-// 零 keydown、零配对; 与 SendRune 的按键层注入互为镜像
+// tools/wmcharprobe + testdata/completion-guard.html): 普通字符与 Tab 逐字
+// 原样落盘、零 keydown、零配对; 但 \n/\r 控制字符会被 Chromium 过滤, 换行
+// 必须走真按键(见业务层 sendEscaped)。与 SendRune 的按键层注入互为镜像
 func (win32Injector) SendText(r rune) bool { return sendCharUnitsViaWMChar(r) }
 
-// SendTab 注入 Tab 真键: 文本直投下回车/Tab 无法走文本层, 仍按键注入,
-// 由业务层负责先发 Esc 关闭可能挂着的补全弹窗(见 sendEscaped)
-func (win32Injector) SendTab() bool { return sendVK(VK_TAB) }
-
 // SendEscape 注入 Esc 真键: 关闭目标编辑器的补全弹窗(其键义劫持的唯一
-// 解除手段), 供文本直投模式在回车/Tab 前调用
+// 解除手段), 供文本直投模式在回车前调用
 func (win32Injector) SendEscape() bool { return sendVK(VK_ESCAPE) }
 
 func (win32Injector) SendEnter() bool { return sendVK(VK_RETURN) }

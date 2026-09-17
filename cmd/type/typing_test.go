@@ -17,7 +17,7 @@ import (
 // ─── fakes ────────────────────────────────────────────
 
 // fakeInjector 记录注入调用序列: "r:X"=按键层字符, "T:X"=文本层字符(文本直投),
-// "E"=回车, "TAB"=Tab, "ESC"=Esc, "V"=粘贴。
+// "E"=回车, "ESC"=Esc, "V"=粘贴。
 // failAfter >= 0 时模拟系统拒绝注入(SendInput 返回 0, 典型为 UIPI),
 // 第 failAfter 个注入起返回 false 且不记录事件
 type fakeInjector struct {
@@ -46,8 +46,6 @@ func (f *fakeInjector) SendText(r rune) bool { return f.record("T:" + string(r))
 func (f *fakeInjector) SendEnter() bool { return f.record("E") }
 
 func (f *fakeInjector) SendEscape() bool { return f.record("ESC") }
-
-func (f *fakeInjector) SendTab() bool { return f.record("TAB") }
 
 func (f *fakeInjector) SendPaste() bool { return f.record("V") }
 
@@ -378,8 +376,8 @@ func TestAsciiTyping(t *testing.T) {
 	}
 }
 
-// 文本直投: 字符走文本层(T:), 空格不再需要 Esc(文本层无键义可劫持);
-// 回车/Tab 无法走文本层, 仍按键注入但前面必须各补一次 Esc 关闭补全弹窗
+// 文本直投: 字符(含 Tab)走文本层(T:), 无需 Esc(文本层无键义可劫持);
+// 换行无法走文本层, 仍按键注入但前面必须补一次 Esc 关闭补全弹窗
 func TestTextDirectRoutesViaTextLayer(t *testing.T) {
 	inj := newFakeInjector()
 	svc := newTestService(inj, &fakeClipboard{}, noSleep)
@@ -391,10 +389,10 @@ func TestTextDirectRoutesViaTextLayer(t *testing.T) {
 		t.Fatalf("终态 phase = %s, want success", st.Phase)
 	}
 
-	// 序列: T:a, T:空格, T:b, Esc, TAB, T:c, Esc, E, T:d
-	want := []string{"T:a", "T: ", "T:b", "ESC", "TAB", "T:c", "ESC", "E", "T:d"}
+	// 序列: T:a, T:空格, T:b, T:Tab, T:c, Esc, E, T:d
+	want := []string{"T:a", "T: ", "T:b", "T:\t", "T:c", "ESC", "E", "T:d"}
 	if got := inj.calls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("注入序列 = %q, want %q (字符走文本层, 回车/Tab 前有 Esc)", got, want)
+		t.Errorf("注入序列 = %q, want %q (字符含 Tab 走文本层, 换行前有 Esc)", got, want)
 	}
 }
 

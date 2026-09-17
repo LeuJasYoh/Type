@@ -36,7 +36,8 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 - `assets/` — 图标源图与产物、version.rc（screenshot.png 为 README 截图）
 - `testdata/` — 手工测试页（paste-guard.html / completion-guard.html），无任何自动引用；用法写在文件头注释里
 - `tools/wmcharprobe/` — 注入通道探针（dev 工具，不进产品链路）：WM_CHAR 文本直投 vs SendInput 按键
-  注入的 A/B 验证，读 completion-guard.html 的 title 遥测作判据；用法见文件头注释
+  注入的 A/B 验证，direct 模式逐字镜像产品文本直投算法可做端到端预演；读 completion-guard.html 的
+  title 遥测（c/k/n/p/a/L/h）作判据；用法见文件头注释
 - `.github/workflows/ci.yml` — CI：gofmt / vet / test / build + 前端产物漂移检查 + 版本同步检查
 - **版本号单一来源**：`cmd/type/main.go` 的 `version` 变量；build.ps1 自动同步到
   version.rc / package.json——改版本只改 main.go，然后跑 build.ps1。
@@ -95,9 +96,17 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
   而 `WM_CHAR` 注入不产生任何按键事件 —— 字符走 `SendText`（文本层）后，
   实测逐字符原样落盘、零 keydown、零配对（证据：tools/wmcharprobe 的 char
   模式 c=精确长度/k=0/p=0，keys 模式同文本 p+2、a+1）
-- 回车/Tab 无法走文本层，只能真按键，故 `sendEscaped`（Esc + 20ms + 本键）
-  内置在文本直投模式里：弹窗开着则被关闭（目的达成），没开则基本无操作。
-  这是状态无关设计：不回答"弹窗在不在"，只做两种状态下都安全的动作，
+- 回车与 Tab 的边界（实测，勿"顺手统一"）：Tab 可以走文本层（WM_CHAR 的
+  `\t` 在 Chromium 里原样插入制表符）；**换行不行**——`\n`/`\r` 属控制字符
+  会被 Chromium 过滤丢弃，换行必须走真按键（`sendEscaped(SendEnter)`，
+  Esc + 20ms + 回车）。这也是文本直投里唯一保留的按键注入
+- 不混用的原则：字符走 SendMessage(W 同步直投)、按键走 SendInput(排队)，
+  两者队列不同、理论上存在乱序窗口。实测热机窗口下产品时序（每换行
+  Esc+20ms+回车，字符间隔 8ms+）内容哈希逐字节一致；**冷启动窗口**
+  （刚 spawn 的浏览器渲染组件重建中）会丢/乱事件——实测排障要等窗口
+  热机（数秒）再注入，真实使用场景天然满足
+- `sendEscaped`（Esc + 20ms + 回车）是状态无关设计：不回答"弹窗在不在"，
+  只做两种状态下都安全的动作（弹窗开着则关闭、没开则基本无操作），
   勿改成"探测后再 Esc"。默认关闭：无弹窗目标里凭空 Esc 有副作用
   （浏览器全屏退出、Vim 退出插入态、关页面弹窗）
 - 仅逐字符路径生效；剪贴板粘贴不经弹窗劫持，无此逻辑。textDirect 为
@@ -126,7 +135,7 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 
 - Win32 怪癖的注释保留在 win32_*.go 实现内（全角标点 WM_CHAR 绕行、GDI 句柄型
   格式跳过、图标句柄所有权约定）——它们是本代码库最有价值的文档，重构时勿删
-- 注入失败必须可见：`TextInjector` 六个方法都返回 bool（SendInput 被 UIPI 拦截时
+- 注入失败必须可见：`TextInjector` 五个方法都返回 bool（SendInput 被 UIPI 拦截时
   整体返回 0；WM_CHAR 直投的 SendMessageTimeout 超时/失败返回 0）。不要把返回值
   改成 void——那正是"静默失败被报成输入完成"的来源
 - 剪贴板恢复守卫用 `Clipboard.HoldsText`（按原始字节比对）而不是 `GetText` 的

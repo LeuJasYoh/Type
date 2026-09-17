@@ -16,14 +16,13 @@ import (
 // ─── 平台能力接口(消费方定义, Win32 实现见 win32_*.go) ──
 
 // TextInjector 字符注入能力。
-// 六个方法均返回"本次注入是否被系统接受": SendInput 在 UIPI 拦截(目标窗口
+// 五个方法均返回"本次注入是否被系统接受": SendInput 在 UIPI 拦截(目标窗口
 // 权限更高)、工作站锁定或切到安全桌面时整体失败且不产生任何按键, 此时
 // 返回 false, 状态机据此报错而不是把静默失败当成输入完成
 type TextInjector interface {
 	SendRune(r rune) bool // 按键层字符注入, 含全角标点 WM_CHAR 绕行
 	SendText(r rune) bool // 文本层字符注入(WM_CHAR 直投), 见文本直投
 	SendEnter() bool
-	SendTab() bool
 	SendEscape() bool // 关闭目标编辑器的补全弹窗
 	SendPaste() bool  // Ctrl+V
 }
@@ -265,14 +264,14 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 			if cancelled() {
 				break
 			}
-			// 注入通道分流: 文本直投把字符送到文本层(WM_CHAR, 无按键事件),
-			// 弹窗劫持与括号配对都挂在 keydown 上因而无从触发; 回车/Tab 无法
-			// 走文本层, 仍按键注入但先经 sendEscaped 用 Esc 关掉可能挂着的弹窗
+			// 注入通道分流: 文本直投把字符(含 Tab, WM_CHAR 可插入制表符)
+			// 送到文本层(无按键事件), 弹窗劫持与括号配对都挂在 keydown 上
+			// 因而无从触发; 换行无法走文本层 —— 实测 Chromium 会过滤
+			// WM_CHAR 的 \n/\r 控制字符, 只能真按键, 故先经 sendEscaped
+			// 用 Esc 关掉可能挂着的弹窗再按回车
 			switch {
 			case textDirect && r == '\n':
 				ok = s.sendEscaped(s.injector.SendEnter)
-			case textDirect && r == '\t':
-				ok = s.sendEscaped(s.injector.SendTab)
 			case textDirect:
 				ok = s.injector.SendText(r)
 			case r == '\n':
@@ -337,9 +336,9 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 }
 
 // sendEscaped 先注入 Esc 关闭目标编辑器的补全弹窗, 稍候再注入 key。
-// 文本直投下只有回车/Tab 还是真按键(文本层无键义可劫持), 这两个键若在弹窗
-// 开着时到达会被解释为"接受候选"; 弹窗开着则被 Esc 关闭(目的达成),
-// 没开则基本无操作 —— 状态无关设计, 无需探测弹窗是否真的存在
+// 文本直投下只有换行还是真按键(文本层过滤 \n/\r 控制字符, 无法插入换行),
+// 这个键若在弹窗开着时到达会被解释为"接受候选"; 弹窗开着则被 Esc 关闭
+// (目的达成), 没开则基本无操作 —— 状态无关设计, 无需探测弹窗是否真的存在
 func (s *TypingService) sendEscaped(key func() bool) bool {
 	if !s.injector.SendEscape() {
 		return false

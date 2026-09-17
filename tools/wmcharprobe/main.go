@@ -9,22 +9,22 @@
 //
 // 用法:
 //
-//	wmcharprobe <标题子串> <文本> [char|keys|close]  注入文本后打印标题, 默认 char
-//	wmcharprobe <标题子串>                           只打印匹配窗口的当前标题(title 遥测)
+//	wmcharprobe <标题子串> <文本> [char|direct|keys|close]  注入文本后打印标题
+//	wmcharprobe <标题子串>                                   只打印匹配窗口的当前标题
 //
-//	char  — WM_CHAR 直投(无按键事件, 即"文本直投"通道): 先把目标窗口激活到
-//	        前台, 再镜像产品的 focusedHWND() 解析前台线程焦点窗口并投递
-//	keys  — SendInput KEYEVENTF_UNICODE(与 Type 逐字符路径同款, 有按键事件),
-//	        需要目标窗口前台: 倒计时 2 秒后注入到当时的前台窗口
-//	close — 向匹配窗口发 WM_CLOSE(测试收尾清理)
+//	char   — WM_CHAR 直投全部字符(含换行, 即纯文本层通道), 需激活目标窗口
+//	direct — 镜像产品"文本直投"算法: 字符(含 Tab)WM_CHAR; 换行前先 Esc 再发真回车
+//	keys   — SendInput KEYEVENTF_UNICODE(与 Type 逐字符路径同款, 有按键事件),
+//	         需要目标窗口前台: 倒计时 2 秒后注入到当时的前台窗口
+//	close  — 向匹配窗口发 WM_CLOSE(测试收尾清理)
 //	例如:
 //
 //	wmcharprobe completion-guard "ret (x) [y] 你"
 //	wmcharprobe completion-guard "(" keys
 //
-// 成功判据(对照页面 title 遥测): char 模式 c=文本码点数, k 不增(无键盘事件),
-// p/a 不增(配对/接受未触发); keys 模式 p 应增加(按键层行为被触发)。
-// 两者对照即证明 char 通道绕过了按键层。
+// 成功判据(对照页面 title 遥测): char/direct 模式 c=文本码点数, k 不增
+// (无键盘事件), p/a 不增(配对/接受未触发); keys 模式 p 应增加(按键层行为
+// 被触发)。两者对照即证明文本层通道绕过了按键层。
 package main
 
 import (
@@ -43,6 +43,10 @@ const (
 	INPUT_KEYBOARD    = 1
 	KEYEVENTF_KEYUP   = 0x0002
 	KEYEVENTF_UNICODE = 0x0004
+
+	VK_TAB    = 0x09
+	VK_RETURN = 0x0D
+	VK_ESCAPE = 0x1B
 )
 
 var (
@@ -172,20 +176,62 @@ func findTargets(substr string, paths *[]string) []target {
 	return hits
 }
 
-// sendText 逐 UTF-16 码元直投 WM_CHAR, 返回失败个数
-func sendText(hwnd uintptr, text string) int {
-	units := utf16.Encode([]rune(text))
+// sendRuneMsg 逐个 UTF-16 码元 WM_CHAR 直投一个 rune(代理对拆两条消息)
+func sendRuneMsg(hwnd uintptr, r rune) bool {
 	var result uintptr
-	failed := 0
-	for i, u := range units {
+	for _, u := range utf16.Encode([]rune{r}) {
 		ret, _, _ := procSendMessageTimeoutW.Call(
 			hwnd, WM_CHAR, uintptr(u), 1,
 			SMTO_ABORTIFHUNG, 1000, uintptr(unsafe.Pointer(&result)))
 		if ret == 0 {
+			return false
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return true
+}
+
+// sendText 逐 UTF-16 码元直投 WM_CHAR, 返回失败个数
+func sendText(hwnd uintptr, text string) int {
+	failed := 0
+	for _, r := range text {
+		if !sendRuneMsg(hwnd, r) {
 			failed++
-			fmt.Printf("  第 %d 个码元 U+%04X 投递失败\n", i+1, u)
+			fmt.Printf("  码元 U+%04X 投递失败\n", r)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	return failed
+}
+
+// sendVK 注入一次真按键(按下+抬起), 返回是否被系统接受
+func sendVK(vk uint16) bool {
+	in := []INPUT{
+		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: vk}},
+		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: vk, dwFlags: KEYEVENTF_KEYUP}},
+	}
+	n, _, _ := procSendInput.Call(uintptr(len(in)), uintptr(unsafe.Pointer(&in[0])), unsafe.Sizeof(INPUT{}))
+	return n == uintptr(len(in))
+}
+
+// sendDirect 镜像产品的文本直投算法: 字符(含 Tab)走 WM_CHAR 文本层; 换行
+// 无法走文本层(Chromium 过滤 \n/\r 控制字符), 先发 Esc 关闭可能挂着的
+// 补全弹窗, 稍候再发真回车 —— 与 typing.go 的 sendEscaped 同序
+// (Esc + 20ms + 本键), 用于对产品算法做端到端预演
+func sendDirect(hwnd uintptr, text string) int {
+	failed := 0
+	for _, r := range text {
+		if r == '\n' {
+			ok := sendVK(VK_ESCAPE)
+			time.Sleep(20 * time.Millisecond)
+			ok = sendVK(VK_RETURN) && ok
+			if !ok {
+				failed++
+			}
+		} else if !sendRuneMsg(hwnd, r) {
+			failed++
+		}
+		time.Sleep(12 * time.Millisecond)
 	}
 	return failed
 }
@@ -297,6 +343,28 @@ func main() {
 				}
 				time.Sleep(300 * time.Millisecond)
 			}
+		case "direct": // 镜像产品的文本直投算法: 字符 WM_CHAR + 换行/Tab 前 Esc 先行
+			const GA_ROOT = 2
+			for _, t := range targets {
+				if !activate(t.hwnd) {
+					fmt.Println("  激活失败(窗口未能到前台), 仍按前台焦点解析")
+				}
+				dst, how := focusedTarget()
+				if dst == 0 {
+					fmt.Println("  无可用焦点窗口, 放弃投递")
+					continue
+				}
+				root, _, _ := procGetAncestor.Call(dst, GA_ROOT)
+				if root != t.hwnd {
+					fmt.Printf("  前台焦点(0x%X)不属于目标窗口, 放弃投递\n", dst)
+					continue
+				}
+				fmt.Printf("投递 → [%s] (%s, class=%s 0x%X)\n", t.title, how, windowClass(dst), dst)
+				if failed := sendDirect(dst, os.Args[2]); failed > 0 {
+					fmt.Printf("  %d 个字符注入被拒\n", failed)
+				}
+				time.Sleep(300 * time.Millisecond)
+			}
 		case "close": // 关闭匹配窗口(测试收尾用)
 			for _, t := range targets {
 				fmt.Printf("关闭 → [%s]\n", t.title)
@@ -319,7 +387,7 @@ func main() {
 			}
 			time.Sleep(300 * time.Millisecond)
 		default:
-			fmt.Fprintf(os.Stderr, "未知模式 %q (可用: char / keys)\n", mode)
+			fmt.Fprintf(os.Stderr, "未知模式 %q (可用: char / direct / keys / close)\n", mode)
 			os.Exit(2)
 		}
 	}

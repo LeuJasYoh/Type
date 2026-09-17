@@ -21,7 +21,8 @@
         直投通道(Type 文本直投模式 / tools/wmcharprobe)是否真的绕过
         按键层 —— 该通道无 keydown, 配对与补全接受均不应触发。
   遥测: document.title 携带摘要 c=字符数 k=键盘事件 n=无键输入
-        p=自动配对 a=接受候选, 供 wmcharprobe 读取注入结果(无需读屏)。
+        p=自动配对 a=接受候选 L=换行数 h=内容哈希(顺序敏感, 可外部精确
+        校验内容), 供 wmcharprobe 读取注入结果(无需读屏)。
   "导出日志"按钮: 把开关状态/统计/内容对比/逐键事件日志打包成
         时间戳命名的 .txt 下载, 便于把测试现场完整交给他人分析。
 -->
@@ -332,8 +333,19 @@ function insertPair(open, close) {
 
 // ─── title 遥测: 供 wmcharprobe 等外部工具读取注入结果 ───
 // c=字符数(按码点) k=键盘事件 n=无键输入 p=自动配对 a=接受候选
+// L=内容换行数 h=内容 FNV-1a 哈希(顺序敏感, 用于从外部精确校验内容)
+function fnv1a(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
 function updateTitle() {
-  document.title = `completion-guard|c=${[...editor.value].length} k=${st.keydowns} n=${st.keyless} p=${st.pairs} a=${st.accepted}`;
+  const v = editor.value;
+  const nl = (v.match(/\n/g) || []).length;
+  document.title = `completion-guard|c=${[...v].length} k=${st.keydowns} n=${st.keyless} p=${st.pairs} a=${st.accepted} L=${nl} h=${fnv1a(v)}`;
 }
 
 // ─── 编辑器键盘/输入处理 ───
