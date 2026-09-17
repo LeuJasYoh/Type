@@ -240,3 +240,85 @@ func TestClipboardRestoreGuard(t *testing.T) {
 		t.Errorf("守卫未生效, 剪贴板被覆盖为 %q", got)
 	}
 }
+
+// ─── 窗口类图标索引(仅测试用到的 Win32 入口) ──────────
+
+var (
+	procRegisterClassExW = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW  = user32.NewProc("CreateWindowExW")
+	procDefWindowProcW   = user32.NewProc("DefWindowProcW")
+	procGetClassLongPtrW = user32.NewProc("GetClassLongPtrW")
+	procLoadIconW        = user32.NewProc("LoadIconW")
+	procDestroyWindow    = user32.NewProc("DestroyWindow")
+	procUnregisterClassW = user32.NewProc("UnregisterClassW")
+)
+
+// WNDCLASSEXW 仅测试用: 注册一个窗口类, 作为类图标索引的写入对象
+type WNDCLASSEXW struct {
+	cbSize        uint32
+	style         uint32
+	lpfnWndProc   uintptr
+	cbClsExtra    int32
+	cbWndExtra    int32
+	hInstance     uintptr
+	hIcon         uintptr
+	hCursor       uintptr
+	hbrBackground uintptr
+	lpszMenuName  *uint16
+	lpszClassName *uint16
+	hIconSm       uintptr
+}
+
+// TestApplyWindowIconClassIndex 类图标索引必须真能被系统接受。
+// nIndex 是 WNDCLASSEX 内部字段的负字节偏移, 文档值 GCLP_HICON = -14 /
+// GCLP_HICONSM = -34, 代码里以按位取反表达(^uintptr(13) = -14)。
+// 值写错时 SetClassLongPtr 以 ERROR_INVALID_INDEX 返回 0 且什么都不做,
+// 返回值又没人采信 —— 图标重设会静默空转。这里真的建一个窗口跑一遍
+// applyWindowIcon, 再按文档索引把图标读回来核对: 索引一旦写错即刻变红
+func TestApplyWindowIconClassIndex(t *testing.T) {
+	wndProc := syscall.NewCallback(func(hwnd, msg, wparam, lparam uintptr) uintptr {
+		ret, _, _ := procDefWindowProcW.Call(hwnd, msg, wparam, lparam)
+		return ret
+	})
+	hInst, _, _ := procGetModuleHandleW.Call(0)
+	className, _ := syscall.UTF16PtrFromString("TypeIconIndexTest-" + strconv.Itoa(os.Getpid()))
+	wc := WNDCLASSEXW{
+		cbSize:        uint32(unsafe.Sizeof(WNDCLASSEXW{})),
+		lpfnWndProc:   wndProc,
+		hInstance:     hInst,
+		lpszClassName: className,
+	}
+	if ret, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); ret == 0 {
+		t.Fatalf("RegisterClassExW 失败: %v", err)
+	}
+	defer procUnregisterClassW.Call(uintptr(unsafe.Pointer(className)), hInst)
+
+	hwnd, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(className)),
+		uintptr(unsafe.Pointer(className)), 0, 0, 0, 0, 0, 0, 0, hInst, 0)
+	if hwnd == 0 {
+		t.Fatalf("CreateWindowExW 失败: %v", err)
+	}
+	defer procDestroyWindow.Call(hwnd)
+
+	icon, _, _ := procLoadIconW.Call(0, 32512) // IDI_APPLICATION
+	if icon == 0 {
+		t.Fatal("LoadIconW 失败")
+	}
+
+	// false: 只走类图标路径, 不碰 WM_SETICON(避免与窗口图标语义纠缠)
+	applyWindowIcon(hwnd, icon, icon, false)
+
+	for _, c := range []struct {
+		name  string
+		index uintptr
+	}{
+		{"GCLP_HICON(-14)", ^uintptr(13)},
+		{"GCLP_HICONSM(-34)", ^uintptr(33)},
+	} {
+		got, _, _ := procGetClassLongPtrW.Call(hwnd, c.index)
+		if got != icon {
+			t.Errorf("%s 未被接受: 读回 0x%X, want 0x%X —— 索引值写错了?",
+				c.name, got, icon)
+		}
+	}
+}

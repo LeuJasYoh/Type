@@ -104,7 +104,11 @@ func applyWindowIcon(hwnd, hLarge, hSmall uintptr, withSetIcon bool) {
 		}
 	}
 
-	// 改窗口类图标
+	// 改窗口类图标。索引是 WNDCLASSEX 内部字段的负字节偏移, 即文档值
+	// GCLP_HICON = -14 / GCLP_HICONSM = -34 —— 这里以按位取反表达负数
+	// (^x 是取反不是取负): ^uintptr(13) = -14, ^uintptr(33) = -34。
+	// 值写错时 SetClassLongPtr 会以 ERROR_INVALID_INDEX 静默返回 0(无人采信),
+	// 图标重设整体空转; main_test.go 有真建窗口读回的实测用例钉住这两个值
 	const GCLP_HICON = ^uintptr(13)
 	const GCLP_HICONSM = ^uintptr(33)
 	if hLarge != 0 {

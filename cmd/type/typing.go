@@ -83,6 +83,8 @@ const (
 	msgPartialSendInput = "输入中断：目标窗口拒绝了模拟按键，可能其权限高于 Type"
 	// msgPasteRejected 剪贴板写入成功但 Ctrl+V 未被接受
 	msgPasteRejected = "粘贴未生效：目标窗口拒绝了模拟按键，可能其权限高于 Type"
+	// msgClipboardFailed 剪贴板打开/写入本身失败, 尚未走到粘贴这一步
+	msgClipboardFailed = "剪贴板操作失败"
 )
 
 // ─── TypingService ────────────────────────────────────
@@ -237,15 +239,13 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 			Phase: PhaseTyping, Message: "检测到中文，正在操作剪贴板...", Progress: -1,
 			TargetWindow: target,
 		})
-		success, injected = s.typeTextViaClipboard(text)
+		// 失败原因由被调方给出: 剪贴板故障与"粘贴被目标窗口拒收"处置不同,
+		// 不能都退化成通用的"输入失败"
+		success, failMsg = s.typeTextViaClipboard(text)
+		injected = success // 粘贴按键被接受即内容已送达
 		if !success && !cancelled() {
-			msg := "剪贴板操作失败"
-			if injected {
-				// 剪贴板已写入、粘贴按键被拒: 与单纯的剪贴板故障区分开
-				msg = msgPasteRejected
-			}
 			setStatus(&TypingStatus{
-				Phase: PhaseTyping, Message: msg, Progress: -1,
+				Phase: PhaseTyping, Message: failMsg, Progress: -1,
 				TargetWindow: target,
 			})
 		}
@@ -350,26 +350,30 @@ func (s *TypingService) sendEscaped(key func() bool) bool {
 // typeTextViaClipboard 执行剪贴板粘贴输入（两种模式共用）。
 // 粘贴前快照全部剪贴板格式, 结束后原样恢复, 不销毁用户已有的
 // 图片/文件等非文本内容。
-// 返回值: success 整体是否成功; injected 粘贴按键是否被系统接受
-// (剪贴板写入成功但目标窗口拒收按键时为 false)
-func (s *TypingService) typeTextViaClipboard(text string) (success, injected bool) {
+// 返回值: success 粘贴按键是否被系统接受(即内容是否送达);
+// failMsg 失败时用户可见的具体原因 —— 剪贴板故障与目标窗口拒收 Ctrl+V
+// 必须分开报; 成功或中途取消时为空(取消的状态由 Cancel 负责写入)
+func (s *TypingService) typeTextViaClipboard(text string) (success bool, failMsg string) {
 	snap := s.clipboard.Snapshot()
 	if !s.clipboard.SetText(text) {
 		// EmptyClipboard 可能已执行(分配阶段失败), 直接写回快照
 		s.clipboard.RestoreSnapshotRaw(snap)
-		return false, false
+		return false, msgClipboardFailed
 	}
 	s.sleep(100 * time.Millisecond)
 
 	if s.cancelFlag.Load() {
 		s.restoreClipboardSnapshot(snap, text)
-		return false, false
+		return false, ""
 	}
-	injected = s.injector.SendPaste()
+	pasted := s.injector.SendPaste()
 	s.sleep(200 * time.Millisecond)
 
 	s.restoreClipboardSnapshot(snap, text)
-	return injected, injected
+	if !pasted {
+		return false, msgPasteRejected
+	}
+	return true, ""
 }
 
 // restoreClipboardSnapshot 恢复快照: 仅当剪贴板仍为本次注入的文本时执行,

@@ -556,8 +556,8 @@ func TestSendPasteRejected(t *testing.T) {
 	if st.Phase != PhaseError {
 		t.Fatalf("粘贴被拒时终态 phase = %s, want error", st.Phase)
 	}
-	if st.Message != "输入失败" {
-		t.Errorf("终态文案 = %q, want %q", st.Message, "输入失败")
+	if st.Message != msgPasteRejected {
+		t.Errorf("终态文案 = %q, want %q (粘贴被拒要给出权限原因, 不能退化成通用文案)", st.Message, msgPasteRejected)
 	}
 	if got, want := cb.ops(), []string{"snap", "set", "restore"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("剪贴板操作序列 = %v, want %v", got, want)
@@ -613,7 +613,7 @@ func TestStartDeadlineWhenPreviousTaskStuck(t *testing.T) {
 	}
 }
 
-// 剪贴板写入失败: 恢复未落盘的快照, 报"输入失败", 不粘贴
+// 剪贴板写入失败: 恢复未落盘的快照, 报"剪贴板操作失败", 不粘贴
 func TestClipboardSetFailureNoInjection(t *testing.T) {
 	inj := newFakeInjector()
 	cb := &fakeClipboard{text: "原内容", setFail: true}
@@ -624,8 +624,8 @@ func TestClipboardSetFailureNoInjection(t *testing.T) {
 		t.Fatalf("Start 失败: %v", err)
 	}
 	st := waitTerminal(t, svc)
-	if st.Phase != PhaseError || st.Message != "输入失败" {
-		t.Fatalf("终态 = %s/%q, want error/输入失败", st.Phase, st.Message)
+	if st.Phase != PhaseError || st.Message != msgClipboardFailed {
+		t.Fatalf("终态 = %s/%q, want error/%q", st.Phase, st.Message, msgClipboardFailed)
 	}
 	if calls := inj.calls(); len(calls) != 0 {
 		t.Errorf("SetText 失败不应粘贴, got %v", calls)
