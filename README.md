@@ -2,11 +2,13 @@
 
 **键盘模拟输入器** —— 在文本框中输入内容，5 秒后自动模拟键盘键入到任意目标窗口。
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/screenshot-light.png">
-  <img alt="Type 主界面：文本输入框、绕过粘贴检测与文本直投开关、延迟滑块，以及正在逐字符输入中的进度状态" src="assets/screenshot-light.png" width="540">
-</picture>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/screenshot-light.png">
+    <img alt="Type 主界面：文本输入框、绕过粘贴检测与文本直投开关、延迟滑块，以及正在逐字符输入中的进度状态" src="assets/screenshot-light.png" width="540">
+  </picture>
+</p>
 
 ---
 

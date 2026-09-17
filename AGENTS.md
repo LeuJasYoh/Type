@@ -35,13 +35,17 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 - `frontend/` — 自包含 Vite 项目（package.json / node_modules 都在这里，不在仓库根）
 - `assets/` — 图标源图与产物、version.rc（screenshot-light.png / screenshot-dark.png 为 README
   配图，README 用 `<picture>` + `prefers-color-scheme` 引用，GitHub 会自行按访问者主题切换）
-- **README 配图的复现方式**（两张都是本机 125% 缩放下**真实窗口**的截屏，不是无头浏览器渲染）：
-  临时页 = `internal/web/dist/index.html` 开头插一段打桩脚本（定义 `startTyping` /
-  `getTypingStatus` 等四个绑定并自动摆出运行态），用 `go build -tags dev` + `TYPE_DEV_URL`
-  指向本地服务，让产品自己的 WebView2 窗口加载它，再截客户端区（PowerShell 里先
-  `SetProcessDpiAwarenessContext` 再 `CopyFromScreen`，否则坐标被系统虚拟化量到的是逻辑像素）。
-  别走无头/内置浏览器截图：该通道在非 1:1 像素密度下会把画面平铺错位；站点自定义元素
-  `themed-picture` 也说明 `<picture>` 是 GitHub 明确支持的特性
+- **README 配图的复现方式**（1080×900，2 倍像素密度）：
+  ① 临时页 = `internal/web/dist/index.html` 开头插一段打桩脚本（定义 `startTyping` /
+  `getTypingStatus` 等四个绑定并自动摆出运行态），再补一段停用 transition/animation 的样式
+  （否则进度条的入场动画在无头下停在 0 高度）；用本地 HTTP 服务提供——`file://` 下
+  localStorage 不可用，主题没法显式指定；
+  ② 用系统已装的 Edge 无头截图：`msedge --headless=new --force-device-scale-factor=2
+  --window-size=540,450 --virtual-time-budget=8000 --user-data-dir=<临时目录>
+  --screenshot=<out.png> <URL>`，不弹窗口、不碰用户桌面。
+  两个已验证死路，别再走：内置浏览器截图通道在非 1:1 像素密度下会把画面平铺成多份；
+  截真实窗口（改窗口尺寸/截屏）会干扰用户桌面。`<picture>` 是 GitHub 明确支持的特性
+  （渲染时会被包一层自家的 `themed-picture`），配图用 `<p align="center">` 居中
 - `testdata/` — 手工测试页（paste-guard.html / completion-guard.html），无任何自动引用；用法写在文件头注释里
 - `tools/wmcharprobe/` — 注入通道探针（dev 工具，不进产品链路）：WM_CHAR 文本直投 vs SendInput 按键
   注入的 A/B 验证，direct 模式逐字镜像产品文本直投算法可做端到端预演；读 completion-guard.html 的
