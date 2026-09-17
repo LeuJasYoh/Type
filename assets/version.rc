@@ -24,7 +24,7 @@ BEGIN
             VALUE "LegalCopyright",   "Copyright (C) 2025-2026 LeuJasYoh"
             VALUE "OriginalFilename", "Type.exe"
             VALUE "ProductName",      "Type"
-            VALUE "ProductVersion",   "1.5.0-rc.1"
+            VALUE "ProductVersion",   "1.5.0"
         END
     END
     BLOCK "VarFileInfo"
