@@ -2,7 +2,7 @@
 <!--
   completion-guard — 手工测试页(无任何自动引用, 不被构建或测试加载)
 
-  用途: 复刻"限制粘贴 + 关键词候选补全"的在线编程编辑器(学习通作业题一类),
+  用途: 复刻"限制粘贴 + 关键词候选补全"的在线编程编辑器(在线作业平台的代码框一类),
         验证 Type 逐字符注入时补全弹窗对空格/回车/Tab 的劫持,
         并定位究竟是哪个键触发了"接受候选"。
   用法: 浏览器打开本文件 → 在"预期文本"框粘贴参照内容 → 在 Type 里输入同样
@@ -150,7 +150,7 @@ footer{font-size:11px;color:var(--text2);text-align:center;padding-bottom:12px}
         <td class="yes">原样落盘(ret 后没有空格)</td>
       </tr>
     </table>
-    <p class="desc" style="margin-top:8px">对照法:把对应开关(或学习通里对应的嫌疑习惯)关掉重跑,乱形消失即坐实。Type 的"文本直投"模式(字符走 WM_CHAR 文本层、无按键事件)下,补全接受与括号配对都不应触发——本页全部开关打开,注入结果也应与预期文本完全一致(tools/wmcharprobe 可自动化验证)。</p>
+    <p class="desc" style="margin-top:8px">对照法:把对应开关(或在真实编辑器里对应的嫌疑习惯)关掉重跑,乱形消失即坐实。Type 的"文本直投"模式(字符走 WM_CHAR 文本层、无按键事件)下,补全接受与括号配对都不应触发——本页全部开关打开,注入结果也应与预期文本完全一致(tools/wmcharprobe 可自动化验证)。</p>
   </div>
 
   <footer>completion-guard · 本地测试页,供 Type 验证补全弹窗场景,与 paste-guard 配套</footer>
