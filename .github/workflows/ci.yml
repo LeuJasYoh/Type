@@ -84,7 +84,9 @@ jobs:
       - name: 版本同步幂等性
         shell: pwsh
         run: |
-          $ver = (Select-String -Path cmd/type/main.go -Pattern 'version\s*=\s*"([\d.]+)"').Matches[0].Groups[1].Value
+          # 与 build.ps1 同款正则: 版本可带预发布后缀(如 1.5.0-rc.1),
+          # 校验完整字符串确实同步到了两个产物文件
+          $ver = (Select-String -Path cmd/type/main.go -Pattern 'version\s*=\s*"([\d.]+(?:-[0-9A-Za-z.]+)?)"').Matches[0].Groups[1].Value
           foreach ($f in @('assets/version.rc', 'frontend/package.json')) {
             $text = [System.IO.File]::ReadAllText($f)
             if ($text -notmatch [regex]::Escape($ver)) { Write-Host "$f 未同步到版本 $ver"; exit 1 }

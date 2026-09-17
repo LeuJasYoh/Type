@@ -1,4 +1,4 @@
-# build.ps1 — 一键构建 Type
+﻿# build.ps1 — 一键构建 Type
 # 版本号单一来源: cmd/type/main.go 中的 `version` 变量, 此处自动同步到
 # assets/version.rc / assets/winres/winres.json / frontend/package.json;
 # 前端 Vue + Vite 构建为 internal/web/dist/index.html 单文件后嵌入,
@@ -12,22 +12,25 @@ $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $root
 
 # ── 1. 从 cmd/type/main.go 提取版本号 (单一来源) ──────
-$m = Select-String -Path "cmd\type\main.go" -Pattern 'version\s*=\s*"([\d.]+)"'
+# 版本可带预发布后缀(如 1.5.0-rc.1): FILEVERSION 只允许数字, 取后缀前的
+# 数字部分; 完整字符串进 ProductVersion 与 package.json(semver 兼容)
+$m = Select-String -Path "cmd\type\main.go" -Pattern 'version\s*=\s*"([\d.]+(?:-[0-9A-Za-z.]+)?)"'
 if (-not $m) { throw "cmd/type/main.go 中未找到 version 变量" }
 $ver = $m.Matches[0].Groups[1].Value
 
-$parts = @($ver -split '\.')
+$base = $ver -replace '-.*$', ''
+$parts = @($base -split '\.')
 while ($parts.Count -lt 4) { $parts += "0" }
-$v4CSV = ($parts[0..3] -join ',')          # 1,2,0,0  (FILEVERSION)
+$v4CSV = ($parts[0..3] -join ',')          # 1,2,0,0  (FILEVERSION, 纯数字)
 $v4Dot = ($parts[0..3] -join '.')          # 1.2.0.0  (资源 FileVersion)
-$v3Dot = ($parts[0..2] -join '.')          # 1.2.0    (资源 ProductVersion)
 
 # ── 2. 同步 assets/version.rc ─────────────────────────
 $rc = [System.IO.File]::ReadAllText("$root\assets\version.rc")
 $rc = $rc -replace 'FILEVERSION\s+[\d,]+',    "FILEVERSION     $v4CSV"
 $rc = $rc -replace 'PRODUCTVERSION\s+[\d,]+', "PRODUCTVERSION  $v4CSV"
 $rc = $rc -replace '"FileVersion",\s*"[^"]+"',    ('"FileVersion",      "' + $v4Dot + '"')
-$rc = $rc -replace '"ProductVersion",\s*"[^"]+"', ('"ProductVersion",   "' + $v3Dot + '"')
+# ProductVersion 携带完整版本(含 rc 等预发布后缀), 是 exe 属性里可见的那行
+$rc = $rc -replace '"ProductVersion",\s*"[^"]+"', ('"ProductVersion",   "' + $ver + '"')
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText("$root\assets\version.rc", $rc, $utf8NoBom)
 

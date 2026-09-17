@@ -20,6 +20,8 @@ const (
 	VK_CONTROL = 0x11
 	VK_V       = 0x56
 	VK_RETURN  = 0x0D
+	VK_ESCAPE  = 0x1B
+	VK_TAB     = 0x09
 )
 
 type KEYBDINPUT struct {
@@ -48,7 +50,7 @@ func (win32Injector) SendRune(r rune) bool {
 	if r >= 0xFF00 && r <= 0xFFEF {
 		// 全角标点 (U+FF00-FFEF) — KEYEVENTF_UNICODE 有系统级 bug
 		// 改用 WM_CHAR 直接注入到前台窗口
-		return sendCharViaWMChar(r)
+		return sendCharUnitsViaWMChar(r)
 	}
 	for _, u := range utf16Units(r) {
 		if !sendChar16(u) {
@@ -57,6 +59,21 @@ func (win32Injector) SendRune(r rune) bool {
 	}
 	return true
 }
+
+// SendText 文本直投: 逐 UTF-16 码元经 WM_CHAR 直达前台焦点窗口 —— 不产生
+// 按键事件, 目标编辑器挂在 keydown 层的补全弹窗劫持(空格/回车被当作
+// "接受候选")与括号自动配对均无从触发。实测(Edge/Chromium 网页编辑器,
+// tools/wmcharprobe + testdata/completion-guard.html): 文本逐字符原样落盘、
+// 零 keydown、零配对; 与 SendRune 的按键层注入互为镜像
+func (win32Injector) SendText(r rune) bool { return sendCharUnitsViaWMChar(r) }
+
+// SendTab 注入 Tab 真键: 文本直投下回车/Tab 无法走文本层, 仍按键注入,
+// 由业务层负责先发 Esc 关闭可能挂着的补全弹窗(见 sendEscaped)
+func (win32Injector) SendTab() bool { return sendVK(VK_TAB) }
+
+// SendEscape 注入 Esc 真键: 关闭目标编辑器的补全弹窗(其键义劫持的唯一
+// 解除手段), 供文本直投模式在回车/Tab 前调用
+func (win32Injector) SendEscape() bool { return sendVK(VK_ESCAPE) }
 
 func (win32Injector) SendEnter() bool { return sendVK(VK_RETURN) }
 
@@ -112,20 +129,31 @@ func utf16Units(r rune) []uint16 {
 	return []uint16{0xD800 | uint16(r>>10)&0x3FF, 0xDC00 | uint16(r)&0x3FF}
 }
 
-// sendCharViaWMChar 通过 WM_CHAR 消息直接向前台窗口注入字符
-// 绕过 KEYEVENTF_UNICODE 对全角标点的处理 bug
-func sendCharViaWMChar(r rune) bool {
+// sendCharUnitsViaWMChar 通过 WM_CHAR 消息向前台焦点窗口注入一个 rune
+// (超出 BMP 时按代理对拆成两条消息)。两条用途共用: 全角标点绕行
+// (KEYEVENTF_UNICODE 系统级 bug)与文本直投 SendText
+func sendCharUnitsViaWMChar(r rune) bool {
 	hwnd := focusedHWND()
 	if hwnd == 0 {
-		// 兜底：退化为 SendInput (全角标点均在 BMP 内, uint16 安全)
-		return sendChar16(uint16(r))
+		// 兜底：退化为 SendInput (逐码元按键注入)
+		for _, u := range utf16Units(r) {
+			if !sendChar16(u) {
+				return false
+			}
+		}
+		return true
 	}
 	// WM_CHAR 的 lParam 设 1 表示模拟键盘输入;
 	// 带超时发送, 目标窗口挂起时放弃而不是卡死输入循环
 	var result uintptr
-	ret, _, _ := procSendMessageTimeoutW.Call(hwnd, WM_CHAR, uintptr(r), 1, SMTO_ABORTIFHUNG, 1000, uintptr(unsafe.Pointer(&result)))
-	time.Sleep(2 * time.Millisecond)
-	return ret != 0
+	for _, u := range utf16Units(r) {
+		ret, _, _ := procSendMessageTimeoutW.Call(hwnd, WM_CHAR, uintptr(u), 1, SMTO_ABORTIFHUNG, 1000, uintptr(unsafe.Pointer(&result)))
+		if ret == 0 {
+			return false
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return true
 }
 
 func sendVK(vk uint16) bool {

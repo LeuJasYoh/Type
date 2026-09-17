@@ -16,13 +16,16 @@ import (
 // ─── 平台能力接口(消费方定义, Win32 实现见 win32_*.go) ──
 
 // TextInjector 字符注入能力。
-// 三个方法均返回"本次注入是否被系统接受": SendInput 在 UIPI 拦截(目标窗口
+// 六个方法均返回"本次注入是否被系统接受": SendInput 在 UIPI 拦截(目标窗口
 // 权限更高)、工作站锁定或切到安全桌面时整体失败且不产生任何按键, 此时
 // 返回 false, 状态机据此报错而不是把静默失败当成输入完成
 type TextInjector interface {
-	SendRune(r rune) bool // 含全角标点 WM_CHAR 绕行
+	SendRune(r rune) bool // 按键层字符注入, 含全角标点 WM_CHAR 绕行
+	SendText(r rune) bool // 文本层字符注入(WM_CHAR 直投), 见文本直投
 	SendEnter() bool
-	SendPaste() bool // Ctrl+V
+	SendTab() bool
+	SendEscape() bool // 关闭目标编辑器的补全弹窗
+	SendPaste() bool  // Ctrl+V
 }
 
 // ClipboardFormat 剪贴板单一格式的原始字节快照
@@ -118,8 +121,12 @@ func (s *TypingService) Status() *TypingStatus {
 	return s.typingStatus.Load().(*TypingStatus)
 }
 
-// Start 启动一次输入任务(倒计时 + 注入)
-func (s *TypingService) Start(text string, delay int, forceSendInput bool) (string, error) {
+// Start 启动一次输入任务(倒计时 + 注入)。
+// forceSendInput 绕过剪贴板降级强制逐字符; textDirect 为文本直投:
+// 字符经 WM_CHAR 文本层注入(无按键事件), 目标编辑器挂在 keydown 层的
+// 补全弹窗劫持与括号自动配对均无从触发; 回车/Tab 无法走文本层,
+// 自动先发 Esc 关闭补全弹窗再按键
+func (s *TypingService) Start(text string, delay int, forceSendInput bool, textDirect bool) (string, error) {
 	// 上一任务活跃且并非取消收尾: 拒绝重入
 	if s.runningFlag.Load() && !s.cancelFlag.Load() {
 		return "", fmt.Errorf("已有输入任务在运行中，请先取消或等待完成")
@@ -134,7 +141,7 @@ func (s *TypingService) Start(text string, delay int, forceSendInput bool) (stri
 		Progress:     -1,
 		TargetWindow: s.foreground.Title(),
 	})
-	go s.runTypingTask(gen, text, delay, forceSendInput)
+	go s.runTypingTask(gen, text, delay, forceSendInput, textDirect)
 	return "started", nil
 }
 
@@ -153,7 +160,7 @@ func (s *TypingService) Cancel() (string, error) {
 
 // runTypingTask 执行一次完整的输入任务(倒计时 + 注入)。
 // 倒计时初态已由 Start 同步写入, 此处从衔接/认领 runningFlag 开始。
-func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceSendInput bool) {
+func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceSendInput bool, textDirect bool) {
 	// gen 守卫的状态写入: 任务被更新一代的操作取代后, 静默停止输出
 	setStatus := func(st *TypingStatus) {
 		if gen == s.taskGen.Load() {
@@ -258,9 +265,19 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 			if cancelled() {
 				break
 			}
-			if r == '\n' {
+			// 注入通道分流: 文本直投把字符送到文本层(WM_CHAR, 无按键事件),
+			// 弹窗劫持与括号配对都挂在 keydown 上因而无从触发; 回车/Tab 无法
+			// 走文本层, 仍按键注入但先经 sendEscaped 用 Esc 关掉可能挂着的弹窗
+			switch {
+			case textDirect && r == '\n':
+				ok = s.sendEscaped(s.injector.SendEnter)
+			case textDirect && r == '\t':
+				ok = s.sendEscaped(s.injector.SendTab)
+			case textDirect:
+				ok = s.injector.SendText(r)
+			case r == '\n':
 				ok = s.injector.SendEnter()
-			} else {
+			default:
 				ok = s.injector.SendRune(r)
 			}
 			if !ok {
@@ -317,6 +334,18 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 		}
 		setStatus(&TypingStatus{Phase: PhaseError, Message: msg, Progress: -1, TargetWindow: target})
 	}
+}
+
+// sendEscaped 先注入 Esc 关闭目标编辑器的补全弹窗, 稍候再注入 key。
+// 文本直投下只有回车/Tab 还是真按键(文本层无键义可劫持), 这两个键若在弹窗
+// 开着时到达会被解释为"接受候选"; 弹窗开着则被 Esc 关闭(目的达成),
+// 没开则基本无操作 —— 状态无关设计, 无需探测弹窗是否真的存在
+func (s *TypingService) sendEscaped(key func() bool) bool {
+	if !s.injector.SendEscape() {
+		return false
+	}
+	s.sleep(20 * time.Millisecond)
+	return key()
 }
 
 // typeTextViaClipboard 执行剪贴板粘贴输入（两种模式共用）。

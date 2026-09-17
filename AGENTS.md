@@ -34,10 +34,19 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 - `internal/web/` — go:embed 前端产物包（dist/index.html 入库，免 Node 亦可 go build/test）
 - `frontend/` — 自包含 Vite 项目（package.json / node_modules 都在这里，不在仓库根）
 - `assets/` — 图标源图与产物、version.rc（screenshot.png 为 README 截图）
-- `testdata/` — 手工测试页（paste-guard.html），无任何自动引用；用法写在文件头注释里
+- `testdata/` — 手工测试页（paste-guard.html / completion-guard.html），无任何自动引用；用法写在文件头注释里
+- `tools/wmcharprobe/` — 注入通道探针（dev 工具，不进产品链路）：WM_CHAR 文本直投 vs SendInput 按键
+  注入的 A/B 验证，读 completion-guard.html 的 title 遥测作判据；用法见文件头注释
 - `.github/workflows/ci.yml` — CI：gofmt / vet / test / build + 前端产物漂移检查 + 版本同步检查
 - **版本号单一来源**：`cmd/type/main.go` 的 `version` 变量；build.ps1 自动同步到
-  version.rc / package.json——改版本只改 main.go，然后跑 build.ps1
+  version.rc / package.json——改版本只改 main.go，然后跑 build.ps1。
+  版本可带预发布后缀（如 `1.5.0-rc.1`）：FILEVERSION 取后缀前的数字部分（资源字段
+  只允许数字），ProductVersion / package.json 用完整串（semver 兼容）；
+  ci.yml 的版本检查用同款正则校验完整串
+- **build.ps1 必须保留 UTF-8 BOM**（文件首三字节 EF BB BF）：Windows PowerShell 5.1
+  对无 BOM 的 .ps1 按系统 ANSI（中文系统为 GBK）解码，中文注释的尾字节会吞掉换行，
+  把下一行代码并进注释成为死代码——ProductVersion 同步曾因此静默失效。改脚本后若
+  BOM 丢失（部分编辑器会吞），构建产物版本属性会先出症状
 - **入库的前端产物必须与源码同步**：改了 `frontend/src` 就要跑 build.ps1 重新生成
   `internal/web/dist/index.html` 并一起提交；忘了的话 CI 的漂移检查会失败
   （go:embed 是静默的，本地不会有任何报错）
@@ -54,6 +63,7 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 ## 行为契约（冻结，改动需双端同步）
 
 - webview Bind 函数名：`startTyping` / `cancelTyping` / `toggleTopmost` / `getTypingStatus`
+  （`startTyping` 参数：text, delay, forceSendInput, textDirect）
 - `TypingStatus` JSON 字段与 phase 枚举值（`frontend/src/types.ts` 是其镜像）
 - 状态机用户可见文案逐字符保持——它们是发布语言的一部分
 - 已冻结文案清单：`剩余 N 秒 — 请聚焦目标窗口...` / `检测到中文，正在操作剪贴板...` /
@@ -62,6 +72,7 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 - 允许**新增**文案（如注入被拒时的 `输入中断：目标窗口拒绝了模拟按键，可能其权限高于 Type`、
   `粘贴未生效：...`、`无内容可输入`、焦点未切换时的 `未切换到目标窗口：...`），
   但不得改写上面已冻结的那些
+- 界面 pill 开关文案：`绕过粘贴检测`、`文本直投`（v1.5.0）——按钮文字同样是发布语言
 
 ## 目标窗口与轮询（两条踩过坑的约定，勿"优化"掉）
 
@@ -74,6 +85,27 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
   判断"链条继续"，而 pollTimer 只在该判断保护的分支里赋值，直接调用会让链条
   第一拍后断裂、状态永不刷新（症状：预览不跟随、完成后启动键卡死）。
   恢复可见/焦点时无条件重启链条，作为 WebView2 挂起定时器的兜底
+
+## 文本直投（v1.5.0-rc.1，WM_CHAR 文本层注入）
+
+- 带代码补全的在线编辑器（学习通作业等）有两个按键层行为会打乱注入的代码：
+  ① 补全弹窗把空格/回车/Tab 的键义改写为"接受候选"；② 括号自动配对（键入
+  `(` 自动补 `)`，闭括号"跳过"行为因编辑器而异，Backspace 方案会在无配对的
+  编辑器里误删字符，不存在状态安全的按键序列）。两个行为都挂在 keydown 层，
+  而 `WM_CHAR` 注入不产生任何按键事件 —— 字符走 `SendText`（文本层）后，
+  实测逐字符原样落盘、零 keydown、零配对（证据：tools/wmcharprobe 的 char
+  模式 c=精确长度/k=0/p=0，keys 模式同文本 p+2、a+1）
+- 回车/Tab 无法走文本层，只能真按键，故 `sendEscaped`（Esc + 20ms + 本键）
+  内置在文本直投模式里：弹窗开着则被关闭（目的达成），没开则基本无操作。
+  这是状态无关设计：不回答"弹窗在不在"，只做两种状态下都安全的动作，
+  勿改成"探测后再 Esc"。默认关闭：无弹窗目标里凭空 Esc 有副作用
+  （浏览器全屏退出、Vim 退出插入态、关页面弹窗）
+- 仅逐字符路径生效；剪贴板粘贴不经弹窗劫持，无此逻辑。textDirect 为
+  startTyping 第 4 参；发送目标沿用 focusedHWND()（前台线程焦点窗口），
+  拿不到窗口时 SendText 退化为 SendInput 按键注入
+- 验收/复现页 testdata/completion-guard.html（补全 + 配对开关、逐键日志、
+  预期对比、title 遥测）；勿带 `?allow-paste=1` 做 Type 实测——那是停用
+  粘贴拦截、供自动化注入的诊断模式
 
 ## 提交前：检查文档同步（每次提交必做）
 
@@ -94,8 +126,9 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 
 - Win32 怪癖的注释保留在 win32_*.go 实现内（全角标点 WM_CHAR 绕行、GDI 句柄型
   格式跳过、图标句柄所有权约定）——它们是本代码库最有价值的文档，重构时勿删
-- 注入失败必须可见：`TextInjector` 三个方法都返回 bool（SendInput 被 UIPI 拦截时
-  整体返回 0）。不要把返回值改成 void——那正是"静默失败被报成输入完成"的来源
+- 注入失败必须可见：`TextInjector` 六个方法都返回 bool（SendInput 被 UIPI 拦截时
+  整体返回 0；WM_CHAR 直投的 SendMessageTimeout 超时/失败返回 0）。不要把返回值
+  改成 void——那正是"静默失败被报成输入完成"的来源
 - 剪贴板恢复守卫用 `Clipboard.HoldsText`（按原始字节比对）而不是 `GetText` 的
   字符串比较：CF_UNICODETEXT 内嵌 NUL 时字符串会在 NUL 处截断而误判
 - 仅支持 `windows && (amd64 || arm64)`；386 编译被刻意禁止（INPUT 结构体手工

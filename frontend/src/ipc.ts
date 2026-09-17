@@ -5,8 +5,8 @@ import type { TypingStatus } from './types';
 
 declare global {
   interface Window {
-    /** 启动输入: text 内容, delay 倒计时秒数, forceRaw 是否绕过剪贴板降级 */
-    startTyping(text: string, delay: number, forceRaw: boolean): Promise<string>;
+    /** 启动输入: text 内容, delay 倒计时秒数, forceRaw 是否绕过剪贴板降级, textDirect 是否文本直投 */
+    startTyping(text: string, delay: number, forceRaw: boolean, textDirect: boolean): Promise<string>;
     /** 取消当前输入 */
     cancelTyping(): Promise<string>;
     /** 切换窗口置顶, 返回新状态 */
@@ -23,8 +23,8 @@ export function errMsg(err: unknown): string {
   return '操作失败';
 }
 
-export const startTyping = (text: string, delay: number, forceRaw: boolean) =>
-  window.startTyping(text, delay, forceRaw);
+export const startTyping = (text: string, delay: number, forceRaw: boolean, textDirect: boolean) =>
+  window.startTyping(text, delay, forceRaw, textDirect);
 
 export const cancelTyping = () => window.cancelTyping();
 

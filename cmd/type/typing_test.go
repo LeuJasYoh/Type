@@ -16,7 +16,8 @@ import (
 
 // ─── fakes ────────────────────────────────────────────
 
-// fakeInjector 记录注入调用序列: "r:X"=字符, "E"=回车, "V"=粘贴。
+// fakeInjector 记录注入调用序列: "r:X"=按键层字符, "T:X"=文本层字符(文本直投),
+// "E"=回车, "TAB"=Tab, "ESC"=Esc, "V"=粘贴。
 // failAfter >= 0 时模拟系统拒绝注入(SendInput 返回 0, 典型为 UIPI),
 // 第 failAfter 个注入起返回 false 且不记录事件
 type fakeInjector struct {
@@ -40,7 +41,13 @@ func (f *fakeInjector) record(event string) bool {
 
 func (f *fakeInjector) SendRune(r rune) bool { return f.record("r:" + string(r)) }
 
+func (f *fakeInjector) SendText(r rune) bool { return f.record("T:" + string(r)) }
+
 func (f *fakeInjector) SendEnter() bool { return f.record("E") }
+
+func (f *fakeInjector) SendEscape() bool { return f.record("ESC") }
+
+func (f *fakeInjector) SendTab() bool { return f.record("TAB") }
 
 func (f *fakeInjector) SendPaste() bool { return f.record("V") }
 
@@ -281,12 +288,12 @@ func TestStartRejectsReentryWhileRunning(t *testing.T) {
 	release := make(chan struct{})
 	svc := newTestService(inj, &fakeClipboard{}, blockSleep(release))
 
-	if _, err := svc.Start("AB", 3, false); err != nil {
+	if _, err := svc.Start("AB", 3, false, false); err != nil {
 		t.Fatalf("首次 Start 失败: %v", err)
 	}
 	waitRunning(t, svc)
 
-	if _, err := svc.Start("CD", 1, false); err == nil {
+	if _, err := svc.Start("CD", 1, false, false); err == nil {
 		t.Fatal("运行中二次 Start 应被拒绝")
 	} else if got, want := err.Error(), "已有输入任务在运行中，请先取消或等待完成"; got != want {
 		t.Fatalf("重入错误文案 = %q, want %q", got, want)
@@ -307,7 +314,7 @@ func TestCancelDuringCountdown(t *testing.T) {
 	release := make(chan struct{})
 	svc := newTestService(inj, &fakeClipboard{}, blockSleep(release))
 
-	if _, err := svc.Start("中文", 5, false); err != nil {
+	if _, err := svc.Start("中文", 5, false, false); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
 	waitRunning(t, svc)
@@ -341,7 +348,7 @@ func TestAsciiTyping(t *testing.T) {
 		mu.Unlock()
 	})
 
-	if _, err := svc.Start("AB\r\nCD", 1, false); err != nil {
+	if _, err := svc.Start("AB\r\nCD", 1, false, false); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
 	if st := waitTerminal(t, svc); st.Phase != PhaseSuccess {
@@ -371,13 +378,74 @@ func TestAsciiTyping(t *testing.T) {
 	}
 }
 
+// 文本直投: 字符走文本层(T:), 空格不再需要 Esc(文本层无键义可劫持);
+// 回车/Tab 无法走文本层, 仍按键注入但前面必须各补一次 Esc 关闭补全弹窗
+func TestTextDirectRoutesViaTextLayer(t *testing.T) {
+	inj := newFakeInjector()
+	svc := newTestService(inj, &fakeClipboard{}, noSleep)
+
+	if _, err := svc.Start("a b\tc\nd", 1, false, true); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	if st := waitTerminal(t, svc); st.Phase != PhaseSuccess {
+		t.Fatalf("终态 phase = %s, want success", st.Phase)
+	}
+
+	// 序列: T:a, T:空格, T:b, Esc, TAB, T:c, Esc, E, T:d
+	want := []string{"T:a", "T: ", "T:b", "ESC", "TAB", "T:c", "ESC", "E", "T:d"}
+	if got := inj.calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("注入序列 = %q, want %q (字符走文本层, 回车/Tab 前有 Esc)", got, want)
+	}
+}
+
+// 文本直投关闭(默认): 仍走按键层, 无任何 Esc
+func TestTextDirectOffUsesKeyLayer(t *testing.T) {
+	inj := newFakeInjector()
+	svc := newTestService(inj, &fakeClipboard{}, noSleep)
+
+	if _, err := svc.Start("a b\n", 1, false, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	if st := waitTerminal(t, svc); st.Phase != PhaseSuccess {
+		t.Fatalf("终态 phase = %s, want success", st.Phase)
+	}
+
+	want := []string{"r:a", "r: ", "r:b", "E"}
+	if got := inj.calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("注入序列 = %q, want %q (文本直投关闭时不应出现 T:/Esc)", got, want)
+	}
+}
+
+// 文本直投下 Esc 被拒: 立即中止并报注入中断(回车/Tab 依赖 Esc 先行)
+func TestTextDirectEscapeRejected(t *testing.T) {
+	inj := newFakeInjector()
+	inj.failAfter = 2 // T:a、T:空格 通过, 其后的 Esc 被拒
+	svc := newTestService(inj, &fakeClipboard{}, noSleep)
+
+	if _, err := svc.Start("a \n", 1, false, true); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	st := waitTerminal(t, svc)
+	if st.Phase != PhaseError {
+		t.Fatalf("Esc 被拒时终态 phase = %s, want error", st.Phase)
+	}
+	if st.Message != msgPartialSendInput {
+		t.Errorf("终态文案 = %q, want %q", st.Message, msgPartialSendInput)
+	}
+	// "a \n" → T:a, T:空格, Esc(被拒) → 序列止于 T:空格
+	want := []string{"T:a", "T: "}
+	if got := inj.calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("注入序列 = %v, want %v (Esc 被拒后不应继续)", got, want)
+	}
+}
+
 // 中文路径: 快照 → 写入注入文本 → 粘贴 → 恢复 的调用顺序与恢复语义
 func TestChineseTypesViaClipboard(t *testing.T) {
 	inj := newFakeInjector()
 	cb := &fakeClipboard{text: "用户原文本"}
 	svc := newTestService(inj, cb, noSleep)
 
-	if _, err := svc.Start("你好", 1, false); err != nil {
+	if _, err := svc.Start("你好", 1, false, false); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
 	if st := waitTerminal(t, svc); st.Phase != PhaseSuccess {
@@ -405,7 +473,7 @@ func TestRestartAfterCancelSupersedesOldTask(t *testing.T) {
 	svc := newTestService(inj, &fakeClipboard{}, blockSleep(release))
 
 	// 旧任务: 停在倒计时
-	if _, err := svc.Start("旧任务文本", 5, false); err != nil {
+	if _, err := svc.Start("旧任务文本", 5, false, false); err != nil {
 		t.Fatalf("首次 Start 失败: %v", err)
 	}
 	waitRunning(t, svc)
@@ -414,7 +482,7 @@ func TestRestartAfterCancelSupersedesOldTask(t *testing.T) {
 		t.Fatalf("Cancel 失败: %v", err)
 	}
 	// 取消收尾尚未完成(旧任务仍持有 runningFlag)时立即重启
-	if _, err := svc.Start("新", 2, false); err != nil {
+	if _, err := svc.Start("新", 2, false, false); err != nil {
 		t.Fatalf("取消后应能立即重启: %v", err)
 	}
 	close(release)
@@ -460,7 +528,7 @@ func TestSendInputRejectedDuringTyping(t *testing.T) {
 	inj.failAfter = 2 // A B 通过, C 起被拒
 	svc := newTestService(inj, &fakeClipboard{}, noSleep)
 
-	if _, err := svc.Start("ABCDE", 1, false); err != nil {
+	if _, err := svc.Start("ABCDE", 1, false, false); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
 	st := waitTerminal(t, svc)
@@ -483,7 +551,7 @@ func TestSendPasteRejected(t *testing.T) {
 	cb := &fakeClipboard{text: "用户原文本"}
 	svc := newTestService(inj, cb, noSleep)
 
-	if _, err := svc.Start("你好", 1, false); err != nil {
+	if _, err := svc.Start("你好", 1, false, false); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
 	st := waitTerminal(t, svc)
@@ -510,7 +578,7 @@ func TestStartDeadlineWhenPreviousTaskStuck(t *testing.T) {
 	svc := newTestService(inj, &fakeClipboard{}, blockSleep(release))
 
 	// 第一个任务认领标志后停在 sleep 上, 迟迟不让出
-	if _, err := svc.Start("旧任务", 1, false); err != nil {
+	if _, err := svc.Start("旧任务", 1, false, false); err != nil {
 		t.Fatalf("首次 Start 失败: %v", err)
 	}
 	waitRunning(t, svc)
@@ -518,7 +586,7 @@ func TestStartDeadlineWhenPreviousTaskStuck(t *testing.T) {
 	// 用户取消, 随即立刻重启: 取消只置标志不等待旧任务退出, 于是新任务
 	// 必须在"标志仍被占着"的情况下自己等——这正是 deadline 分支的现实入口
 	svc.cancelFlag.Store(true)
-	if _, err := svc.Start("新任务", 1, false); err != nil {
+	if _, err := svc.Start("新任务", 1, false, false); err != nil {
 		t.Fatalf("取消后应能立即重启: %v", err)
 	}
 	const timeoutMsg = "启动失败：上一任务未能及时退出"
@@ -554,7 +622,7 @@ func TestClipboardSetFailureNoInjection(t *testing.T) {
 	seedSnapshot(cb, "原内容")
 	svc := newTestService(inj, cb, noSleep)
 
-	if _, err := svc.Start("中文", 1, false); err != nil {
+	if _, err := svc.Start("中文", 1, false, false); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
 	st := waitTerminal(t, svc)
@@ -599,7 +667,7 @@ func TestRestoreGuardUsesHoldsText(t *testing.T) {
 func TestEmptyTextDoesNotReportSuccess(t *testing.T) {
 	inj := newFakeInjector()
 	svc := newTestService(inj, &fakeClipboard{}, noSleep)
-	if _, err := svc.Start("", 1, false); err != nil {
+	if _, err := svc.Start("", 1, false, false); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
 	st := waitTerminal(t, svc)
@@ -615,7 +683,7 @@ func TestEmptyTextDoesNotReportSuccess(t *testing.T) {
 func TestTargetWindowLockedIntoFinalStatus(t *testing.T) {
 	inj := newFakeInjector()
 	svc := newTestService(inj, &fakeClipboard{}, noSleep)
-	if _, err := svc.Start("你好", 1, false); err != nil {
+	if _, err := svc.Start("你好", 1, false, false); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
 	st := waitTerminal(t, svc)
@@ -634,7 +702,7 @@ func TestSelfForegroundAbortsBeforeInjection(t *testing.T) {
 	cb := &fakeClipboard{}
 	svc := newTypingService(inj, cb, fakeForeground{title: "Type 测试", self: true})
 	svc.sleep = noSleep
-	if _, err := svc.Start("你好", 1, false); err != nil {
+	if _, err := svc.Start("你好", 1, false, false); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
 	st := waitTerminal(t, svc)
@@ -677,7 +745,7 @@ func TestCountdownPreviewFollowsCurrentForeground(t *testing.T) {
 		mu.Unlock()
 	}
 
-	if _, err := svc.Start("你好", 3, false); err != nil {
+	if _, err := svc.Start("你好", 3, false, false); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
 	st := waitTerminal(t, svc)

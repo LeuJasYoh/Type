@@ -12,6 +12,7 @@ const { theme, toggle: toggleTheme } = useTheme();
 const text = ref('');
 const delay = ref(5);
 const forceRaw = ref(false);
+const textDirect = ref(false);
 
 // 按码点计数(与 Go 端 []rune 进度分母一致), emoji 不重复计 2
 const charCount = computed(() => Array.from(text.value).length);
@@ -20,7 +21,7 @@ const charCount = computed(() => Array.from(text.value).length);
 const { status, isRunning, start, cancel } = useTypingTask();
 
 async function onStart(): Promise<void> {
-  await start(text.value, delay.value, forceRaw.value);
+  await start(text.value, delay.value, forceRaw.value, textDirect.value);
 }
 
 function onCancel(): void {
@@ -89,6 +90,21 @@ async function onTogglePin(): Promise<void> {
       >
         <span class="pill-dot" aria-hidden></span>
         <span>绕过粘贴检测</span>
+      </button>
+      <button
+        id="chkTextDirect"
+        type="button"
+        class="pill-toggle"
+        role="switch"
+        :class="{ on: textDirect }"
+        :aria-checked="textDirect"
+        :title="textDirect
+          ? '当前将绕过按键层直接注入文本：不触发补全弹窗与括号自动配对'
+          : '点击开启: 用于带代码补全/括号配对的在线编辑器(如学习通编程题)——字符绕过按键层直接注入文本，不触发补全弹窗与括号自动配对'"
+        @click="textDirect = !textDirect"
+      >
+        <span class="pill-dot" aria-hidden></span>
+        <span>文本直投</span>
       </button>
       <div class="delay-slider-row">
         <span class="slider-label">延迟</span>
