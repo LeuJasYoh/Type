@@ -45,7 +45,9 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
   --screenshot=<out.png> <URL>`，不弹窗口、不碰用户桌面。
   两个已验证死路，别再走：内置浏览器截图通道在非 1:1 像素密度下会把画面平铺成多份；
   截真实窗口（改窗口尺寸/截屏）会干扰用户桌面。`<picture>` 是 GitHub 明确支持的特性
-  （渲染时会被包一层自家的 `themed-picture`），配图用 `<p align="center">` 居中
+  （渲染时会被包一层自家的 `themed-picture`），配图用 `<p align="center">` 居中。
+  **`<img>` 不要写死 `width`**：留空时按 GitHub 的 `max-width:100%` 铺满正文列
+  （与旧 markdown 配图观感一致），写死会明显变小
 - `testdata/` — 手工测试页（paste-guard.html / completion-guard.html），无任何自动引用；用法写在文件头注释里
 - `tools/wmcharprobe/` — 注入通道探针（dev 工具，不进产品链路）：WM_CHAR 文本直投 vs SendInput 按键
   注入的 A/B 验证，direct 模式逐字镜像产品文本直投算法可做端到端预演；读 completion-guard.html 的
