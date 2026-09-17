@@ -99,8 +99,8 @@ async function onTogglePin(): Promise<void> {
         :class="{ on: textDirect }"
         :aria-checked="textDirect"
         :title="textDirect
-          ? '当前将绕过按键层直接注入文本：不触发补全弹窗与括号自动配对'
-          : '点击开启: 用于带代码补全/括号配对的在线编辑器(如学习通编程题)——字符绕过按键层直接注入文本，不触发补全弹窗与括号自动配对'"
+          ? '当前绕过按键层注入, 不触发补全弹窗与括号配对'
+          : '点击开启: 用于带代码补全的在线编辑器(如学习通编程题)'"
         @click="textDirect = !textDirect"
       >
         <span class="pill-dot" aria-hidden></span>
