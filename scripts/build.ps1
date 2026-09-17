@@ -1,6 +1,6 @@
 ﻿# build.ps1 — 一键构建 Type
 # 版本号单一来源: cmd/type/main.go 中的 `version` 变量, 此处自动同步到
-# assets/version.rc / assets/winres/winres.json / frontend/package.json;
+# assets/version.rc / frontend/package.json;
 # 前端 Vue + Vite 构建为 internal/web/dist/index.html 单文件后嵌入,
 # 再 windres + go build。产物 Type.exe 输出在仓库根目录。
 #

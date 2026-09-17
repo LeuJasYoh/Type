@@ -53,7 +53,7 @@ GUI       WebView2 (Edge Chromium)
 前端      Vue 3 + TypeScript, Vite 构建为单文件 HTML (无其他运行时依赖)
 构建      vue-tsc 类型检查 + Vite (vite-plugin-singlefile) + windres + go build
 CI        GitHub Actions (windows-latest): gofmt / go vet / go test / go build + 前端产物漂移检查 + 版本同步检查
-Win32 API SendInput (KEYEVENTF_UNICODE) + 剪贴板 (CF_UNICODETEXT, EnumClipboardFormats 全格式快照, RtlMoveMemory) + 前台窗口检测 (GetForegroundWindow) + 单实例互斥体 (CreateMutexW)
+Win32 API SendInput (KEYEVENTF_UNICODE) + WM_CHAR 文本直投 (SendMessageTimeoutW 直投焦点窗口) + 剪贴板 (CF_UNICODETEXT, EnumClipboardFormats 全格式快照, RtlMoveMemory) + 前台窗口检测 (GetForegroundWindow) + 单实例互斥体 (CreateMutexW)
 图标      圆角多尺寸 ICO（uv + Pillow 生成, scripts/gen_icon.py 字节级可复现）
 资源      windres 编译 .rc → .syso
 ```
@@ -73,9 +73,10 @@ Type/
 │   ├── win32_instance.go    ← 单实例守卫 (具名互斥体)
 │   ├── devserver_prod.go    ← 正式构建: 恒加载嵌入页面
 │   ├── devserver_dev.go     ← dev 构建 (`-tags dev`): 指向 Vite dev server
-│   ├── main_test.go         ← 单元测试 (UTF-16 拆分/ASCII/CJK 标点/剪贴板快照与守卫)
+│   ├── main_test.go         ← 单元测试 (UTF-16 拆分/ASCII/CJK 标点/剪贴板快照与守卫/窗口类图标索引)
 │   └── typing_test.go       ← 状态机单元测试 (fake 注入器/剪贴板, 不触真实系统)
 ├── internal/web/            ← go:embed 前端产物包
+│   ├── web.go               ← IndexHTML 嵌入声明 (供 cmd/type 经 SetHtml 加载)
 │   └── dist/index.html      ← Vite 构建产物: 自包含单文件 (入库)
 ├── frontend/                ← Vue 前端 (自包含 Vite 项目)
 │   ├── package.json / package-lock.json ← npm 定义 (vue / vite / vue-tsc 等)
@@ -103,8 +104,9 @@ Type/
 │   ├── build.ps1            ← 一键构建脚本（版本号单一来源）
 │   └── gen_icon.py          ← 图标资产生成 (uv run, Pillow)
 ├── tools/
-│   └── equivcheck/          ← 重构等价性验证 (go run ./tools/equivcheck, 逐函数比对函数体)
-├── testdata/                ← 手工测试页 (paste-guard.html, 用法见页内注释)
+│   ├── equivcheck/          ← 重构等价性验证 (go run ./tools/equivcheck, 逐函数比对函数体)
+│   └── wmcharprobe/         ← 注入通道探针 (WM_CHAR 文本直投 vs SendInput 按键, 用法见文件头注释)
+├── testdata/                ← 手工测试页 (paste-guard.html 防粘贴 / completion-guard.html 补全+配对, 用法见页内注释)
 ├── .github/workflows/ci.yml ← CI: gofmt / vet / test / build + 前端产物漂移检查 + 版本同步检查
 ├── go.mod / go.sum          ← Go 模块定义
 ├── pyproject.toml / uv.lock / .python-version ← Python 资产管线依赖 (uv 管理, 锁定 Pillow)
@@ -172,12 +174,12 @@ go build -tags dev -o Type-dev.exe ./cmd/type   # 终端 2: 带 dev 标签构建
 
 ## 已知限制
 
-- **目标窗口权限** —— Windows UIPI 限制：以普通权限运行的 Type 无法向管理员权限的窗口（如管理员 CMD/PowerShell）注入输入，此时 `SendInput` 不产生任何按键。程序检查注入结果并明确报错（如"目标窗口拒绝了模拟按键"），不会把静默失败报成"输入完成"。如需面向提权窗口，请以管理员身份运行 Type.exe。
+- **目标窗口权限** —— Windows UIPI 限制：以普通权限运行的 Type 无法向管理员权限的窗口（如管理员 CMD/PowerShell）注入输入，此时 `SendInput` 不产生任何按键。程序检查注入结果并按路径给出具体原因（逐字符路径报"输入中断：目标窗口拒绝了模拟按键…"；剪贴板路径区分"剪贴板操作失败"与"粘贴未生效：目标窗口拒绝了模拟按键…"），不会把静默失败报成"输入完成"。如需面向提权窗口，请以管理员身份运行 Type.exe。
 - **剪贴板特殊格式** —— 延迟渲染（delayed rendering）及句柄型格式（CF_BITMAP 等）无法同步快照，粘贴模式结束时会丢失；常见场景（截图工具、浏览器复制图片、资源管理器复制文件）均在快照恢复范围内。
 - **杀毒软件误报** —— 键盘模拟（SendInput）与剪贴板操作是杀软启发式扫描的常见敏感组合，若下载或运行时被误报，请添加信任或自行编译。
 - **单实例** —— 同时只允许运行一个实例（第二个实例会提示并退出），避免两个实例争抢剪贴板与键盘焦点。
 - **焦点仍在 Type 自身时不输入** —— 倒计时结束时若焦点仍停留在 Type 窗口（未切换到目标窗口），程序会明确报错并放弃输入，不会把内容打进自己的输入框。
-- **文本直投的边界** —— 补全弹窗无法从外部探测，回车/Tab 前会无条件注入 `Esc`（弹窗开着则被关闭，没开则基本无操作）；目标处于浏览器全屏（Esc 会退出全屏）或 Vim 等 Esc 是功能键的场景请勿开启。个别不处理文本消息的目标（如部分游戏）不适用，关掉即可。
+- **文本直投的边界** —— 该开关只作用于逐字符路径：**含中文（非 ASCII）的文本默认仍走剪贴板粘贴**，不受它影响；要让中文也走文本层，需同时勾选"绕过粘贴检测"（此时全角标点不再需要 WM_CHAR 绕行，直接经文本层注入）。补全弹窗无法从外部探测，回车/Tab 前会无条件注入 `Esc`（弹窗开着则被关闭，没开则基本无操作）；目标处于浏览器全屏（Esc 会退出全屏）或 Vim 等 Esc 是功能键的场景请勿开启。个别不处理文本消息的目标（如部分游戏）不适用，关掉即可。
 
 ### 手工测试页
 
