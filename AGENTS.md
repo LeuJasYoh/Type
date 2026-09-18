@@ -10,6 +10,9 @@
 # 末尾会读回 exe 版本资源, 版本没链进去就构建失败)
 powershell -ExecutionPolicy Bypass -File ./scripts/build.ps1
 
+# ARM64 发行版 (纯 Go 交叉编译, 不需要额外工具链; 资源由 mkres 按架构生成)
+$env:GOARCH = "arm64"; go build -ldflags="-H windowsgui -s -w" -o Type-arm64.exe ./cmd/type
+
 # Go 验证三件套 (任何 Go 改动后, 与 CI 同款)
 gofmt -l ./cmd ./internal ./tools   # 应输出为空
 go vet ./...
@@ -187,5 +190,8 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
 - 仅支持 `windows && (amd64 || arm64)`；386 编译被刻意禁止（INPUT 结构体手工
   填充仅匹配 64 位 ABI）
 - 提交信息：中文一行式主题 + 正文说明要点
-- 发版流程：改 `version` → `scripts/build.ps1` → 提交推送 →
-  `gh release create vX.Y.Z ./Type.exe`（附件为根目录 Type.exe）
+- 发版流程：改 `version` → `scripts/build.ps1`（出 amd64；资源两架构一并生成）→
+  `$env:GOARCH="arm64"; go build -ldflags="-H windowsgui -s -w" -o Type-arm64.exe ./cmd/type`
+  → 两个 exe 各打一个 zip（`Type-<版本>-windows-<架构>.zip`）→ 提交推送 →
+  `gh release create vX.Y.Z <两个 zip>`（一个 tag 挂两个附件）。根目录 Type.exe（amd64）
+  留在本地、不入库

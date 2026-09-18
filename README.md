@@ -45,9 +45,22 @@
 
 | 组件 | 要求 |
 |------|------|
-| 操作系统 | Windows 10 / 11（x64） |
+| 操作系统 | Windows 10 / 11（x64 / ARM64） |
 | 运行时 | **无** — 单文件，零依赖 |
 | WebView2 | Windows 11 预装，Windows 10 需安装 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) |
+
+---
+
+## 下载
+
+从 [Releases](https://github.com/LeuJasYoh/Type/releases) 下载对应架构的压缩包，解压后双击 `Type.exe` 即可，无需安装：
+
+| 压缩包 | 适用机器 |
+|---|---|
+| `Type-<版本>-windows-amd64.zip` | 常规 PC（Intel / AMD 处理器） |
+| `Type-<版本>-windows-arm64.zip` | Windows on ARM（骁龙等 ARM 处理器） |
+
+拿不准就选 amd64：ARM64 版仅适用于 ARM 处理器的 Windows 设备。
 
 ---
 
@@ -141,8 +154,11 @@ cd frontend
 npm install                         # 安装前端依赖 (仅首次)
 npm run build                       # vue-tsc 类型检查 + Vite → ../internal/web/dist/index.html
 cd ..
-go run ./tools/mkres -version 1.5.1 -icon assets/icon.ico -out cmd/type/version
+go run ./tools/mkres -version 1.5.2 -icon assets/icon.ico -out cmd/type/version
 go build -ldflags="-H windowsgui -s -w" -o Type.exe ./cmd/type
+
+# 交叉编译 ARM64 版 (纯 Go, 不需要额外工具链; 资源上一步已按架构生成)
+$env:GOARCH = "arm64"; go build -ldflags="-H windowsgui -s -w" -o Type-arm64.exe ./cmd/type
 
 # 图标资产再生成 (可选, 需 uv): 更换 assets/icon.jpg 后执行, 产物字节级可复现
 uv run scripts/gen_icon.py
