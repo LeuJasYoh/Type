@@ -9,7 +9,7 @@ import (
 
 	"github.com/LeuJasYoh/type/internal/web"
 
-	"github.com/webview/webview_go"
+	"github.com/jchv/go-webview2"
 )
 
 var version = "1.5.1"
@@ -24,10 +24,10 @@ func main() {
 		return
 	}
 
-	w := webview.New(true)
+	w := webview2.New(true)
 	defer w.Destroy()
 	w.SetTitle("Type " + version)
-	w.SetSize(540, 450, webview.HintFixed)
+	w.SetSize(540, 450, webview2.HintFixed)
 
 	// 设置窗口图标（首次 + 延迟重试）
 	hw := uintptr(w.Window())
