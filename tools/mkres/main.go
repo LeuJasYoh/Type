@@ -1,4 +1,4 @@
-// mkres 生成 Windows 资源目标文件 (.syso): 应用图标 + 版本信息。
+// mkres 生成 Windows 资源目标文件 (.syso): 应用图标 + 版本信息 + manifest。
 //
 // 取代此前的 windres + assets/version.rc —— 构建链因此不再需要 MinGW/binutils。
 // 资源构成与 .rc 时代保持一致:
@@ -8,6 +8,10 @@
 //     图标组为 0x0409——winres 的分配方式, Windows 按语言回退取用, 与旧产物等价
 //   - 版本资源 id=1, 语言 0x0409(en-US), FileOS/FileFlags/FILETYPE 由 winres 按
 //     VOS_NT_WINDOWS32 / 0x3f / VFT_APP 填充, 与旧 .rc 的取值一致
+//
+// 唯一新增的是 manifest(id=1, 语言 0x0409): 声明 DPI 感知(PerMonitorV2)。旧的
+// webview 库在运行时调 SetProcessDpiAwarenessContext, 换绑定后这层能力要由
+// manifest 补回, 否则缩放非 100% 的显示器上窗口会被位图拉伸而发虚
 //
 // 用法:
 //
@@ -131,6 +135,19 @@ func buildResourceSet(ver, iconPath string) (*winres.ResourceSet, error) {
 		return nil, err
 	}
 	rs.SetVersionInfo(vi)
+	// DPI 感知声明: 缺了它, 缩放不是 100% 的显示器上整个窗口会被系统当成 96 DPI
+	// 画面做位图拉伸, 界面连带网页内容一起发虚。此前这一步由 webview 库在运行时
+	// 调 SetProcessDpiAwarenessContext 完成, 换成纯 Go 绑定后由 manifest 承担
+	// (manifest 在进程启动前生效, 也是微软推荐的做法)。
+	// permonitorv2 带 system 回退(系统读不懂前者的取值时退化为系统级感知);
+	// ExecutionLevel 必须是 asInvoker —— 本程序按设计以普通权限运行, 提权会改变
+	// UIPI 判定, 使"目标窗口拒绝了模拟按键"这条提示失真。
+	// 生成的 manifest 还会带 winres 默认的 supportedOS 声明(win7~win10),
+	// 本程序只用 Win10+ 才有的 API, 这些声明不影响实际可运行范围
+	rs.SetManifest(winres.AppManifest{
+		ExecutionLevel: winres.AsInvoker,
+		DPIAwareness:   winres.DPIPerMonitorV2,
+	})
 	return rs, nil
 }
 

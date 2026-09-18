@@ -36,6 +36,7 @@ var (
 	procGetWindowTextW           = user32.NewProc("GetWindowTextW")
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
 	procGetGUIThreadInfo         = user32.NewProc("GetGUIThreadInfo")
+	procGetDpiForWindow          = user32.NewProc("GetDpiForWindow")
 	procGlobalFree               = kernel32.NewProc("GlobalFree")
 	procRegisterClipboardFormatW = user32.NewProc("RegisterClipboardFormatW")
 	procSetWindowPos             = user32.NewProc("SetWindowPos")

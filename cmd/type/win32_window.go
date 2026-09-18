@@ -1,6 +1,6 @@
 //go:build windows && (amd64 || arm64)
 
-// ─── 窗口: 置顶/图标/前台窗口探测 ─────────────────────
+// ─── 窗口: 尺寸与 DPI/置顶/图标/前台窗口探测 ──────────
 
 package main
 
@@ -19,6 +19,20 @@ const (
 	IMAGE_ICON     = 1
 	LR_DEFAULTSIZE = 0x0040
 )
+
+// ─── 窗口尺寸与 DPI ───────────────────────────────────
+
+// scaledForDPI 把以 96 DPI 为基准的逻辑尺寸换算成窗口所在显示器的物理像素。
+// 进程的 DPI 感知由 tools/mkres 生成的 manifest 声明(PerMonitorV2), 声明之后
+// 窗口坐标一律按物理像素解释: 不换算的话, 在 125% 缩放的显示器上固定尺寸的
+// 窗口会比预期小两成(旧的 webview 库在内部替调用方做了同一件事)
+func scaledForDPI(hwnd uintptr, w, h int) (int, int) {
+	dpi, _, _ := procGetDpiForWindow.Call(hwnd)
+	if dpi < 96 {
+		dpi = 96 // 调用失败(0)或异常值: 按 100% 处理
+	}
+	return w * int(dpi) / 96, h * int(dpi) / 96
+}
 
 // ─── 窗口置顶 ─────────────────────────────────────────
 

@@ -27,10 +27,14 @@ func main() {
 	w := webview2.New(true)
 	defer w.Destroy()
 	w.SetTitle("Type " + version)
-	w.SetSize(540, 450, webview2.HintFixed)
+
+	// 先取窗口句柄: 尺寸要按该窗口所在显示器的 DPI 换算成物理像素
+	// (manifest 声明了 PerMonitorV2, 见 win32_window.go 的 scaledForDPI)
+	hw := uintptr(w.Window())
+	cw, ch := scaledForDPI(hw, 540, 450)
+	w.SetSize(cw, ch, webview2.HintFixed)
 
 	// 设置窗口图标（首次 + 延迟重试）
-	hw := uintptr(w.Window())
 	retrySetIcon(hw)
 
 	// 业务服务: 平台能力以接口注入, Win32 实现见 win32_*.go;

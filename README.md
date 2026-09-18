@@ -61,7 +61,7 @@ GUI       WebView2 (Edge Chromium)
 CI        GitHub Actions (windows-latest): gofmt / go vet / go test / go build + 前端产物漂移检查 + 版本同步检查
 Win32 API SendInput (KEYEVENTF_UNICODE) + WM_CHAR 文本直投 (SendMessageTimeoutW 直投焦点窗口) + 剪贴板 (CF_UNICODETEXT, EnumClipboardFormats 全格式快照, RtlMoveMemory) + 前台窗口检测 (GetForegroundWindow) + 单实例互斥体 (CreateMutexW)
 图标      圆角多尺寸 ICO（uv + Pillow 生成, scripts/gen_icon.py 字节级可复现）
-资源      tools/mkres (纯 Go, winres) 生成图标 + 版本信息 → .syso
+资源      tools/mkres (纯 Go, winres) 生成图标 + 版本信息 + manifest (DPI 感知) → .syso
 ```
 
 ### 项目结构
@@ -111,7 +111,7 @@ Type/
 │   └── gen_icon.py          ← 图标资产生成 (uv run, Pillow)
 ├── tools/
 │   ├── equivcheck/          ← 重构等价性验证 (go run ./tools/equivcheck, 逐函数比对函数体)
-│   ├── mkres/               ← 资源生成: 图标 + 版本信息 → version_<arch>.syso (取代 windres 与 .rc)
+│   ├── mkres/               ← 资源生成: 图标 + 版本信息 + DPI 感知 manifest → version_<arch>.syso
 │   └── wmcharprobe/         ← 注入通道探针 (WM_CHAR 文本直投 vs SendInput 按键, 用法见文件头注释)
 ├── testdata/                ← 手工测试页 (paste-guard.html 防粘贴 / completion-guard.html 补全+配对, 用法见页内注释)
 ├── .github/workflows/ci.yml ← CI: gofmt / vet / test / build + 前端产物漂移检查 + 版本同步检查
@@ -185,6 +185,7 @@ go build -tags dev -o Type-dev.exe ./cmd/type   # 终端 2: 带 dev 标签构建
 - **杀毒软件误报** —— 键盘模拟（SendInput）与剪贴板操作是杀软启发式扫描的常见敏感组合，若下载或运行时被误报，请添加信任或自行编译。
 - **单实例** —— 同时只允许运行一个实例（第二个实例会提示并退出），避免两个实例争抢剪贴板与键盘焦点。
 - **焦点仍在 Type 自身时不输入** —— 倒计时结束时若焦点仍停留在 Type 窗口（未切换到目标窗口），程序会明确报错并放弃输入，不会把内容打进自己的输入框。
+- **多显示器与缩放** —— 界面按显示器缩放渲染（已声明 PerMonitorV2 DPI 感知，缩放非 100% 时文字清晰不虚），窗口尺寸在启动时按所在显示器的缩放换算；把窗口拖到**缩放比例不同**的另一台显示器上不会重新适配（重启即可恢复）。单显示器无感。
 - **文本直投的边界** —— 该开关只作用于逐字符路径：**含中文（非 ASCII）的文本默认仍走剪贴板粘贴**，不受它影响；要让中文也走文本层，需同时勾选"绕过粘贴检测"（此时全角标点不再需要 WM_CHAR 绕行，直接经文本层注入）。补全弹窗无法从外部探测，回车前会无条件注入 `Esc`（弹窗开着则被关闭，没开则基本无操作）；目标处于浏览器全屏（Esc 会退出全屏）或 Vim 等 Esc 是功能键的场景请勿开启。个别不处理文本消息的目标（如部分游戏）不适用，关掉即可。
 
 ## 手工测试页

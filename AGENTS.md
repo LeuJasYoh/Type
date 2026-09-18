@@ -165,6 +165,13 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
 
 ## 其他
 
+- **DPI 感知不能丢**（v1.5.1 换 webview 绑定时踩过）：进程 DPI 感知由 `tools/mkres`
+  生成的 manifest 声明（PerMonitorV2）。旧库是在运行时调 `SetProcessDpiAwarenessContext`，
+  纯 Go 绑定没有这层，少了 manifest 就会在缩放非 100% 的显示器上被系统做位图拉伸、
+  整窗发虚。声明之后窗口坐标**一律按物理像素解释**，逻辑尺寸必须经 `win32_window.go`
+  的 `scaledForDPI` 换算，否则固定尺寸窗口会比预期小两成（旧库在内部做过同一件事）。
+  跨不同缩放显示器拖动时的重新适配（WM_DPICHANGED）需要子类化窗口过程，当前未做，
+  已记在 README 已知限制里
 - Win32 怪癖的注释保留在 win32_*.go 实现内（全角标点 WM_CHAR 绕行、GDI 句柄型
   格式跳过、图标句柄所有权约定）——它们是本代码库最有价值的文档，重构时勿删
 - 注入失败必须可见：`TextInjector` 五个方法都返回 bool（SendInput 被 UIPI 拦截时
