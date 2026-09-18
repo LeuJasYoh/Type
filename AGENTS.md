@@ -6,7 +6,7 @@
 ## 常用命令
 
 ```powershell
-# 一键构建 (版本同步 → 前端 → windres → go build, 产物 Type.exe 在仓库根;
+# 一键构建 (版本同步 → 前端 → 资源生成 → go build, 产物 Type.exe 在仓库根;
 # 末尾会读回 exe 版本资源, 版本没链进去就构建失败)
 powershell -ExecutionPolicy Bypass -File ./scripts/build.ps1
 
@@ -33,7 +33,7 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
   单实例守卫在 win32_instance.go；`devserver_prod.go` / `devserver_dev.go` 由 `dev` 构建标签二选一
 - `internal/web/` — go:embed 前端产物包（dist/index.html 入库，免 Node 亦可 go build/test）
 - `frontend/` — 自包含 Vite 项目（package.json / node_modules 都在这里，不在仓库根）
-- `assets/` — 图标源图与产物、version.rc（screenshot-light.png / screenshot-dark.png 为 README
+- `assets/` — 图标源图与产物（screenshot-light.png / screenshot-dark.png 为 README
   配图，README 用 `<picture>` + `prefers-color-scheme` 引用，GitHub 会自行按访问者主题切换）
 - **README 配图的复现方式**（1080×900，2 倍像素密度）：
   ① 临时页 = `internal/web/dist/index.html` 开头插一段打桩脚本（定义 `startTyping` /
@@ -54,9 +54,9 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
   title 遥测（c/k/n/p/a/L/h）作判据；用法见文件头注释
 - `.github/workflows/ci.yml` — CI：gofmt / vet / test / build + 前端产物漂移检查 + 版本同步检查
 - **版本号单一来源**：`cmd/type/main.go` 的 `version` 变量；build.ps1 自动同步到
-  version.rc / package.json——改版本只改 main.go，然后跑 build.ps1。
-  版本可带预发布后缀（如 `1.5.0-rc.1`）：FILEVERSION 取后缀前的数字部分（资源字段
-  只允许数字），ProductVersion / package.json 用完整串（semver 兼容）；
+  package.json，并在构建期把它传给 `tools/mkres` 生成资源——改版本只改 main.go，
+  然后跑 build.ps1。版本可带预发布后缀（如 `1.5.0-rc.1`）：资源里的数字字段取后缀前
+  的数字部分（只允许数字），ProductVersion / package.json 用完整串（semver 兼容）；
   ci.yml 的版本检查用同款正则校验完整串
 - **build.ps1 必须保留 UTF-8 BOM**（文件首三字节 EF BB BF）：Windows PowerShell 5.1
   对无 BOM 的 .ps1 按系统 ANSI（中文系统为 GBK）解码，中文注释的尾字节会吞掉换行，
@@ -73,7 +73,12 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 | 业务代码 / Go 测试 / 入库工具脚本 | Go（equivcheck 即 Go 写的） |
 | 前端 | TypeScript + Vite |
 | 构建编排 | PowerShell |
+| Windows 资源生成（图标/版本信息） | Go（tools/mkres，winres 库），取代 windres + .rc |
 | 图标/图像资产管线 | Python，仅经 uv（pyproject 锁定 pillow==12.3.0） |
+
+构建链**不含 C 编译器**：webview 绑定是纯 Go 的 go-webview2，资源由 tools/mkres 生成，
+`go build` / `go test` 都不再需要 cgo——新增依赖时别把 cgo 带回来（那会重新要求
+MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
 
 ## 行为契约（冻结，改动需双端同步）
 
@@ -150,7 +155,7 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 | CI 步骤 / 检查项 | README.md 技术栈与项目结构的 CI 行 + 本文件「布局与单一来源」 |
 | 命令 / 构建流程 / 目录结构 | 本文件「常用命令」「布局与单一来源」+ README「自行编译」 |
 | 非显而易见的新约定 / 踩坑结论 | 本文件对应章节（如「目标窗口与轮询」） |
-| 版本号 | 只改 cmd/type/main.go；version.rc / package.json 交给 build.ps1 |
+| 版本号 | 只改 cmd/type/main.go；package.json 交给 build.ps1，资源版本由 tools/mkres 构建期生成 |
 
 另有一条措辞约定：**用户可见文本不点名具体第三方产品/平台**（README、界面文案
 一律适用）。要交代适用场景就用类别描述（如「带代码补全的在线编辑器」）——点名

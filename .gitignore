@@ -2,7 +2,7 @@
 # go build 产物
 Type.exe
 *.exe
-# windres 生成
+# 资源生成 (tools/mkres)
 *.syso
 # Vite 构建产物 (仅 index.html 入库: go:embed 引用, 免 Node 亦可 go build/test)
 internal/web/dist/*

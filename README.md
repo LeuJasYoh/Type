@@ -57,11 +57,11 @@
 语言      Go 1.26
 GUI       WebView2 (Edge Chromium)
 前端      Vue 3 + TypeScript, Vite 构建为单文件 HTML (无其他运行时依赖)
-构建      vue-tsc 类型检查 + Vite (vite-plugin-singlefile) + windres + go build
+构建      vue-tsc 类型检查 + Vite (vite-plugin-singlefile) + go run ./tools/mkres + go build
 CI        GitHub Actions (windows-latest): gofmt / go vet / go test / go build + 前端产物漂移检查 + 版本同步检查
 Win32 API SendInput (KEYEVENTF_UNICODE) + WM_CHAR 文本直投 (SendMessageTimeoutW 直投焦点窗口) + 剪贴板 (CF_UNICODETEXT, EnumClipboardFormats 全格式快照, RtlMoveMemory) + 前台窗口检测 (GetForegroundWindow) + 单实例互斥体 (CreateMutexW)
 图标      圆角多尺寸 ICO（uv + Pillow 生成, scripts/gen_icon.py 字节级可复现）
-资源      windres 编译 .rc → .syso
+资源      tools/mkres (纯 Go, winres) 生成图标 + 版本信息 → .syso
 ```
 
 ### 项目结构
@@ -101,17 +101,17 @@ Type/
 │       │   └── useTheme.ts      ← 明暗主题切换
 │       └── components/
 │           └── StatusBar.vue    ← 状态栏 + 进度条
-├── assets/                  ← 静态资源与 Windows 资源定义
-│   ├── icon.ico             ← 应用图标 (version.rc 引用, windres 编译进 exe)
+├── assets/                  ← 静态资源（图标源图与产物、README 配图）
+│   ├── icon.ico             ← 应用图标 (tools/mkres 编译进 exe)
 │   ├── icon.jpg             ← 图标源图
 │   ├── screenshot-light.png ← README 配图（浅色，兜底图）
-│   ├── screenshot-dark.png  ← README 配图（深色，随 GitHub 主题自动切换）
-│   └── version.rc           ← 版本/作者信息资源 (windres 编译为 cmd/type/version.syso)
+│   └── screenshot-dark.png  ← README 配图（深色，随 GitHub 主题自动切换）
 ├── scripts/
 │   ├── build.ps1            ← 一键构建脚本（版本号单一来源）
 │   └── gen_icon.py          ← 图标资产生成 (uv run, Pillow)
 ├── tools/
 │   ├── equivcheck/          ← 重构等价性验证 (go run ./tools/equivcheck, 逐函数比对函数体)
+│   ├── mkres/               ← 资源生成: 图标 + 版本信息 → version_<arch>.syso (取代 windres 与 .rc)
 │   └── wmcharprobe/         ← 注入通道探针 (WM_CHAR 文本直投 vs SendInput 按键, 用法见文件头注释)
 ├── testdata/                ← 手工测试页 (paste-guard.html 防粘贴 / completion-guard.html 补全+配对, 用法见页内注释)
 ├── .github/workflows/ci.yml ← CI: gofmt / vet / test / build + 前端产物漂移检查 + 版本同步检查
@@ -126,15 +126,14 @@ Type/
 
 ```powershell
 # 前置条件
-#   - Go 1.26+ (与 go.mod 声明一致)
-#   - MinGW-w64 (gcc, windres)
+#   - Go 1.26+ (与 go.mod 声明一致; 不需要 C 工具链)
 #   - Node.js 20+ (前端构建期需要, 产物无需)
 #   - WebView2 库（go mod tidy 自动下载）
 
 cd Type
 go mod tidy
 
-# 一键构建 (推荐): 版本号同步 → Vue 前端构建 → windres → go build
+# 一键构建 (推荐): 版本号同步 → Vue 前端构建 → 资源生成 → go build
 powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
 
 # 或手动分步:
@@ -142,7 +141,7 @@ cd frontend
 npm install                         # 安装前端依赖 (仅首次)
 npm run build                       # vue-tsc 类型检查 + Vite → ../internal/web/dist/index.html
 cd ..
-windres -I assets -o cmd/type/version.syso assets/version.rc
+go run ./tools/mkres -version 1.5.1 -icon assets/icon.ico -out cmd/type/version
 go build -ldflags="-H windowsgui -s -w" -o Type.exe ./cmd/type
 
 # 图标资产再生成 (可选, 需 uv): 更换 assets/icon.jpg 后执行, 产物字节级可复现
