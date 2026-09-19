@@ -13,6 +13,9 @@
 python tools/less-ai-tone/scripts/check-translationese.py README.md release-notes/
 ```
 
+本副本对 `check-translationese.py` 只做过一处改动：参数允许直接传文件。上游只收
+目录，传文件会静默落进"找不到语料"，量单份文档时容易踩。其余文件与上游一致。
+
 脚本输出每千字的标记频率，拿人类基准对照就能看出哪一项超了。本仓库 2026-09 清理时
 的读数：破折号 README 6.87、AGENTS.md 5.22，人类基准 0.80、AI 均值 2.38，是唯一
 超标的项；其余标记均为 0 或落在豁免范围。

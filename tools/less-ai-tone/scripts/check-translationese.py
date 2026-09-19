@@ -58,7 +58,15 @@ def main():
     if not dirs:
         print(__doc__)
         return
-    files = [f for d in dirs for f in Path(d).rglob("*.md") if f.parent.name != "_meta"]
+    # 副本改动：参数可以是文件，也可以照上游的用法传目录。上游只收目录，
+    # 传单个文件会静默落进下面的"找不到语料"，量单份文档时容易踩
+    files = []
+    for d in dirs:
+        p = Path(d)
+        if p.is_file():
+            files.append(p)
+        else:
+            files += [f for f in p.rglob("*.md") if f.parent.name != "_meta"]
     if not files:
         print(f"找不到语料：{dirs}")
         return
