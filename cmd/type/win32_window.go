@@ -189,18 +189,26 @@ func focusedHWND() uintptr {
 // hwnd 为本程序主窗口句柄, 用于识别"前台是否是自己"
 type win32Foreground struct{ hwnd uintptr }
 
-// IsSelf 前台窗口是否为本程序自身
-func (f win32Foreground) IsSelf() bool {
-	hwnd, _, _ := procGetForegroundWindow.Call()
-	return hwnd != 0 && hwnd == f.hwnd
-}
-
-// Title 读取当前前台窗口标题(用于目标窗口预览)
-func (win32Foreground) Title() string {
+// Sample 读取当前顶层前台窗口: 句柄 + 标题 + 是否为本程序自身。
+// 三要素取自同一次 GetForegroundWindow: 分多次读会在两次调用的间隙发生
+// 切换时得到互相矛盾的组合(展示的标题不是锁定下来的那个窗口; "非自身"
+// 判定与目标锁定之间切回 Type, 漂移守卫从第一步就失效)。
+// 跨进程顶层窗口的标题是 GetWindowTextW 直接取回的缓存文本, 不会因目标
+// 进程无响应而阻塞(系统如此设计), 因此每拍都读标题是安全的
+func (f win32Foreground) Sample() ForegroundSample {
 	hwnd, _, _ := procGetForegroundWindow.Call()
 	if hwnd == 0 {
-		return ""
+		return ForegroundSample{} // 无前台窗口: 标识 0, 标题空, 非自身
 	}
+	return ForegroundSample{
+		ID:    TargetID(hwnd),
+		Title: windowTitle(hwnd),
+		Self:  hwnd == f.hwnd,
+	}
+}
+
+// windowTitle 读取指定顶层窗口的标题(目标窗口预览与终态展示用)
+func windowTitle(hwnd uintptr) string {
 	buf := make([]uint16, 256)
 	n, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(unsafe.SliceData(buf))), uintptr(len(buf)))
 	if n == 0 {

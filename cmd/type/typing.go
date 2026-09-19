@@ -46,12 +46,25 @@ type Clipboard interface {
 	RestoreSnapshotRaw(snap []ClipboardFormat) // 无条件写回(调用方需确认剪贴板未被用户改动)
 }
 
+// TargetID 目标窗口的平台无关标识(不透明): 业务层只做相等比较, 不解释内容。
+// Win32 侧就是顶层前台窗口句柄。判定"还是不是同一个窗口"必须用标识而不是
+// 标题 —— 标题会重名、会中途变化(浏览器切标签、文档改名), 标识不会
+type TargetID uintptr
+
+// ForegroundSample 一次前台窗口采样的结果
+type ForegroundSample struct {
+	ID    TargetID // 顶层前台窗口标识; 无前台窗口时为 0
+	Title string   // 该窗口标题(供预览与终态展示)
+	Self  bool     // 是否为本程序自身窗口
+}
+
 // Foreground 前台窗口探测
 type Foreground interface {
-	Title() string
-	// IsSelf 前台是否为本程序主窗口: 用户点击启动后若一直停留在 Type 上,
-	// 注入会落进自己的输入框, 须能识别并阻止
-	IsSelf() bool
+	// Sample 读取当前前台窗口。三要素必须取自同一次读取: 分多次读会在
+	// 两次调用的间隙发生切换时得到互相矛盾的组合 —— 展示的标题不是锁定
+	// 下来的那个窗口, 或"非自身"判定与目标锁定之间用户切回 Type, 让漂移
+	// 守卫从第一步就失效
+	Sample() ForegroundSample
 }
 
 // ─── 输入状态（前端轮询读取）───────────────────────────
@@ -85,7 +98,19 @@ const (
 	msgPasteRejected = "粘贴未生效：目标窗口拒绝了模拟按键，可能其权限高于 Type"
 	// msgClipboardFailed 剪贴板打开/写入本身失败, 尚未走到粘贴这一步
 	msgClipboardFailed = "剪贴板操作失败"
+	// msgTargetSwitchedIdle 漂移守卫中止, 且一个字都没送出去(逐字符路径
+	// 尚未注入, 或剪贴板路径尚未粘贴): 目标窗口里没有留下任何内容
+	msgTargetSwitchedIdle = "输入中断：目标窗口已切换，未输入任何内容"
+	// msgTargetSwitchedPasted 粘贴已经发出而目标窗口随即改变: 落点可能已
+	// 不是锁定目标, 内容是否送达无法确认 —— 不能报"输入完成"
+	msgTargetSwitchedPasted = "输入中断：目标窗口已切换，粘贴结果无法确认"
 )
+
+// msgTargetSwitchedTyped 逐字符路径中途检测到目标窗口切换。已注入的部分
+// 无法撤回, 报出已输入的字数, 让用户知道目标窗口里留下了多少内容
+func msgTargetSwitchedTyped(n int) string {
+	return fmt.Sprintf("输入中断：目标窗口已切换，已输入 %d 字", n)
+}
 
 // ─── TypingService ────────────────────────────────────
 
@@ -133,16 +158,19 @@ func (s *TypingService) Start(text string, delay int, forceSendInput bool, textD
 		return "", fmt.Errorf("已有输入任务在运行中，请先取消或等待完成")
 	}
 	// 同步写入倒计时初态: 前端 await 本调用后才开启轮询,
-	// 保证首个 tick 必读到新状态; 过代旧任务被代数守卫拦截, 无法覆盖
+	// 保证首个 tick 必读到新状态; 过代旧任务被代数守卫拦截, 无法覆盖。
+	// baseline 随任务带走, 作为倒计时的初始显示状态 —— 与写入的状态同源,
+	// 倒计时循环据此判断"可见内容是否变化", 首拍不会重复写入
 	gen := s.taskGen.Add(1)
+	baseline := s.foreground.Sample()
 	s.typingStatus.Store(&TypingStatus{
 		Phase:        PhaseCountdown,
 		Message:      fmt.Sprintf("剩余 %d 秒 — 请聚焦目标窗口...", delay),
 		SecondsLeft:  delay,
 		Progress:     -1,
-		TargetWindow: s.foreground.Title(),
+		TargetWindow: baseline.Title,
 	})
-	go s.runTypingTask(gen, text, delay, forceSendInput, textDirect)
+	go s.runTypingTask(gen, text, delay, forceSendInput, textDirect, baseline)
 	return "started", nil
 }
 
@@ -160,8 +188,9 @@ func (s *TypingService) Cancel() (string, error) {
 }
 
 // runTypingTask 执行一次完整的输入任务(倒计时 + 注入)。
-// 倒计时初态已由 Start 同步写入, 此处从衔接/认领 runningFlag 开始。
-func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceSendInput bool, textDirect bool) {
+// 倒计时初态已由 Start 同步写入(baseline 即其采样), 此处从衔接/认领
+// runningFlag 开始。
+func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceSendInput bool, textDirect bool, baseline ForegroundSample) {
 	// gen 守卫的状态写入: 任务被更新一代的操作取代后, 静默停止输出
 	setStatus := func(st *TypingStatus) {
 		if gen == s.taskGen.Load() {
@@ -193,21 +222,33 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 	cancelled := s.cancelFlag.Load
 
 	// ── 倒计时 ──
-	// 目标预览 = 当前前台窗口逐秒刷新: 用户选择(聚焦)哪个窗口, 预览就是
-	// 哪个窗口 —— 它如实反映"若倒计时此刻结束, 输入将落进的地方"
-	for i := delay; i > 0; i-- {
+	// 目标预览 = 当前前台窗口, 100ms 节拍采样, 但只在可见内容变化时才写
+	// 状态: 秒边界写一次(文案与旧版逐字符一致), 窗口标识或标题一变立即
+	// 跟上(用户切到哪个窗口, 预览最多迟一拍), 其余节拍只采样不写。
+	// 采样与写状态分离后, 取消与切窗的响应从最坏 1 秒缩到 1 拍, 而每秒
+	// 10 次的冗余状态写入并不存在; 总时长仍是 delay 秒 —— 每拍
+	// sleep(tick), 共 delay*ticksPerSec 拍, 与旧实现每次写入后 sleep(1s)
+	// 的总时长一致
+	const tick = 100 * time.Millisecond
+	const ticksPerSec = int(time.Second / tick)
+	shownSec, shown := delay, baseline
+	for i := 0; i < delay*ticksPerSec; i++ {
 		if cancelled() {
 			return // Cancel 已写入取消状态
 		}
-		sec := i
-		setStatus(&TypingStatus{
-			Phase:        PhaseCountdown,
-			Message:      fmt.Sprintf("剩余 %d 秒 — 请聚焦目标窗口...", sec),
-			SecondsLeft:  sec,
-			Progress:     -1,
-			TargetWindow: s.foreground.Title(),
-		})
-		s.sleep(1 * time.Second)
+		sec := delay - i/ticksPerSec
+		sample := s.foreground.Sample()
+		if sec != shownSec || sample != shown {
+			shownSec, shown = sec, sample
+			setStatus(&TypingStatus{
+				Phase:        PhaseCountdown,
+				Message:      fmt.Sprintf("剩余 %d 秒 — 请聚焦目标窗口...", sec),
+				SecondsLeft:  sec,
+				Progress:     -1,
+				TargetWindow: sample.Title,
+			})
+		}
+		s.sleep(tick)
 	}
 	if cancelled() {
 		return
@@ -216,8 +257,10 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 	s.sleep(150 * time.Millisecond)
 
 	// 执行目标锁定: 倒计时结束时的前台窗口, 贯穿到执行与终态状态。
+	// 标识与标题取自同一次采样, 展示的标题一定就是锁定下来的那个窗口;
 	// 焦点仍在 Type 自身时注入会落进自己的输入框 —— 明确报错, 不静默打错地方
-	if s.foreground.IsSelf() {
+	locked := s.foreground.Sample()
+	if locked.Self {
 		setStatus(&TypingStatus{
 			Phase:    PhaseError,
 			Message:  "未切换到目标窗口：倒计时结束时焦点仍在 Type，请重新启动后聚焦目标窗口",
@@ -225,7 +268,7 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 		})
 		return
 	}
-	target := s.foreground.Title()
+	target := locked.Title
 
 	// ── 执行 ──
 	success := false
@@ -239,9 +282,9 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 			Phase: PhaseTyping, Message: "检测到中文，正在操作剪贴板...", Progress: -1,
 			TargetWindow: target,
 		})
-		// 失败原因由被调方给出: 剪贴板故障与"粘贴被目标窗口拒收"处置不同,
-		// 不能都退化成通用的"输入失败"
-		success, failMsg = s.typeTextViaClipboard(text)
+		// 失败原因由被调方给出: 剪贴板故障、目标窗口拒收 Ctrl+V、目标窗口
+		// 切换三者的处置不同, 不能都退化成通用的"输入失败"
+		success, failMsg = s.typeTextViaClipboard(text, locked.ID)
 		injected = success // 粘贴按键被接受即内容已送达
 		if !success && !cancelled() {
 			setStatus(&TypingStatus{
@@ -260,8 +303,18 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 
 		typed := 0
 		ok := true
+		drifted := false
 		for _, r := range runes {
 			if cancelled() {
+				break
+			}
+			// 漂移守卫: 每次注入前确认前台仍是倒计时结束时锁定的那个窗口。
+			// 判定按顶层窗口标识(严格): 输入法候选窗与补全弹窗不是顶层前台
+			// 窗口, 不会误触发; 用户切走(含切回 Type 自身)则立即停止, 不把
+			// 剩余内容打进错误的窗口。检查与注入之间仍有毫秒级窗口, 切换
+			// 恰好发生在其中时, 最多漏进一两个字符
+			if !s.targetHeld(locked.ID) {
+				drifted = true
 				break
 			}
 			// 注入通道分流: 文本直投把字符(含 Tab, WM_CHAR 可插入制表符)
@@ -307,6 +360,10 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 		}
 		if cancelled() {
 			success = false
+		} else if drifted {
+			// 已注入的部分无法撤回, 如实报出停在第几个字
+			failMsg = msgTargetSwitchedTyped(typed)
+			success = false
 		} else if !ok {
 			setStatus(&TypingStatus{Phase: PhaseTyping, Message: msgPartialSendInput, Progress: -1, TargetWindow: target})
 			failMsg = msgPartialSendInput
@@ -351,9 +408,14 @@ func (s *TypingService) sendEscaped(key func() bool) bool {
 // 粘贴前快照全部剪贴板格式, 结束后原样恢复, 不销毁用户已有的
 // 图片/文件等非文本内容。
 // 返回值: success 粘贴按键是否被系统接受(即内容是否送达);
-// failMsg 失败时用户可见的具体原因 —— 剪贴板故障与目标窗口拒收 Ctrl+V
-// 必须分开报; 成功或中途取消时为空(取消的状态由 Cancel 负责写入)
-func (s *TypingService) typeTextViaClipboard(text string) (success bool, failMsg string) {
+// failMsg 失败时用户可见的具体原因 —— 剪贴板故障、目标窗口拒收 Ctrl+V、
+// 目标窗口切换三者必须分开报; 成功或中途取消时为空(取消的状态由 Cancel
+// 负责写入)
+func (s *TypingService) typeTextViaClipboard(text string, locked TargetID) (success bool, failMsg string) {
+	// 粘贴前的漂移守卫: 目标已切走就一个字都不送, 也不碰剪贴板
+	if !s.targetHeld(locked) {
+		return false, msgTargetSwitchedIdle
+	}
 	snap := s.clipboard.Snapshot()
 	if !s.clipboard.SetText(text) {
 		// EmptyClipboard 可能已执行(分配阶段失败), 直接写回快照
@@ -366,14 +428,35 @@ func (s *TypingService) typeTextViaClipboard(text string) (success bool, failMsg
 		s.restoreClipboardSnapshot(snap, text)
 		return false, ""
 	}
+	// 写入剪贴板与粘贴之间还隔着 100ms 稳定等待, 期间目标可能被切走;
+	// 此刻放弃粘贴, 但剪贴板已经写过, 快照恢复照旧执行
+	if !s.targetHeld(locked) {
+		s.restoreClipboardSnapshot(snap, text)
+		return false, msgTargetSwitchedIdle
+	}
 	pasted := s.injector.SendPaste()
+	// 紧随其后的复检: SendPaste 返回后再漂移, 说明这次粘贴的落点已不是
+	// 锁定目标, 内容是否送达无法确认。检查刻意紧贴 SendPaste 而不放在
+	// 200ms 稳定等待之后 —— 用户在看到内容粘贴成功后才切窗口是正常操作,
+	// 那时顶多是"没多等一会儿", 不该被误报成失败
+	drifted := !s.targetHeld(locked)
 	s.sleep(200 * time.Millisecond)
 
 	s.restoreClipboardSnapshot(snap, text)
+	if drifted {
+		return false, msgTargetSwitchedPasted
+	}
 	if !pasted {
 		return false, msgPasteRejected
 	}
 	return true, ""
+}
+
+// targetHeld 当前顶层前台窗口是否仍是锁定的目标窗口(漂移守卫的判据)。
+// 按顶层窗口标识严格比对: 标题会重名, 不能用; 子窗口/焦点变化(输入法
+// 候选窗、补全弹窗、同一程序内换输入框)不是顶层前台变化, 不会误触发
+func (s *TypingService) targetHeld(locked TargetID) bool {
+	return s.foreground.Sample().ID == locked
 }
 
 // restoreClipboardSnapshot 恢复快照: 仅当剪贴板仍为本次注入的文本时执行,

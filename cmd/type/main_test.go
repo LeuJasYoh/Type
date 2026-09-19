@@ -269,19 +269,22 @@ type WNDCLASSEXW struct {
 	hIconSm       uintptr
 }
 
-// TestApplyWindowIconClassIndex 类图标索引必须真能被系统接受。
-// nIndex 是 WNDCLASSEX 内部字段的负字节偏移, 文档值 GCLP_HICON = -14 /
-// GCLP_HICONSM = -34, 代码里以按位取反表达(^uintptr(13) = -14)。
-// 值写错时 SetClassLongPtr 以 ERROR_INVALID_INDEX 返回 0 且什么都不做,
-// 返回值又没人采信 —— 图标重设会静默空转。这里真的建一个窗口跑一遍
-// applyWindowIcon, 再按文档索引把图标读回来核对: 索引一旦写错即刻变红
-func TestApplyWindowIconClassIndex(t *testing.T) {
+// testWindow 测试用的真实窗口: 注册一个临时窗口类并建窗, 清理随测试结束
+// 自动执行(先销毁窗口再注销类, t.Cleanup 的后进先出顺序正好满足)
+type testWindow struct {
+	className *uint16
+	hInst     uintptr
+}
+
+// newTestWindow 注册窗口类; tag 用于区分同类测试, 类名随进程与 tag 唯一
+func newTestWindow(t *testing.T, tag string) *testWindow {
+	t.Helper()
 	wndProc := syscall.NewCallback(func(hwnd, msg, wparam, lparam uintptr) uintptr {
 		ret, _, _ := procDefWindowProcW.Call(hwnd, msg, wparam, lparam)
 		return ret
 	})
 	hInst, _, _ := procGetModuleHandleW.Call(0)
-	className, _ := syscall.UTF16PtrFromString("TypeIconIndexTest-" + strconv.Itoa(os.Getpid()))
+	className, _ := syscall.UTF16PtrFromString("TypeTest-" + tag + "-" + strconv.Itoa(os.Getpid()))
 	wc := WNDCLASSEXW{
 		cbSize:        uint32(unsafe.Sizeof(WNDCLASSEXW{})),
 		lpfnWndProc:   wndProc,
@@ -291,14 +294,41 @@ func TestApplyWindowIconClassIndex(t *testing.T) {
 	if ret, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); ret == 0 {
 		t.Fatalf("RegisterClassExW 失败: %v", err)
 	}
-	defer procUnregisterClassW.Call(uintptr(unsafe.Pointer(className)), hInst)
+	t.Cleanup(func() { procUnregisterClassW.Call(uintptr(unsafe.Pointer(className)), hInst) })
+	return &testWindow{className: className, hInst: hInst}
+}
 
-	hwnd, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(className)),
-		uintptr(unsafe.Pointer(className)), 0, 0, 0, 0, 0, 0, 0, hInst, 0)
+// create 建出窗口并登记销毁, 返回句柄
+func (w *testWindow) create(t *testing.T, title string) uintptr {
+	t.Helper()
+	titlePtr, _ := syscall.UTF16PtrFromString(title)
+	hwnd, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(w.className)),
+		uintptr(unsafe.Pointer(titlePtr)), 0, 0, 0, 0, 0, 0, 0, w.hInst, 0)
 	if hwnd == 0 {
 		t.Fatalf("CreateWindowExW 失败: %v", err)
 	}
-	defer procDestroyWindow.Call(hwnd)
+	t.Cleanup(func() { procDestroyWindow.Call(hwnd) })
+	return hwnd
+}
+
+// TestWindowTitle 目标窗口标题读取: 建一个标题已知的窗口读回。
+// 漂移守卫按窗口标识判定, 但预览与终态展示靠标题, 这条守住 windowTitle
+func TestWindowTitle(t *testing.T) {
+	const title = "目标窗口标题"
+	hwnd := newTestWindow(t, "Title").create(t, title)
+	if got := windowTitle(hwnd); got != title {
+		t.Errorf("windowTitle = %q, want %q", got, title)
+	}
+}
+
+// TestApplyWindowIconClassIndex 类图标索引必须真能被系统接受。
+// nIndex 是 WNDCLASSEX 内部字段的负字节偏移, 文档值 GCLP_HICON = -14 /
+// GCLP_HICONSM = -34, 代码里以按位取反表达(^uintptr(13) = -14)。
+// 值写错时 SetClassLongPtr 以 ERROR_INVALID_INDEX 返回 0 且什么都不做,
+// 返回值又没人采信 —— 图标重设会静默空转。这里真的建一个窗口跑一遍
+// applyWindowIcon, 再按文档索引把图标读回来核对: 索引一旦写错即刻变红
+func TestApplyWindowIconClassIndex(t *testing.T) {
+	hwnd := newTestWindow(t, "IconIndex").create(t, "TypeIconIndexTest")
 
 	icon, _, _ := procLoadIconW.Call(0, 32512) // IDI_APPLICATION
 	if icon == 0 {

@@ -19,11 +19,14 @@ import (
 // fakeInjector 记录注入调用序列: "r:X"=按键层字符, "T:X"=文本层字符(文本直投),
 // "E"=回车, "ESC"=Esc, "V"=粘贴。
 // failAfter >= 0 时模拟系统拒绝注入(SendInput 返回 0, 典型为 UIPI),
-// 第 failAfter 个注入起返回 false 且不记录事件
+// 第 failAfter 个注入起返回 false 且不记录事件。
+// onInject 在每次成功记录后回调: 模拟"就在这次注入的瞬间发生的事"
+// (如目标窗口恰在粘贴时被切走)
 type fakeInjector struct {
 	mu        sync.Mutex
 	events    []string
 	failAfter int
+	onInject  func(event string)
 }
 
 func newFakeInjector() *fakeInjector { return &fakeInjector{failAfter: -1} }
@@ -31,11 +34,16 @@ func newFakeInjector() *fakeInjector { return &fakeInjector{failAfter: -1} }
 // record 记录一次注入并返回是否被系统接受
 func (f *fakeInjector) record(event string) bool {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.failAfter >= 0 && len(f.events) >= f.failAfter {
+		f.mu.Unlock()
 		return false
 	}
 	f.events = append(f.events, event)
+	hook := f.onInject
+	f.mu.Unlock()
+	if hook != nil {
+		hook(event)
+	}
 	return true
 }
 
@@ -142,38 +150,55 @@ func (f *fakeClipboard) ops() []string {
 	return append([]string(nil), f.events...)
 }
 
-// fakeForeground 固定标题的前台窗口; self 置位模拟"焦点停在 Type 自身"
+// fakeForeground 固定标识与标题的前台窗口; self 置位模拟"焦点停在 Type 自身"
 type fakeForeground struct {
 	title string
 	self  bool
 }
 
-func (f fakeForeground) Title() string { return f.title }
-func (f fakeForeground) IsSelf() bool  { return f.self }
+func (f fakeForeground) Sample() ForegroundSample {
+	return ForegroundSample{ID: 1, Title: f.title, Self: f.self}
+}
 
-// switchableForeground 可变前台窗口: 模拟用户在倒计时期间切换目标/回看 Type
+// switchableForeground 可变前台窗口: 模拟用户在倒计时/注入期间切换目标、
+// 回看 Type。标识与标题一起换 —— 判据是标识, 标题只用于展示
 type switchableForeground struct {
 	mu    sync.Mutex
+	id    TargetID
 	title string
 	self  bool
 }
 
-func (f *switchableForeground) Title() string {
+func (f *switchableForeground) Sample() ForegroundSample {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.title
+	return ForegroundSample{ID: f.id, Title: f.title, Self: f.self}
 }
 
-func (f *switchableForeground) IsSelf() bool {
+func (f *switchableForeground) set(id TargetID, title string, self bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.self
+	f.id, f.title, f.self = id, title, self
 }
 
-func (f *switchableForeground) set(title string, self bool) {
+// samplingForeground 固定窗口 + 采样计数: 用于验证倒计时"每拍采样一次"
+// 的节拍(采样与写状态是分开的, 次数就是节拍数)
+type samplingForeground struct {
+	mu      sync.Mutex
+	samples int
+}
+
+func (f *samplingForeground) Sample() ForegroundSample {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.title, f.self = title, self
+	f.samples++
+	return ForegroundSample{ID: 7, Title: "记事本"}
+}
+
+func (f *samplingForeground) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.samples
 }
 
 // ─── 测试辅助 ─────────────────────────────────────────
@@ -721,7 +746,7 @@ func TestSelfForegroundAbortsBeforeInjection(t *testing.T) {
 // 目标预览跟随当前前台窗口(不做任何排除): 用户聚焦谁就显示谁,
 // 回看 Type 期间预览即 Type 自身; 执行后锁定为结束那一刻的窗口
 func TestCountdownPreviewFollowsCurrentForeground(t *testing.T) {
-	fg := &switchableForeground{title: "记事本"}
+	fg := &switchableForeground{id: 1, title: "记事本"}
 	inj := newFakeInjector()
 	var mu sync.Mutex
 	var history []TypingStatus
@@ -732,11 +757,11 @@ func TestCountdownPreviewFollowsCurrentForeground(t *testing.T) {
 		sleeps++
 		switch sleeps {
 		case 1:
-			fg.set("浏览器", false) // 用户切到真正的目标
+			fg.set(2, "浏览器", false) // 用户切到真正的目标
 		case 2:
-			fg.set("Type 测试", true) // 用户中途回看 Type
+			fg.set(3, "Type 测试", true) // 用户中途回看 Type
 		case 3:
-			fg.set("浏览器", false) // 最后一秒切回目标
+			fg.set(2, "浏览器", false) // 最后一秒切回目标
 		}
 		mu.Lock()
 		history = append(history, *svc.Status())
@@ -764,5 +789,268 @@ func TestCountdownPreviewFollowsCurrentForeground(t *testing.T) {
 	}
 	if !sawSelf {
 		t.Error("回看 Type 期间的预览应为 Type 自身(不做排除), 未捕获到")
+	}
+}
+
+// ─── 焦点漂移防护 ─────────────────────────────────────
+
+// 倒计时节拍: 100ms 一拍(每秒 10 拍), 每拍采样一次前台窗口, 可见状态
+// 只在秒边界更新 —— 采样与写状态分离, 总时长仍是 delay 秒
+func TestCountdownTicksAndSecondBoundaries(t *testing.T) {
+	fg := &samplingForeground{}
+	inj := newFakeInjector()
+	var mu sync.Mutex
+	var history []TypingStatus
+	var sleeps int
+	var svc *TypingService
+	svc = newTypingService(inj, &fakeClipboard{}, fg)
+	svc.sleep = func(time.Duration) {
+		sleeps++
+		mu.Lock()
+		history = append(history, *svc.Status())
+		mu.Unlock()
+	}
+
+	// 空文本: 仍走逐字符路径, 但一次注入都没有, 不会给采样计数添乱
+	if _, err := svc.Start("", 3, false, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	if st := waitTerminal(t, svc); st.Phase != PhaseSuccess {
+		t.Fatalf("终态 phase = %s, want success", st.Phase)
+	}
+
+	// 30 拍倒计时 + 锁定前那一次 150ms 稳定等待(空文本没有字符间隔)
+	if sleeps != 31 {
+		t.Errorf("等待次数 = %d, want 31 (30 拍倒计时 + 1 次稳定等待)", sleeps)
+	}
+	// 采样: Start 初态 1 次 + 倒计时每拍 1 次 ×30 + 锁定 1 次
+	if got := fg.count(); got != 32 {
+		t.Errorf("采样次数 = %d, want 32 (初态 1 + 每拍 1×30 + 锁定 1)", got)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(history) < 30 {
+		t.Fatalf("倒计时期间的等待记录只有 %d 条, want >= 30", len(history))
+	}
+	// 秒数每 10 拍降一档: 3 → 2 → 1, 目标窗口全程不变
+	for i, h := range history[:30] {
+		want := 3 - i/10
+		if h.Phase != PhaseCountdown || h.SecondsLeft != want {
+			t.Fatalf("第 %d 拍状态 = %s/%d, want countdown/%d", i, h.Phase, h.SecondsLeft, want)
+		}
+		if h.TargetWindow != "记事本" {
+			t.Fatalf("第 %d 拍目标窗口 = %q, want 记事本", i, h.TargetWindow)
+		}
+	}
+}
+
+// 切窗预览: 前台一变, 下一拍预览就更新, 不必等秒边界
+func TestCountdownPreviewFollowsSwitchWithinOneTick(t *testing.T) {
+	fg := &switchableForeground{id: 1, title: "记事本"}
+	inj := newFakeInjector()
+	var mu sync.Mutex
+	var history []TypingStatus
+	var sleeps int
+	var svc *TypingService
+	svc = newTypingService(inj, &fakeClipboard{}, fg)
+	svc.sleep = func(time.Duration) {
+		sleeps++
+		if sleeps == 3 { // 在第一秒内切走
+			fg.set(2, "浏览器", false)
+		}
+		mu.Lock()
+		history = append(history, *svc.Status())
+		mu.Unlock()
+	}
+
+	if _, err := svc.Start("", 3, false, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	if st := waitTerminal(t, svc); st.Phase != PhaseSuccess {
+		t.Fatalf("终态 phase = %s, want success", st.Phase)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(history) < 5 {
+		t.Fatalf("等待记录过少: %d 条", len(history))
+	}
+	for i := 0; i < 3; i++ {
+		if got := history[i].TargetWindow; got != "记事本" {
+			t.Errorf("切换前的第 %d 拍预览 = %q, want 记事本", i, got)
+		}
+	}
+	// 切换发生在第 3 拍之后: 第 4 拍预览已是新窗口, 秒数还没到边界不动
+	if got := history[3].TargetWindow; got != "浏览器" {
+		t.Errorf("切换后第一拍预览 = %q, want 浏览器", got)
+	}
+	if got := history[3].SecondsLeft; got != 3 {
+		t.Errorf("预览更新不应顺带跳秒数, got %d, want 3", got)
+	}
+}
+
+// 取消响应: 下一拍(100ms)即被察觉, 不必等到秒边界
+func TestCancelDuringCountdownDetectedWithinOneTick(t *testing.T) {
+	inj := newFakeInjector()
+	var svc *TypingService
+	var sleeps int
+	svc = newTestService(inj, &fakeClipboard{}, func(time.Duration) {
+		sleeps++
+		if sleeps == 3 {
+			if _, err := svc.Cancel(); err != nil {
+				t.Errorf("Cancel 失败: %v", err)
+			}
+		}
+	})
+
+	// 9 秒倒计时: 若按秒检查取消, 任务会一路跑满 90 拍
+	if _, err := svc.Start("你好", 9, false, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	st := waitTerminal(t, svc)
+	if st.Phase != PhaseCancel {
+		t.Fatalf("终态 phase = %s, want cancel", st.Phase)
+	}
+	if sleeps != 3 {
+		t.Errorf("取消应在下一拍生效(共 3 次等待), got %d 次", sleeps)
+	}
+	if calls := inj.calls(); len(calls) != 0 {
+		t.Errorf("取消后不应有任何注入, got %v", calls)
+	}
+}
+
+// 逐字符路径: 中途切窗立即停止, 之后的字符一个都不再注入, 终态报出已输入字数
+func TestTypingStopsWhenTargetSwitches(t *testing.T) {
+	inj := newFakeInjector()
+	fg := &switchableForeground{id: 1, title: "记事本"}
+	var svc *TypingService
+	var sleeps int
+	svc = newTypingService(inj, &fakeClipboard{}, fg)
+	svc.sleep = func(time.Duration) {
+		sleeps++
+		// 倒计时 10 拍 + 150ms 稳定等待 1 次 = 11 次; 第 12/13 次分别是
+		// 第一个/第二个字符后的间隔 —— 在第二个字符之后切走
+		if sleeps == 13 {
+			fg.set(2, "浏览器", false)
+		}
+	}
+
+	if _, err := svc.Start("ABCDE", 1, false, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	st := waitTerminal(t, svc)
+	if st.Phase != PhaseError {
+		t.Fatalf("漂移后终态 phase = %s, want error", st.Phase)
+	}
+	if want := msgTargetSwitchedTyped(2); st.Message != want {
+		t.Errorf("终态文案 = %q, want %q", st.Message, want)
+	}
+	if st.Progress != -1 {
+		t.Errorf("失败终态 progress 应为 -1, got %d", st.Progress)
+	}
+	if st.TargetWindow != "记事本" {
+		t.Errorf("终态目标窗口 = %q, want 记事本(锁定的那个, 不是切过去的)", st.TargetWindow)
+	}
+	want := []string{"r:A", "r:B"}
+	if got := inj.calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("注入序列 = %v, want %v (切走后不应继续注入)", got, want)
+	}
+	// 终态之后不得再补注入
+	time.Sleep(20 * time.Millisecond)
+	if got := inj.calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("到达终态后仍在注入: %v", got)
+	}
+}
+
+// 漂移判定用标识而不是标题: 同一个窗口的标题变化(浏览器切标签一类)
+// 不应中断输入
+func TestTitleChangeOnSameWindowDoesNotStopTyping(t *testing.T) {
+	inj := newFakeInjector()
+	fg := &switchableForeground{id: 1, title: "记事本"}
+	var svc *TypingService
+	var sleeps int
+	svc = newTypingService(inj, &fakeClipboard{}, fg)
+	svc.sleep = func(time.Duration) {
+		sleeps++
+		if sleeps == 13 { // 键入途中标题变了, 窗口标识还是同一个
+			fg.set(1, "记事本 - 已修改", false)
+		}
+	}
+
+	if _, err := svc.Start("ABCDE", 1, false, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	if st := waitTerminal(t, svc); st.Phase != PhaseSuccess {
+		t.Fatalf("同一窗口改标题不应中断输入, 终态 = %s/%q", st.Phase, st.Message)
+	}
+	want := []string{"r:A", "r:B", "r:C", "r:D", "r:E"}
+	if got := inj.calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("注入序列 = %v, want %v", got, want)
+	}
+}
+
+// 剪贴板路径: 写入剪贴板之后、粘贴之前切走 —— 不粘贴, 剪贴板照旧恢复
+func TestClipboardStopsWhenTargetSwitchesBeforePaste(t *testing.T) {
+	inj := newFakeInjector()
+	fg := &switchableForeground{id: 1, title: "记事本"}
+	cb := &fakeClipboard{text: "用户原文本"}
+	var svc *TypingService
+	var sleeps int
+	svc = newTypingService(inj, cb, fg)
+	svc.sleep = func(time.Duration) {
+		sleeps++
+		// 倒计时 10 拍 + 稳定等待 1 次 → 第 12 次是写入剪贴板后的 100ms 等待
+		if sleeps == 12 {
+			fg.set(2, "浏览器", false)
+		}
+	}
+
+	if _, err := svc.Start("你好", 1, false, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	st := waitTerminal(t, svc)
+	if st.Phase != PhaseError || st.Message != msgTargetSwitchedIdle {
+		t.Fatalf("终态 = %s/%q, want error/%q", st.Phase, st.Message, msgTargetSwitchedIdle)
+	}
+	if calls := inj.calls(); len(calls) != 0 {
+		t.Errorf("粘贴前的漂移不应注入任何按键, got %v", calls)
+	}
+	if got, want := cb.ops(), []string{"snap", "set", "restore"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("剪贴板操作序列 = %v, want %v (写过就必须恢复)", got, want)
+	}
+	if got := cb.GetText(); got != "用户原文本" {
+		t.Errorf("恢复后文本 = %q, want 用户原文本", got)
+	}
+}
+
+// 剪贴板路径: 粘贴的瞬间目标被切走 —— 报"结果无法确认", 剪贴板仍恢复
+func TestClipboardReportsUnconfirmedWhenTargetSwitchesAtPaste(t *testing.T) {
+	inj := newFakeInjector()
+	fg := &switchableForeground{id: 1, title: "记事本"}
+	cb := &fakeClipboard{text: "用户原文本"}
+	inj.onInject = func(event string) {
+		if event == "V" {
+			fg.set(2, "浏览器", false)
+		}
+	}
+	svc := newTypingService(inj, cb, fg)
+	svc.sleep = noSleep
+
+	if _, err := svc.Start("你好", 1, false, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	st := waitTerminal(t, svc)
+	if st.Phase != PhaseError || st.Message != msgTargetSwitchedPasted {
+		t.Fatalf("终态 = %s/%q, want error/%q", st.Phase, st.Message, msgTargetSwitchedPasted)
+	}
+	if got, want := inj.calls(), []string{"V"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("注入序列 = %v, want %v", got, want)
+	}
+	if got, want := cb.ops(), []string{"snap", "set", "restore"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("剪贴板操作序列 = %v, want %v", got, want)
+	}
+	if got := cb.GetText(); got != "用户原文本" {
+		t.Errorf("恢复后文本 = %q, want 用户原文本", got)
 	}
 }
