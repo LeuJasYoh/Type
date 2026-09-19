@@ -259,7 +259,8 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
 - 仅支持 `windows && (amd64 || arm64)`；386 编译被刻意禁止（INPUT 结构体手工
   填充仅匹配 64 位 ABI）。在非 Windows 上 `go test ./...` 会静默跳过主包（文件全被
   构建约束排除），只剩几个 "no test files"，看着像通过，所以本地验证与 CI 都在 Windows 上跑
-- Node 主版本必须与 CI 一致（24）：它决定 vite/rollup 的产出字节，换版本后
+- **Node 主版本只写在 `.node-version` 一处**（现为 24）：ci.yml 用 `node-version-file`
+  读它，开发者的 nvm/fnm 也读同一个文件。它决定 vite/rollup 的产出字节，换版本后
   `internal/web/dist/index.html` 与入库版本对不上，漂移检查会报不一致
 - 提交信息：中文一行式主题 + 正文说明要点
 

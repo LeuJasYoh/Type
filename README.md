@@ -160,6 +160,7 @@ Type/
 │   └── release.yml          ← 发版: 打 v<版本> 标签触发, 构建/校验/打包/建 Release (也可在 Actions 页面手动触发)
 ├── go.mod / go.sum          ← Go 模块定义
 ├── pyproject.toml / uv.lock / .python-version ← Python 资产管线依赖 (uv 管理, 锁定 Pillow)
+├── .node-version            ← 前端构建用的 Node 主版本 (CI 与本地同源)
 └── .gitignore               ← 忽略构建产物/依赖/工具元数据
 ```
 
@@ -170,8 +171,8 @@ Type/
 #   - Windows 10/11 (构建与测试都在 Windows 上, 与 CI 一致; 非 Windows 上
 #     go test ./... 会静默跳过主包, 因为源码带 windows 构建约束)
 #   - Go 1.26+ (与 go.mod 声明一致; 不需要 C 工具链)
-#   - Node.js 24 (前端构建期需要, 产物无需; 与 CI 同主版本, 换主版本会
-#     改变 vite 的产出字节, CI 的产物漂移检查会报不一致)
+#   - Node.js 24 (前端构建期需要, 产物无需; 版本写在 .node-version, CI 同源。
+#     换主版本会改变 vite 的产出字节, CI 的产物漂移检查会报不一致)
 #   - WebView2 库（go mod tidy 自动下载）
 
 cd Type
