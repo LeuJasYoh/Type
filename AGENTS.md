@@ -257,7 +257,10 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   跑一遍 `applyWindowIcon`、再按文档偏移把类图标读回来核对；新增同类 Win32 常量时照此补一条
   实测用例，别只写"常量等于某值"式的自我复读
 - 仅支持 `windows && (amd64 || arm64)`；386 编译被刻意禁止（INPUT 结构体手工
-  填充仅匹配 64 位 ABI）
+  填充仅匹配 64 位 ABI）。在非 Windows 上 `go test ./...` 会静默跳过主包（文件全被
+  构建约束排除），只剩几个 "no test files"，看着像通过，所以本地验证与 CI 都在 Windows 上跑
+- Node 主版本必须与 CI 一致（24）：它决定 vite/rollup 的产出字节，换版本后
+  `internal/web/dist/index.html` 与入库版本对不上，漂移检查会报不一致
 - 提交信息：中文一行式主题 + 正文说明要点
 
 ## 提交前：检查文档同步（每次提交必做）

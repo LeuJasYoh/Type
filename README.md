@@ -167,8 +167,11 @@ Type/
 
 ```powershell
 # 前置条件
+#   - Windows 10/11 (构建与测试都在 Windows 上, 与 CI 一致; 非 Windows 上
+#     go test ./... 会静默跳过主包, 因为源码带 windows 构建约束)
 #   - Go 1.26+ (与 go.mod 声明一致; 不需要 C 工具链)
-#   - Node.js 20+ (前端构建期需要, 产物无需)
+#   - Node.js 24 (前端构建期需要, 产物无需; 与 CI 同主版本, 换主版本会
+#     改变 vite 的产出字节, CI 的产物漂移检查会报不一致)
 #   - WebView2 库（go mod tidy 自动下载）
 
 cd Type

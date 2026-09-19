@@ -5,7 +5,7 @@
 # 再 go build。产物 Type.exe 输出在仓库根目录。
 #
 # 用法:  powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
-# 依赖:  Go 1.26+、Node.js 20+ (npm) —— 不需要 C 工具链, webview 绑定是纯 Go 的
+# 依赖:  Go 1.26+、Node.js 24 (npm, 与 CI 同主版本) —— 不需要 C 工具链, webview 绑定是纯 Go 的
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
