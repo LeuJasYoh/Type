@@ -40,7 +40,7 @@
 | 组件 | 要求 |
 |------|------|
 | 操作系统 | Windows 10 / 11（x64 / ARM64） |
-| 运行时 | **无** — 单文件，零依赖 |
+| 运行时 | **无**，单文件，零依赖 |
 | WebView2 | Windows 11 预装，Windows 10 需安装 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) |
 
 ---
