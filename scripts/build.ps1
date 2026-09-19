@@ -59,9 +59,13 @@ Write-Host "构建完成: Type.exe ($([math]::Round($f.Length / 1KB, 1)) KB)"
 Write-Host "  FileVersion:    $($v.FileVersion)"
 Write-Host "  ProductVersion: $($v.ProductVersion)"
 
-# ── 5. 校验版本资源真的链进了 exe ─────────────────────
+# ── 5. 校验资源真的链进了 exe ─────────────────────────
 # version_<arch>.syso 缺失时 go build 依然成功, 但产物没有版本信息与图标;
-# 读回 exe 比对, 让这种静默失败在构建期就暴露
+# 读回 exe 核对, 让这种静默失败在构建期就暴露。
+# 上面那条用独立算出的数字比对(与被校验的工具不是同一份实现), 再用
+# tools/pecheck 过一遍 CI 的同一套判据: 架构 + 版本 + DPI manifest + 图标
 if ($v.FileVersion -ne $v4Dot) {
     throw "exe 版本资源异常: FileVersion = '$($v.FileVersion)', want '$v4Dot' (tools/mkres 是否生效?)"
 }
+go run ./tools/pecheck -exe Type.exe -version $ver -arch amd64
+if ($LASTEXITCODE -ne 0) { throw "产物读回校验失败 (exit $LASTEXITCODE)" }

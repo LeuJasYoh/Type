@@ -40,8 +40,7 @@ jobs:
       - name: go test
         run: go test -count=1 ./...
 
-      # 链接层在此之前不可见: go vet 只做类型检查不链接, version.syso 之类
-      # 的产物要到真正 build 才参与; CI 此前从不编译 exe
+      # 全部包的快速编译冒烟: 真正带资源链接的发布构建在下面的 build 作业
       - name: go build
         run: go build ./...
 
@@ -93,3 +92,56 @@ jobs:
           $text = [System.IO.File]::ReadAllText($f)
           if ($text -notmatch [regex]::Escape($ver)) { Write-Host "$f 未同步到版本 $ver"; exit 1 }
           Write-Host "版本号 $ver 已同步到 $f"
+
+  # 发布路径的真实构建 + 资源读回校验, 两种架构各来一遍。
+  # 为什么单开一个作业而不是并进 verify: 前端依赖与产物漂移只需跑一次,
+  # 而这里要问的是另一个问题 —— .syso 资源在 CI 里生成后有没有真的链进产物。
+  # go vet 只做类型检查不链接, go build ./... 在没有 .syso 时也照样成功,
+  # 少掉的图标/版本/manifest 要到用户那儿才暴露, 所以必须读回产物逐项核对
+  build:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # 版本号的单一来源是 cmd/type/main.go, 与 build.ps1 同款正则
+      - name: 提取版本号
+        shell: pwsh
+        run: |
+          $m = Select-String -Path cmd/type/main.go -Pattern 'version\s*=\s*"([\d.]+(?:-[0-9A-Za-z.]+)?)"'
+          if (-not $m) { throw "cmd/type/main.go 中未找到 version 变量" }
+          Add-Content -Path $env:GITHUB_ENV -Value "version=$($m.Matches[0].Groups[1].Value)"
+
+      # 资源只在这里生成(.syso 不入库, 见 .gitignore); mkres 两架构一并产出,
+      # 后续 go build 按 GOARCH 各取所需, 故本步不能带 GOARCH
+      - name: 生成资源 (mkres)
+        run: go run ./tools/mkres -version $env:version -icon assets/icon.ico -out cmd/type/version
+
+      # 与 scripts/build.ps1 / README 的发布命令一致(含 -H windowsgui -s -w)
+      - name: 构建 exe (发布参数, ${{ matrix.arch }})
+        shell: pwsh
+        run: |
+          $env:GOARCH = '${{ matrix.arch }}'
+          go build -ldflags="-H windowsgui -s -w" -o "Type-${{ matrix.arch }}.exe" ./cmd/type
+
+      - name: 读回校验 (PE 架构 + 图标/版本/manifest)
+        run: go run ./tools/pecheck -exe "Type-${{ matrix.arch }}.exe" -version $env:version -arch ${{ matrix.arch }}
+
+      # 测试真跑只在 verify 作业(amd64 原生); arm64 上至少要证明测试代码
+      # 也能编译 —— go vet 连同 _test.go 一起类型检查, go test -c 只编译
+      # 不运行, 产物丢到临时目录不落进工作区
+      - name: 测试可编译 (arm64)
+        if: matrix.arch == 'arm64'
+        shell: pwsh
+        run: |
+          $env:GOARCH = 'arm64'
+          go vet ./...
+          go test -c -o "$env:TEMP\type-arm64.test.exe" ./cmd/type
