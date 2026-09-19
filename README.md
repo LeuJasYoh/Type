@@ -19,7 +19,8 @@
   - **逐字符模拟** —— 纯英文用 `SendInput` 快速注入，含中文时自动切换为剪贴板
   - **剪贴板粘贴** —— 用 `Ctrl+V` 粘贴，速度快，自动保存/恢复剪贴板
 - **文本直投**（v1.5.0）—— 面向带代码补全/括号自动配对的在线编辑器：字符（含 Tab）绕过按键层、以文本层消息直接注入，编辑器的补全弹窗劫持（空格被当作"接受候选"）与括号自动配对都不会触发；换行无法走文本层（系统会过滤控制字符），程序会自动先注入 Esc 关闭补全弹窗再按回车
-- **目标窗口预览** —— 倒计时期间逐秒刷新当前前台窗口标题（你切到哪个窗口就显示哪个），执行时锁定并显示实际注入目标
+- **目标窗口预览** —— 倒计时期间跟随当前前台窗口标题（切换窗口立即更新，同一窗口的标题变化每秒刷新一次），执行时锁定并显示实际注入目标
+- **焦点漂移防护**（v1.5.3）—— 键入过程中目标窗口被切走（弹出别的窗口、手动切到别处、切回 Type 自身）时立即停止输入，不把剩余内容打进错误的窗口；终态会说明已输入多少字
 - **可调延迟** —— 1~9 秒倒计时，给你时间聚焦目标窗口
 - **启动/取消** —— 随时中止操作；任务结束后自动复位（无需手动取消）；运行中防重入，不会叠加启动
 - **实时状态** —— 倒计时显示、输入进度、完成提示
@@ -37,7 +38,7 @@
 5. 调节倒计时秒数
 6. 点击 **启动**
 7. 在倒计时结束前将鼠标焦点切换到目标窗口（如记事本、浏览器、聊天框等）
-8. 程序自动完成输入
+8. 程序自动完成输入（输入期间请保持该窗口在前台：一旦切走，输入会立即停止）
 
 ---
 
@@ -71,7 +72,7 @@
 GUI       WebView2 (Edge Chromium)
 前端      Vue 3 + TypeScript, Vite 构建为单文件 HTML (无其他运行时依赖)
 构建      vue-tsc 类型检查 + Vite (vite-plugin-singlefile) + go run ./tools/mkres + go build
-CI        GitHub Actions (windows-latest): gofmt / go vet / go test / go build + 前端产物漂移检查 + 版本同步检查
+CI        GitHub Actions (windows-latest): gofmt / go vet / go test / go build + 前端产物漂移检查 + 版本同步检查；另按 amd64/arm64 矩阵做发布构建，并用 tools/pecheck 读回校验图标/版本/DPI manifest 真的链进了产物
 Win32 API SendInput (KEYEVENTF_UNICODE) + WM_CHAR 文本直投 (SendMessageTimeoutW 直投焦点窗口) + 剪贴板 (CF_UNICODETEXT, EnumClipboardFormats 全格式快照, RtlMoveMemory) + 前台窗口检测 (GetForegroundWindow) + 单实例互斥体 (CreateMutexW)
 图标      圆角多尺寸 ICO（uv + Pillow 生成, scripts/gen_icon.py 字节级可复现）
 资源      tools/mkres (纯 Go, winres) 生成图标 + 版本信息 + manifest (DPI 感知) → .syso
@@ -92,8 +93,8 @@ Type/
 │   ├── win32_instance.go    ← 单实例守卫 (具名互斥体)
 │   ├── devserver_prod.go    ← 正式构建: 恒加载嵌入页面
 │   ├── devserver_dev.go     ← dev 构建 (`-tags dev`): 指向 Vite dev server
-│   ├── main_test.go         ← 单元测试 (UTF-16 拆分/ASCII/CJK 标点/剪贴板快照与守卫/窗口类图标索引)
-│   └── typing_test.go       ← 状态机单元测试 (fake 注入器/剪贴板, 不触真实系统)
+│   ├── main_test.go         ← 单元测试 (UTF-16 拆分/ASCII/CJK 标点/剪贴板快照与守卫/窗口标题与类图标索引)
+│   └── typing_test.go       ← 状态机单元测试 (fake 注入器/剪贴板/前台窗口, 不触真实系统)
 ├── internal/web/            ← go:embed 前端产物包
 │   ├── web.go               ← IndexHTML 嵌入声明 (供 cmd/type 经 SetHtml 加载)
 │   └── dist/index.html      ← Vite 构建产物: 自包含单文件 (入库)
@@ -125,6 +126,7 @@ Type/
 ├── tools/
 │   ├── equivcheck/          ← 重构等价性验证 (go run ./tools/equivcheck, 逐函数比对函数体)
 │   ├── mkres/               ← 资源生成: 图标 + 版本信息 + DPI 感知 manifest → version_<arch>.syso
+│   ├── pecheck/             ← 构建产物读回校验: PE 架构 + 图标/版本/manifest 是否真的链进 exe (发版与 CI 共用)
 │   └── wmcharprobe/         ← 注入通道探针 (WM_CHAR 文本直投 vs SendInput 按键, 用法见文件头注释)
 ├── testdata/                ← 手工测试页 (paste-guard.html 防粘贴 / completion-guard.html 补全+配对, 用法见页内注释)
 ├── .github/workflows/ci.yml ← CI: gofmt / vet / test / build + 前端产物漂移检查 + 版本同步检查
@@ -147,6 +149,7 @@ cd Type
 go mod tidy
 
 # 一键构建 (推荐): 版本号同步 → Vue 前端构建 → 资源生成 → go build
+# (末尾自动读回产物, 校验图标/版本/DPI 声明确实已链入)
 powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
 
 # 或手动分步:
@@ -154,8 +157,12 @@ cd frontend
 npm install                         # 安装前端依赖 (仅首次)
 npm run build                       # vue-tsc 类型检查 + Vite → ../internal/web/dist/index.html
 cd ..
-go run ./tools/mkres -version 1.5.2 -icon assets/icon.ico -out cmd/type/version
+go run ./tools/mkres -version 1.5.3 -icon assets/icon.ico -out cmd/type/version
 go build -ldflags="-H windowsgui -s -w" -o Type.exe ./cmd/type
+
+# 读回校验: 图标/版本信息/DPI 声明是否真的链进了产物(.syso 缺失时
+# go build 不会失败, 产物只是悄悄少了这些)
+go run ./tools/pecheck -exe Type.exe -version 1.5.3 -arch amd64
 
 # 交叉编译 ARM64 版 (纯 Go, 不需要额外工具链; 资源上一步已按架构生成)
 $env:GOARCH = "arm64"; go build -ldflags="-H windowsgui -s -w" -o Type-arm64.exe ./cmd/type
@@ -201,6 +208,8 @@ go build -tags dev -o Type-dev.exe ./cmd/type   # 终端 2: 带 dev 标签构建
 - **杀毒软件误报** —— 键盘模拟（SendInput）与剪贴板操作是杀软启发式扫描的常见敏感组合，若下载或运行时被误报，请添加信任或自行编译。
 - **单实例** —— 同时只允许运行一个实例（第二个实例会提示并退出），避免两个实例争抢剪贴板与键盘焦点。
 - **焦点仍在 Type 自身时不输入** —— 倒计时结束时若焦点仍停留在 Type 窗口（未切换到目标窗口），程序会明确报错并放弃输入，不会把内容打进自己的输入框。
+- **键入中途切换目标窗口会立即停止** —— 逐字符输入时每个字符注入前都确认目标窗口仍是倒计时结束时锁定的那一个，一旦切走（含切回 Type 自身）就停下，终态说明已输入多少字；剪贴板路径在写入剪贴板前、粘贴前各确认一次，粘贴瞬间发生切换则报“粘贴结果无法确认”。检查与注入之间还有毫秒级间隙，切换恰好发生在其中时最多漏进一两个字。
+- **上面那条的判定只到“窗口”这一层** —— 判据是顶层窗口标识而不是标题：目标程序自己弹出的模态窗口（如“另存为”）会改变顶层窗口，因而会中止；但窗口**内部**的目标变化看不到，输入会继续落到新的位置。具体包括：在网页或编辑器里点到另一个输入框、浏览器切换标签页（标签页不是窗口，多个标签页共用同一个内容窗口，切换时窗口层面完全不变）、输入法候选窗与补全弹窗（这些本来就不该中止）。要看住这一层需改用系统辅助功能接口逐元素比对，代价与稳定性风险都高，故未做。
 - **多显示器与缩放** —— 界面按显示器缩放渲染（已声明 PerMonitorV2 DPI 感知，缩放非 100% 时文字清晰不虚），窗口尺寸在启动时按所在显示器的缩放换算；把窗口拖到**缩放比例不同**的另一台显示器上不会重新适配（重启即可恢复）。单显示器无感。
 - **文本直投的边界** —— 该开关只作用于逐字符路径：**含中文（非 ASCII）的文本默认仍走剪贴板粘贴**，不受它影响；要让中文也走文本层，需同时勾选"绕过粘贴检测"（此时全角标点不再需要 WM_CHAR 绕行，直接经文本层注入）。补全弹窗无法从外部探测，回车前会无条件注入 `Esc`（弹窗开着则被关闭，没开则基本无操作）；目标处于浏览器全屏（Esc 会退出全屏）或 Vim 等 Esc 是功能键的场景请勿开启。个别不处理文本消息的目标（如部分游戏）不适用，关掉即可。
 
