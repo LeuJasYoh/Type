@@ -17,9 +17,10 @@
 //	keys   — SendInput KEYEVENTF_UNICODE(与 Type 逐字符路径同款, 有按键事件),
 //	         需要目标窗口前台: 倒计时 2 秒后注入到当时的前台窗口
 //	close  — 向匹配窗口发 WM_CLOSE(测试收尾清理)
+//	文本可写 @路径 改为从 UTF-8 文件读取(含中文等非 ASCII 时推荐, 避开命令行编码)
 //	例如:
 //
-//	wmcharprobe completion-guard "ret (x) [y] 你"
+//	wmcharprobe completion-guard @D:/tmp/cn.txt direct
 //	wmcharprobe completion-guard "(" keys
 //
 // 成功判据(对照页面 title 遥测): char/direct 模式 c=文本码点数, k 不增
@@ -308,6 +309,18 @@ func main() {
 	if len(os.Args) >= 4 {
 		mode = os.Args[3]
 	}
+	text := ""
+	if len(os.Args) >= 3 {
+		text = os.Args[2]
+		if strings.HasPrefix(text, "@") { // @路径: 从 UTF-8 文件读文本
+			raw, err := os.ReadFile(text[1:])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "读取文本文件失败: %v\n", err)
+				os.Exit(2)
+			}
+			text = string(raw)
+		}
+	}
 	var paths []string
 	targets := findTargets(os.Args[1], &paths)
 	if len(targets) == 0 {
@@ -338,7 +351,7 @@ func main() {
 					continue
 				}
 				fmt.Printf("投递 → [%s] (%s, class=%s 0x%X)\n", t.title, how, windowClass(dst), dst)
-				if failed := sendText(dst, os.Args[2]); failed > 0 {
+				if failed := sendText(dst, text); failed > 0 {
 					fmt.Printf("  %d 个码元投递失败\n", failed)
 				}
 				time.Sleep(300 * time.Millisecond)
@@ -360,7 +373,7 @@ func main() {
 					continue
 				}
 				fmt.Printf("投递 → [%s] (%s, class=%s 0x%X)\n", t.title, how, windowClass(dst), dst)
-				if failed := sendDirect(dst, os.Args[2]); failed > 0 {
+				if failed := sendDirect(dst, text); failed > 0 {
 					fmt.Printf("  %d 个字符注入被拒\n", failed)
 				}
 				time.Sleep(300 * time.Millisecond)
@@ -382,7 +395,7 @@ func main() {
 				fmt.Printf("前台窗口不是目标(0x%X), 放弃注入\n", fg)
 				os.Exit(1)
 			}
-			if rejected := sendKeys(os.Args[2]); rejected > 0 {
+			if rejected := sendKeys(text); rejected > 0 {
 				fmt.Printf("  %d 个字符被系统拒绝\n", rejected)
 			}
 			time.Sleep(300 * time.Millisecond)
