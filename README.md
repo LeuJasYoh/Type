@@ -149,6 +149,7 @@ Type/
 │   └── gen_icon.py          ← 图标资产生成 (uv run, Pillow)
 ├── tools/
 │   ├── equivcheck/          ← 重构等价性验证 (go run ./tools/equivcheck, 逐函数比对函数体)
+│   ├── less-ai-tone/        ← 对外文字的去 AI 味规则与检测脚本 (写、改文档时用, 见 AGENTS.md)
 │   ├── mkres/               ← 资源生成: 图标 + 版本信息 + DPI 感知 manifest → version_<arch>.syso
 │   ├── pecheck/             ← 构建产物读回校验: PE 架构 + 图标/版本/manifest 是否真的链进 exe (发版与 CI 共用)
 │   └── wmcharprobe/         ← 注入通道探针 (WM_CHAR 文本直投 vs SendInput 按键, 用法见文件头注释)
