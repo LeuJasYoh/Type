@@ -99,20 +99,38 @@ jobs:
       # 已存在同名 Release 时覆盖更新（重跑安全）：附件与说明一并刷新
       - name: 创建或更新 Release
         shell: pwsh
+        # gh 不会自动拿到工作流的令牌：必须显式注入，否则报
+        # "To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable"
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # 每一步都核对退出码: 原生的 gh 失败不会中断脚本, 不检查就会
+          # "失败着往下走"并在末尾打印成功 (首次运行就栽在这里)
+          gh auth status *> $null
+          if ($LASTEXITCODE -ne 0) { throw "gh 未认证：检查本步骤的 GH_TOKEN 与 contents: write 权限" }
+
           $assets = @(
             "Type-$env:version-windows-amd64.zip"
             "Type-$env:version-windows-arm64.zip"
           )
           $notes = "release-notes/$env:tag.md"
-          gh release view $env:tag *> $null
-          if ($LASTEXITCODE -eq 0) {
+
+          # 探测是否已有同名 Release(重跑安全)。认证问题已由上面的 preflight
+          # 拦下; 其余失败(如网络)会落到创建分支, 在那里以各自的错误失败,
+          # 不会静默通过 —— 每个分支都核对退出码
+          gh release view $env:tag --json tagName *> $null
+          $exists = $LASTEXITCODE -eq 0
+
+          if ($exists) {
             gh release upload $env:tag @assets --clobber
+            if ($LASTEXITCODE -ne 0) { throw "上传附件失败 ($env:tag)" }
             gh release edit $env:tag --title "Type $env:version" --notes-file $notes
+            if ($LASTEXITCODE -ne 0) { throw "更新 Release 说明失败 ($env:tag)" }
             Write-Host "已更新既有 Release $env:tag"
           } else {
-            # --target 只用于手动触发：标签由 gh 在当前提交上创建。
-            # (GITHUB_TOKEN 建标签不会再触发一次本工作流, 不存在递归)
+            # --target 只对"标签尚不存在"的手动触发有意义(标签由 gh 在当前提交上创建);
+            # GITHUB_TOKEN 建标签不会再触发一次本工作流, 不存在递归
             gh release create $env:tag @assets --title "Type $env:version" --notes-file $notes --target $env:GITHUB_SHA
+            if ($LASTEXITCODE -ne 0) { throw "创建 Release 失败 ($env:tag)" }
             Write-Host "已创建 Release $env:tag"
           }
