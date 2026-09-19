@@ -1,7 +1,14 @@
 # AGENTS.md — 面向 AI 代理的工程约定
 
 人类读者请看 [README.md](README.md)；本文件写给在此仓库工作的 AI 编码代理，
-收录不成文的工程约定，避免每次会话重新考古。
+收录不成文的工程约定与踩过的坑，避免每次会话重新考古。
+
+**先记住四条铁律**（其余可以边做边查）：
+
+1. **冻结文案一个字都不能改**（它们是发布语言，见「行为契约」）；可以新增，但新增必须登记进清单。
+2. **改了 `frontend/src` 就必须跑 `scripts/build.ps1` 重新生成并提交 `internal/web/dist/index.html`**（go:embed 是静默的，本地不报错，CI 的漂移检查会失败）。
+3. **版本号只改 `cmd/type/main.go` 一处**，其余由 build.ps1 与构建期资源生成自动同步。
+4. **发版要连发布说明一起提交**（`release-notes/v<版本>.md`），打上 `v<版本>` 标签即由 CI 完成构建、校验与发布。
 
 ## 常用命令
 
@@ -34,6 +41,31 @@ uv run scripts/gen_icon.py
 go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 ```
 
+## 发布流程（v1.5.3 起由 CI 完成）
+
+**一次发版 = 改版本号 + 写发布说明 + 提交推送 + 打标签**，剩下的 CI 全包（约 2 分钟）。
+
+`.github/workflows/release.yml` 两种触发方式，任选：
+
+- **打标签（标准做法）**：`git tag v1.5.4 && git push origin v1.5.4`
+- **网页按钮（网络不便时）**：Actions → Release → Run workflow，填版本号；标签由工作流在当前提交上创建
+
+发布前有三道闸门，任何一道不过都不产出（宁可没发出去，也不发名不副实的包）：
+
+1. **版本一致**：标签 == `cmd/type/main.go` 的 `version`，且 `release-notes/v<版本>.md` 存在、里面确实写了本版包名、`package.json` 已同步（后两条专治"复制上一版说明忘了改版本号"）；
+2. **测试全绿**：`go test -count=1 ./...` 在打包之前先跑一遍；
+3. **读回校验**：`tools/pecheck` 逐项确认架构、版本号、图标、DPI manifest 真的链进了 exe。
+
+发布说明与代码放在同一次提交里（`release-notes/v<版本>.md`），原样作为 Release 正文：
+表格、配图、链接、任意长度都能用，与手工发布观感一致——**内容是人工写的，工作流只负责把它送进 Release**。
+写之前先看上一版的文件照抄结构（下载表格 + 本次变化），包名必须与本版一致。
+
+发布物：两个压缩包 `Type-<版本>-windows-<架构>.zip`（amd64 / arm64），
+**包内只有一个 `Type.exe`**（与既有 Release 一致：解压后双击即可，不加目录层级）。
+
+版本号规则：**由人决定这次涨多少**——新功能进次版本号（1.5→1.6），修缺陷进补丁号（1.5.3→1.5.4），
+可带预发布后缀（如 `1.6.0-rc.1`）。写入位置只有 `cmd/type/main.go` 一处。
+
 ## 布局与单一来源
 
 - `cmd/type/` — Go 入口包：业务层（typing.go 的 TypingService）+ Win32 平台层（win32_*.go）
@@ -55,22 +87,27 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
   （渲染时会被包一层自家的 `themed-picture`），配图用 `<p align="center">` 居中。
   **`<img>` 不要写死 `width`**：留空时按 GitHub 的 `max-width:100%` 铺满正文列
   （与旧 markdown 配图观感一致），写死会明显变小
+- `release-notes/` — 各版本的发布说明（`v<版本>.md`），发布时原样作为 Release 正文
 - `testdata/` — 手工测试页（paste-guard.html / completion-guard.html），无任何自动引用；用法写在文件头注释里
-- `tools/wmcharprobe/` — 注入通道探针（dev 工具，不进产品链路）：WM_CHAR 文本直投 vs SendInput 按键
-  注入的 A/B 验证，direct 模式逐字镜像产品文本直投算法可做端到端预演；读 completion-guard.html 的
-  title 遥测（c/k/n/p/a/L/h）作判据；用法见文件头注释
-- `tools/pecheck/` — 构建产物读回校验（发版与 CI 共用）：PE 架构 + 图标/版本/manifest
-  是否真的链进 exe。不数图标帧数——那是 `assets/icon.ico` 的属性，重新生成图标就会变
-- `.github/workflows/ci.yml` — CI 两个作业：`verify`（gofmt / vet / test / build +
-  前端产物漂移检查 + 版本同步检查，只跑一遍）与 `build`（amd64/arm64 矩阵：mkres
-  生成资源 → 发布参数构建 → `tools/pecheck` 读回校验；arm64 另做 `go vet` 与
-  `go test -c` 测试编译）。拆开是刻意的：前端构建不必按架构重复，而"资源有没有
-  链进产物"只有真构建一次才回答得了
+- `tools/` — 构建/验证期工具（都不进产品链路）：
+  - `mkres/` — 资源生成：图标 + 版本信息 + DPI 感知 manifest → `version_<arch>.syso`（构建期生成，不入库）
+  - `pecheck/` — 构建产物读回校验：PE 架构 + 图标/版本/manifest 是否真的链进 exe（发版与 CI 共用）
+    不数图标帧数——那是 `assets/icon.ico` 的属性，重新生成图标就会变
+  - `wmcharprobe/` — 注入通道探针：WM_CHAR 文本直投 vs SendInput 按键的 A/B 验证，
+    direct 模式逐字镜像产品的文本直投算法；读 completion-guard.html 的 title 遥测（c/k/n/p/a/L/h）作判据；
+    用法见文件头注释
+  - `equivcheck/` — 重构等价性验证（逐函数比对函数体，证明结构调整零行为变化）
+- `.github/workflows/`：
+  - `ci.yml` — 两个作业：`verify`（gofmt / vet / test / build + 前端产物漂移检查 +
+    版本同步检查，只跑一遍）与 `build`（amd64/arm64 矩阵：mkres 生成资源 → 发布参数构建 →
+    `tools/pecheck` 读回校验；arm64 另做 `go vet` 与 `go test -c` 测试编译）。
+    拆开是刻意的：前端构建不必按架构重复，而"资源有没有链进产物"只有真构建一次才回答得了
+  - `release.yml` — 发版（见「发布流程」）
 - **版本号单一来源**：`cmd/type/main.go` 的 `version` 变量；build.ps1 自动同步到
   package.json，并在构建期把它传给 `tools/mkres` 生成资源——改版本只改 main.go，
   然后跑 build.ps1。版本可带预发布后缀（如 `1.5.0-rc.1`）：资源里的数字字段取后缀前
   的数字部分（只允许数字），ProductVersion / package.json 用完整串（semver 兼容）；
-  ci.yml 的版本检查用同款正则校验完整串
+  ci.yml / release.yml 的版本检查用同款正则校验完整串
 - **build.ps1 必须保留 UTF-8 BOM**（文件首三字节 EF BB BF）：Windows PowerShell 5.1
   对无 BOM 的 .ps1 按系统 ANSI（中文系统为 GBK）解码，中文注释的尾字节会吞掉换行，
   把下一行代码并进注释成为死代码——ProductVersion 同步曾因此静默失效。改脚本后若
@@ -85,7 +122,7 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 |---|---|
 | 业务代码 / Go 测试 / 入库工具脚本 | Go（equivcheck 即 Go 写的） |
 | 前端 | TypeScript + Vite |
-| 构建编排 | PowerShell |
+| 构建编排 / 发布打包 | PowerShell（build.ps1、release.yml 的步骤） |
 | Windows 资源生成（图标/版本信息） | Go（tools/mkres，winres 库），取代 windres + .rc |
 | 构建产物校验（PE 架构 / 资源读回） | Go（tools/pecheck，winres 库，仅构建期使用） |
 | 图标/图像资产管线 | Python，仅经 uv（pyproject 锁定 pillow==12.3.0） |
@@ -118,7 +155,9 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   悬停提示（title）为可调文案不入冻结清单，但保持一行短句风格（与按钮同量级），
   详细说明写 README——v1.5.0 发布后曾因提示过长精简约一半
 
-## 目标窗口与轮询（两条踩过坑的约定，勿"优化"掉）
+## 非显而易见的不变量与踩坑记录
+
+### 目标窗口与轮询
 
 - **目标窗口语义**：预览 = 当前前台窗口（100ms 节拍采样，窗口标识或标题一变
   下一拍就刷新，秒数仍每秒一档；用户切到哪个窗口就显示哪个，含 Type 自身；
@@ -131,7 +170,7 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   第一拍后断裂、状态永不刷新（症状：预览不跟随、完成后启动键卡死）。
   恢复可见/焦点时无条件重启链条，作为 WebView2 挂起定时器的兜底
 
-## 焦点锁定与漂移防护（v1.5.3）
+### 焦点锁定与漂移防护（v1.5.3）
 
 - **采样必须一次读全**：`Foreground` 接口只有 `Sample() ForegroundSample`
   （标识 + 标题 + 是否自身）。拆成三个方法会在两次调用的间隙发生切换时得到
@@ -166,7 +205,7 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   会变）。要真正覆盖得上 UI Automation 做元素级比对，成本与稳定性风险都高，
   当前决定是维持现状并写进 README 已知限制
 
-## 文本直投（v1.5.0，WM_CHAR 文本层注入）
+### 文本直投（v1.5.0，WM_CHAR 文本层注入）
 
 - 带代码补全的在线编辑器（在线作业/考试平台的代码框一类）有两个按键层行为会打乱注入的代码：
   ① 补全弹窗把空格/回车/Tab 的键义改写为"接受候选"；② 括号自动配对（键入
@@ -195,28 +234,7 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   预期对比、title 遥测）；勿带 `?allow-paste=1` 做 Type 实测——那是停用
   粘贴拦截、供自动化注入的诊断模式
 
-## 提交前：检查文档同步（每次提交必做）
-
-代码改了文档没跟上，是本仓库反复出现过的问题（CI 描述、新增文案、行为语义都栽过）。
-每次提交前对照下表过一遍 README.md（面向用户）与本文件（面向代理），
-需要更新的与代码放进同一次提交，不要"下次再补"：
-
-| 变更类型 | 同步位置 |
-|---|---|
-| 用户可见行为 / 功能 / 限制 | README.md：功能、使用步骤、已知限制 |
-| 新增或修改用户可见文案 | 本文件「行为契约」的文案清单 |
-| CI 步骤 / 检查项 | README.md 技术栈与项目结构的 CI 行 + 本文件「布局与单一来源」 |
-| 命令 / 构建流程 / 目录结构 | 本文件「常用命令」「布局与单一来源」+ README「自行编译」 |
-| 非显而易见的新约定 / 踩坑结论 | 本文件对应章节（如「目标窗口与轮询」） |
-| 版本号 | 只改 cmd/type/main.go；package.json 交给 build.ps1，资源版本由 tools/mkres 构建期生成 |
-
-另有一条措辞约定：**用户可见文本不点名具体第三方产品/平台**（README、界面文案
-一律适用）。要交代适用场景就用类别描述（如「带代码补全的在线编辑器」）——点名
-会把项目绑死在某个产品上，也让读者误以为只支持它。此前文本直投的文案里出现过
-具体的在线作业平台名，已清理；新增文案别再引入（产品名即使在代码注释、测试页里
-也不必出现，那里复刻的是行为而不是某个站点）。
-
-## 其他
+### 其它不变量
 
 - **DPI 感知不能丢**（v1.5.1 换 webview 绑定时踩过）：进程 DPI 感知由 `tools/mkres`
   生成的 manifest 声明（PerMonitorV2）。旧库是在运行时调 `SetProcessDpiAwarenessContext`，
@@ -240,9 +258,25 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
 - 仅支持 `windows && (amd64 || arm64)`；386 编译被刻意禁止（INPUT 结构体手工
   填充仅匹配 64 位 ABI）
 - 提交信息：中文一行式主题 + 正文说明要点
-- 发版流程：改 `version` → `scripts/build.ps1`（出 amd64；资源两架构一并生成）→
-  `$env:GOARCH="arm64"; go build -ldflags="-H windowsgui -s -w" -o Type-arm64.exe ./cmd/type`
-  → 两个 exe 各跑一次 `go run ./tools/pecheck -exe <exe> -version <版本> -arch <架构>`
-  → 两个 exe 各打一个 zip（`Type-<版本>-windows-<架构>.zip`）→ 提交推送 →
-  `gh release create vX.Y.Z <两个 zip>`（一个 tag 挂两个附件）。根目录 Type.exe（amd64）
-  留在本地、不入库
+
+## 提交前：检查文档同步（每次提交必做）
+
+代码改了文档没跟上，是本仓库反复出现过的问题（CI 描述、新增文案、行为语义都栽过）。
+每次提交前对照下表过一遍 README.md（面向用户）与本文件（面向代理），
+需要更新的与代码放进同一次提交，不要"下次再补"：
+
+| 变更类型 | 同步位置 |
+|---|---|
+| 用户可见行为 / 功能 / 限制 | README.md：功能、使用步骤、已知限制 |
+| 新增或修改用户可见文案 | 本文件「行为契约」的文案清单 |
+| CI 步骤 / 检查项 / 发布方式 | README.md 技术栈与项目结构的 CI 行 + 本文件「布局与单一来源」「发布流程」 |
+| 命令 / 构建流程 / 目录结构 | 本文件「常用命令」「布局与单一来源」+ README「自行编译」 |
+| 非显而易见的新约定 / 踩坑结论 | 本文件对应章节（如「焦点锁定与漂移防护」） |
+| 版本号 | 只改 cmd/type/main.go；package.json 交给 build.ps1，资源版本由 tools/mkres 构建期生成 |
+| 发版 | 本文件「发布流程」+ 新增/更新 `release-notes/v<版本>.md`（与代码同一次提交） |
+
+另有一条措辞约定：**用户可见文本不点名具体第三方产品/平台**（README、界面文案
+一律适用）。要交代适用场景就用类别描述（如「带代码补全的在线编辑器」）——点名
+会把项目绑死在某个产品上，也让读者误以为只支持它。此前文本直投的文案里出现过
+具体的在线作业平台名，已清理；新增文案别再引入（产品名即使在代码注释、测试页里
+也不必出现，那里复刻的是行为而不是某个站点）。

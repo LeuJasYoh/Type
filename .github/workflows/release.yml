@@ -1,0 +1,118 @@
+name: Release
+
+# 发版：打 v* 标签即触发；网络不便时也可在 Actions 页面点 Run workflow
+# （手动触发会在所选提交上创建标签，无需本地 git）。
+#
+# 发布前的三道闸门 —— 全在下面按顺序执行，任何一道不过就不产出：
+#   ① 版本一致：标签 == cmd/type/main.go 的 version, 且发布说明与 package.json 同步
+#   ② 测试全绿：go test 在发布包生成之前先跑一遍
+#   ③ 读回校验：tools/pecheck 逐项确认图标/版本/DPI manifest 真的链进了 exe
+#
+# 说明文字来自仓库里的 release-notes/v<版本>.md（与代码同一次提交、可 diff、可回看），
+# 原样作为 Release 正文 —— 表格、配图、链接都能用，与手工发布的观感一致。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '要发布的版本号（必须与 cmd/type/main.go 的 version 一致，如 1.5.3）'
+        required: true
+        type: string
+
+# 建标签与 Release 需要写权限（默认的 GITHUB_TOKEN 是只读）
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # 版本号单一来源是 cmd/type/main.go；标签必须与它一致，否则发出去的包
+      # 会名不副实（这是最容易犯的错：改了代码忘了改版本，或反过来）
+      - name: 解析并校验版本
+        shell: pwsh
+        run: |
+          $m = Select-String -Path cmd/type/main.go -Pattern 'version\s*=\s*"([\d.]+(?:-[0-9A-Za-z.]+)?)"'
+          if (-not $m) { throw "cmd/type/main.go 中未找到 version 变量" }
+          $ver = $m.Matches[0].Groups[1].Value
+
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $tag = $env:GITHUB_REF_NAME
+          } else {
+            $tag = 'v' + ('${{ inputs.version }}'.TrimStart('v', 'V'))
+          }
+          if ($tag -ne "v$ver") {
+            throw "标签 $tag 与 cmd/type/main.go 的版本 $ver 不一致：先把版本号定下来再发"
+          }
+
+          # 说明文件必须存在，且真的写了本次的包名（防"复制上一版说明忘了改版本号"）
+          $notes = "release-notes/$tag.md"
+          if (-not (Test-Path $notes)) {
+            throw "缺少发布说明 $notes：把本次的用户可见变化写进去（与代码同一次提交）"
+          }
+          if (-not (Select-String -Path $notes -Pattern ([regex]::Escape("Type-$ver-windows-")) -Quiet)) {
+            throw "$notes 里没有出现 Type-$ver-windows-：说明里的包名与实际产物对不上"
+          }
+          if (-not (Select-String -Path frontend/package.json -Pattern ([regex]::Escape($ver)) -Quiet)) {
+            throw "frontend/package.json 未同步到版本 $ver（跑一次 scripts/build.ps1）"
+          }
+
+          Add-Content -Path $env:GITHUB_ENV -Value "version=$ver"
+          Add-Content -Path $env:GITHUB_ENV -Value "tag=$tag"
+          Write-Host "准备发布 $tag (版本 $ver)"
+
+      # 发布包不该来自测试不过的代码：打标签的提交未必走过 main 的 CI
+      - name: go test
+        run: go test -count=1 ./...
+
+      # 资源两架构一并生成（.syso 不入库）；本步不能带 GOARCH
+      - name: 生成资源 (mkres)
+        run: go run ./tools/mkres -version $env:version -icon assets/icon.ico -out cmd/type/version
+
+      # 与 scripts/build.ps1 / README 的发布命令一致；包内只放一个 Type.exe
+      # （与既有 Release 一致：解压后双击即可），故先落到分架构目录再压缩
+      - name: 双架构构建 + 读回校验 + 打包
+        shell: pwsh
+        run: |
+          foreach ($arch in 'amd64', 'arm64') {
+            $env:GOARCH = $arch
+            go build -ldflags="-H windowsgui -s -w" -o "build/$arch/Type.exe" ./cmd/type
+            if ($LASTEXITCODE -ne 0) { throw "构建失败 ($arch)" }
+            Remove-Item Env:GOARCH   # 下面 go run 的 pecheck 要用宿主架构
+
+            go run ./tools/pecheck -exe "build/$arch/Type.exe" -version $env:version -arch $arch
+            if ($LASTEXITCODE -ne 0) { throw "读回校验失败 ($arch)：资源没链进 exe, 不发布" }
+
+            Compress-Archive -Path "build/$arch/Type.exe" `
+              -DestinationPath "Type-$env:version-windows-$arch.zip" -Force
+          }
+          Get-ChildItem *.zip | Select-Object Name, Length
+
+      # 已存在同名 Release 时覆盖更新（重跑安全）：附件与说明一并刷新
+      - name: 创建或更新 Release
+        shell: pwsh
+        run: |
+          $assets = @(
+            "Type-$env:version-windows-amd64.zip"
+            "Type-$env:version-windows-arm64.zip"
+          )
+          $notes = "release-notes/$env:tag.md"
+          gh release view $env:tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:tag @assets --clobber
+            gh release edit $env:tag --title "Type $env:version" --notes-file $notes
+            Write-Host "已更新既有 Release $env:tag"
+          } else {
+            # --target 只用于手动触发：标签由 gh 在当前提交上创建。
+            # (GITHUB_TOKEN 建标签不会再触发一次本工作流, 不存在递归)
+            gh release create $env:tag @assets --title "Type $env:version" --notes-file $notes --target $env:GITHUB_SHA
+            Write-Host "已创建 Release $env:tag"
+          }

@@ -73,6 +73,7 @@ GUI       WebView2 (Edge Chromium)
 前端      Vue 3 + TypeScript, Vite 构建为单文件 HTML (无其他运行时依赖)
 构建      vue-tsc 类型检查 + Vite (vite-plugin-singlefile) + go run ./tools/mkres + go build
 CI        GitHub Actions (windows-latest): gofmt / go vet / go test / go build + 前端产物漂移检查 + 版本同步检查；另按 amd64/arm64 矩阵做发布构建，并用 tools/pecheck 读回校验图标/版本/DPI manifest 真的链进了产物
+发布      打 v<版本> 标签即由 GitHub Actions 自动发行 (release.yml)：校验版本与发布说明一致 → 双架构构建 + 读回校验 → 打包 → 建 Release；说明文字取自入库的 release-notes/v<版本>.md
 Win32 API SendInput (KEYEVENTF_UNICODE) + WM_CHAR 文本直投 (SendMessageTimeoutW 直投焦点窗口) + 剪贴板 (CF_UNICODETEXT, EnumClipboardFormats 全格式快照, RtlMoveMemory) + 前台窗口检测 (GetForegroundWindow) + 单实例互斥体 (CreateMutexW)
 图标      圆角多尺寸 ICO（uv + Pillow 生成, scripts/gen_icon.py 字节级可复现）
 资源      tools/mkres (纯 Go, winres) 生成图标 + 版本信息 + manifest (DPI 感知) → .syso
@@ -129,7 +130,10 @@ Type/
 │   ├── pecheck/             ← 构建产物读回校验: PE 架构 + 图标/版本/manifest 是否真的链进 exe (发版与 CI 共用)
 │   └── wmcharprobe/         ← 注入通道探针 (WM_CHAR 文本直投 vs SendInput 按键, 用法见文件头注释)
 ├── testdata/                ← 手工测试页 (paste-guard.html 防粘贴 / completion-guard.html 补全+配对, 用法见页内注释)
-├── .github/workflows/ci.yml ← CI: gofmt / vet / test / build + 前端产物漂移检查 + 版本同步检查
+├── release-notes/           ← 各版本发布说明 (v<版本>.md, 发布时原样作为 Release 正文)
+├── .github/workflows/
+│   ├── ci.yml               ← CI: gofmt / vet / test / build + 前端产物漂移检查 + 版本同步检查 + 双架构发布构建与资源读回
+│   └── release.yml          ← 发版: 打 v<版本> 标签触发, 构建/校验/打包/建 Release (也可在 Actions 页面手动触发)
 ├── go.mod / go.sum          ← Go 模块定义
 ├── pyproject.toml / uv.lock / .python-version ← Python 资产管线依赖 (uv 管理, 锁定 Pillow)
 └── .gitignore               ← 忽略构建产物/依赖/工具元数据
