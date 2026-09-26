@@ -1,7 +1,8 @@
 // equivcheck — 重构等价性验证: 逐函数比对重构前后的函数体。
 // 用 go/parser 取顶层函数(旧实现用正则扫行 + 找行首 "}" 收尾, 遇到函数内的
 // 行首大括号就提前截断, 历史 rev 上只能抽出 2 个函数, 结论不可用),
-// 函数体空白归一化后逐字节比对: 纯搬移的函数应完全一致,
+// 函数体按 token 序列比对(字面量保留原文, 只忽略 token 之间的空白):
+// 纯搬移的函数应完全一致,
 // 被机械变换(改名/方法化/接口调用替换)的函数会列入差异清单, 供人工逐条定位。
 //
 // 用法:
@@ -18,9 +19,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/scanner"
 	"go/token"
 	"os"
 	"os/exec"
@@ -89,18 +92,51 @@ func extract(src string) (map[string]string, error) {
 	return funcs, nil
 }
 
-// norm 去除全部空白, 使比对只关心 token 序列
-func norm(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch r {
-		case ' ', '\t', '\n', '\r':
-		default:
-			b.WriteRune(r)
+// normalize 把函数体化成 token 序列, 作为比对的基准。
+//
+// 旧实现直接删掉函数体里的全部空白, 那会把字符串字面量内部的空格一并删掉,
+// 于是 "剩余 N 秒" 与 "剩余N秒" 被判成完全一致 —— 而界面文案恰恰是本仓库
+// 最不该悄悄变动的东西(冻结文案)。改为按 token 比对: 字符串/字符/数字字面量
+// 保留原文, 只有 token 之间的空白被丢弃。注释仍按旧规则去掉空白: 注释不影响
+// 行为, 而多行块注释的缩进会随 gofmt 变动, 不能算成差异。
+func normalize(src string) (string, error) {
+	var firstErr error
+	var s scanner.Scanner
+	fset := token.NewFileSet()
+	file := fset.AddFile("body.go", fset.Base(), len(src))
+	s.Init(file, []byte(src), func(_ token.Position, msg string) {
+		if firstErr == nil {
+			firstErr = errors.New(msg)
 		}
+	}, scanner.ScanComments)
+
+	var b strings.Builder
+	for {
+		_, tok, lit := s.Scan()
+		if tok == token.EOF {
+			break
+		}
+		if tok == token.SEMICOLON && lit == "\n" {
+			continue // 换行自动插入的分号等价于空白: 留下它会把纯排版调整算成差异
+		}
+		if tok == token.COMMENT {
+			lit = commentNorm.Replace(lit)
+		}
+		b.WriteString(tok.String())
+		if lit != "" {
+			b.WriteByte(' ')
+			b.WriteString(lit)
+		}
+		b.WriteByte('\n')
 	}
-	return b.String()
+	if firstErr != nil {
+		return "", firstErr
+	}
+	return b.String(), nil
 }
+
+// commentNorm 注释文本内的空白: 与旧实现一致地忽略(见 normalize 注释)
+var commentNorm = strings.NewReplacer(" ", "", "\t", "", "\r", "", "\n", "")
 
 // origin 记录函数来自哪个文件的第几行, 供差异清单定位
 type origin struct {
@@ -218,12 +254,24 @@ func main() {
 			target = renamed
 		}
 		nb, ok := merged[target]
-		switch {
-		case !ok:
+		if !ok {
 			missing = append(missing, name)
-		case norm(body) == norm(nb):
+			continue
+		}
+		// 两侧归一化失败宁可报错退出: 静默比对半个 token 流会把差异漏成"一致"
+		oldNorm, err := normalize(body)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "旧侧 %s 归一化失败: %v\n", name, err)
+			os.Exit(1)
+		}
+		newNorm, err := normalize(nb)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "新侧 %s 归一化失败: %v\n", target, err)
+			os.Exit(1)
+		}
+		if oldNorm == newNorm {
 			same = append(same, name)
-		default:
+		} else {
 			diff = append(diff, name)
 		}
 	}
