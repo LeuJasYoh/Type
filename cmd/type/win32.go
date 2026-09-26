@@ -42,6 +42,7 @@ var (
 	procSetWindowPos             = user32.NewProc("SetWindowPos")
 	procSetClassLongPtrW         = user32.NewProc("SetClassLongPtrW")
 	procMessageBoxW              = user32.NewProc("MessageBoxW")
+	procShellExecuteW            = shell32.NewProc("ShellExecuteW")
 	procCreateMutexW             = kernel32.NewProc("CreateMutexW")
 	procCloseHandle              = kernel32.NewProc("CloseHandle")
 )

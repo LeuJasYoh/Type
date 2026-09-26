@@ -22,13 +22,6 @@ const (
 	ERROR_ALREADY_EXISTS = 183
 )
 
-const (
-	MB_OK              = 0x00000000
-	MB_ICONINFORMATION = 0x00000040
-	MB_SETFOREGROUND   = 0x00010000
-	MB_TOPMOST         = 0x00040000
-)
-
 // instanceMutex 句柄常驻至进程结束, 不释放: 系统在进程退出时回收。
 // 提前释放会让第二个实例有机会在第一个退出的瞬间挤进来
 var instanceMutex uintptr
@@ -39,7 +32,8 @@ func guardSingleInstance() bool {
 	if !claimInstanceMutex(instanceMutexName) {
 		messageBox("Type 已在运行",
 			"另一个 Type 窗口已经打开，请使用那个窗口。\n\n"+
-				"两个实例同时输入会互相干扰：剪贴板内容可能被覆盖或丢失。")
+				"两个实例同时输入会互相干扰：剪贴板内容可能被覆盖或丢失。",
+			MB_OK|MB_ICONINFORMATION|MB_SETFOREGROUND|MB_TOPMOST)
 		return false
 	}
 	return true
@@ -69,19 +63,4 @@ func claimInstanceMutex(name string) (proceed bool) {
 	}
 	instanceMutex = h
 	return true
-}
-
-// messageBox 置顶提示框, 不依赖 WebView 是否可用。
-// 显示失败不影响主流程: 互斥体本身已经挡住了第二个实例
-func messageBox(title, text string) {
-	titlePtr, err1 := syscall.UTF16PtrFromString(title)
-	textPtr, err2 := syscall.UTF16PtrFromString(text)
-	if err1 != nil || err2 != nil {
-		return
-	}
-	flags := uintptr(MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST)
-	procMessageBoxW.Call(0,
-		uintptr(unsafe.Pointer(textPtr)),
-		uintptr(unsafe.Pointer(titlePtr)),
-		flags)
 }

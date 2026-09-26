@@ -29,7 +29,8 @@ go test -count=1 ./...
 # 资源缺失或架构不匹配时 go build 不报错, 只有读回才看得见 (CI 同款)
 go run ./tools/pecheck -exe Type.exe -version <main.go 中的版本> -arch amd64
 
-# 前端开发 (HMR): 必须带 dev 构建标签, 否则 exe 不含 dev server 代码路径
+# 前端开发 (HMR): 必须带 dev 构建标签, 否则 exe 不含 dev server 代码路径。
+# dev 构建同时打开 WebView2 的 DevTools 与右键菜单, 正式构建两者皆关
 cd frontend; npm run dev            # 终端 1
 go build -tags dev -o Type-dev.exe ./cmd/type   # 终端 2
 .\Type-dev.exe                      # (-dev 参数或 TYPE_DEV_URL 指定端口)
@@ -69,7 +70,10 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 ## 布局与单一来源
 
 - `cmd/type/`：Go 入口包，业务层（typing.go 的 TypingService）+ Win32 平台层（win32_*.go）
-  单实例守卫在 win32_instance.go；`devserver_prod.go` / `devserver_dev.go` 由 `dev` 构建标签二选一
+  单实例守卫在 win32_instance.go；`devserver_prod.go` / `devserver_dev.go` 由 `dev` 构建标签二选一，
+  两个文件各持有同一组开发开关：dev server 地址（devServerURL）与 WebView2 调试模式（devMode，
+  决定 DevTools 与右键菜单），正式构建里两者都关；启动预检与提示框在 win32_webview2.go 与
+  win32_msgbox.go，两者都不经过 WebView2（界面起不来时，系统自己的对话框是唯一还能用的通道）
 - `internal/web/`：go:embed 前端产物包（dist/index.html 入库，免 Node 亦可 go build/test）
 - `frontend/`：自包含 Vite 项目（package.json / node_modules 都在这里，不在仓库根）
 - `assets/`：图标源图与产物（screenshot-light.png / screenshot-dark.png 为 README
@@ -146,7 +150,14 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   但不得改写上面已冻结的那些。v1.5.3 的漂移中止三条同属新增，各代表一种不同的
   落点事实，别合并：`输入中断：目标窗口已切换，未输入任何内容`（一个字都没送出去）、
   `输入中断：目标窗口已切换，已输入 N 字`（逐字符路径，N 为实际注入数）、
-  `输入中断：目标窗口已切换，粘贴结果无法确认`（粘贴已发出后才发现切换）
+  `输入中断：目标窗口已切换，粘贴结果无法确认`（粘贴已发出后才发现切换）；
+  `输入完成，但剪贴板未恢复，原内容可能已丢失`同理：注入已送达而剪贴板没换回来，
+  是两个都成立的事实，既不能退化成 `输入完成`，也不能退化成 `输入失败`
+- 启动提示框的标题与两条正文同属发布语言，逐字固定：`Type 无法启动` /
+  `缺少 Microsoft Edge WebView2 运行时，Type 的界面需要它才能显示。…`（运行时缺失）/
+  `WebView2 初始化失败，Type 的界面无法创建。…`（运行时查得到但起不来）。
+  读者是从没听说过"运行时"的人，正文只承载三件事：缺什么、点哪里、然后做什么，
+  别往里加技术细节；按钮文案跟随系统语言（中文系统显示"是/否"）
 - **失败终态必须携带具体原因**，`输入失败` 只在无处可归时兜底：剪贴板路径的原因由
   `typeTextViaClipboard` 返回（`剪贴板操作失败` = 剪贴板本身不可用，`粘贴未生效：...`
   = 剪贴板已写入但目标窗口拒收 Ctrl+V），逐字符路径用 `输入中断：...`。v1.5.1 修过一次
@@ -249,8 +260,31 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
 - 注入失败必须可见：`TextInjector` 五个方法都返回 bool（SendInput 被 UIPI 拦截时
   整体返回 0；WM_CHAR 直投的 SendMessageTimeout 超时/失败返回 0）。不要把返回值
   改成 void，那正是"静默失败被报成输入完成"的来源
+- **启动路径有两道闸门**（win32_webview2.go）：创建 WebView2 之前先用依赖自带的
+  `webviewloader.GetInstalledVersion()` 预检（微软对这类设备的官方建议就是"先检测、
+  再引导用户去官网安装"），创建之后仍要判 `New` 的返回值：预检通过不等于创建成功
+  （运行时可能损坏或被策略拦下）。**nil 判空必须在 `defer w.Destroy()` 之前** ——
+  `New` 同步失败时返回的是 nil 接口，而 defer 语句求值 receiver 的那一刻就 panic，
+  栈顶落在那条 defer 上而不是后面的 SetTitle，看着像是别处的问题
+- **复现"机器上没有 WebView2"的启动路径**（改动启动代码前后都该跑一遍，真机不用动）：
+  把环境变量 `WEBVIEW2_BROWSER_EXECUTABLE_FOLDER` 指向一个不存在的目录再启动。
+  期望：弹出 `Type 无法启动` 提示框，进程停在框上，stderr 为空。修这个之前这里是
+  `Result: 80070002` 加一句 nil 指针 panic 后退出 —— 而 GUI 子系统没有控制台，
+  这两种输出用户一个都看不见，症状就只剩"双击之后什么都没有"
 - 剪贴板恢复守卫用 `Clipboard.HoldsText`（按原始字节比对）而不是 `GetText` 的
   字符串比较：CF_UNICODETEXT 内嵌 NUL 时字符串会在 NUL 处截断而误判
+- **剪贴板恢复失败必须可见**：`RestoreSnapshotRaw` / `writeClipboardFormats` 都返回
+  是否真的写回成功，`restoreClipboardSnapshot` 把它折算成"剪贴板是否仍保有注入前的
+  内容"，终态据此在成功路径改用 `输入完成，但剪贴板未恢复，原内容可能已丢失`。
+  恢复与读写的重试档位是分开的（4×50ms 对 8×100ms）：失败意味着用户原本复制的东西
+  丢了，值得多等几百毫秒；这段时间在任务收尾，用户无感。用户已复制新内容时跳过恢复
+  不算失败（剪贴板归用户所有，正是想要的结果），快照没拿到（nil）才算
+- **快照只跳过"不是普通内存块"的格式**（`skippableFormat`）：句柄型（CF_BITMAP /
+  CF_PALETTE / CF_ENHMETAFILE）、块内含句柄的 CF_METAFILEPICT、所有者绘制与
+  私有显示格式、GDI 对象格式族（0x0300-0x03FF）。判据是"照抄下来恢复时会不会
+  写回失效句柄或垃圾字节"，而不是"这个格式少见"：后者会把 HTML Format、RTF、
+  PNG 这些注册格式一起丢掉；CF_PRIVATEFIRST..LAST 刻意不跳过，它们是内存块。
+  新增格式时按判据决定，别退化成"全都照抄"（旧行为）或"只抄白名单"
 - **Win32 负常量以 `^uintptr(n)` 表达**（`^` 是按位取反不是取负：`^uintptr(13)` = -14，
   `^uintptr(33)` = -34），看着像笔误但不是，改成十进制负数字面量既编译不过也没必要。
   这地方极易被误读误改，故 `main_test.go` 里 `TestApplyWindowIconClassIndex` 会真建窗口

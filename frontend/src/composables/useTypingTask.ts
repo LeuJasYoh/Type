@@ -106,5 +106,24 @@ export function useTypingTask() {
   document.addEventListener('visibilitychange', healPolling);
   window.addEventListener('focus', healPolling);
 
+  // 挂载时先同步一次后端状态。页面重载有两条不受控的来路 —— 用户按
+  // Ctrl+R/F5(浏览器加速键, 网页拦不住), 以及渲染进程崩溃后 WebView2 自动
+  // 重载 —— 之后前端状态会归零, 而后端任务可能仍在跑: 不同步的话界面显示
+  // 空闲、取消按钮是灰的, 直到再点启动才发现"已有任务在运行"。
+  // 起始 phase 为 idle 时不启动轮询, 与首次启动前一致
+  async function syncFromBackend(): Promise<void> {
+    try {
+      const s = await getTypingStatus();
+      status.value = s;
+      if (s.phase === 'countdown' || s.phase === 'typing') {
+        isRunning.value = true;
+        startPolling();
+      }
+    } catch {
+      // 绑定不可用(如用普通浏览器打开 dev server)时保持初始 idle
+    }
+  }
+  void syncFromBackend();
+
   return { status, isRunning, start, cancel };
 }

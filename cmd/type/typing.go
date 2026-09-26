@@ -43,7 +43,10 @@ type Clipboard interface {
 	// 守卫会误判为"用户已改动"而跳过恢复
 	HoldsText(text string) bool
 	Snapshot() []ClipboardFormat
-	RestoreSnapshotRaw(snap []ClipboardFormat) // 无条件写回(调用方需确认剪贴板未被用户改动)
+	// RestoreSnapshotRaw 无条件写回快照(调用方需确认剪贴板未被用户改动),
+	// 返回是否真的恢复成功: 失败意味着用户原本的内容可能已丢失, 调用方
+	// 必须说出来而不是静默略过
+	RestoreSnapshotRaw(snap []ClipboardFormat) bool
 }
 
 // TargetID 目标窗口的平台无关标识(不透明): 业务层只做相等比较, 不解释内容。
@@ -104,6 +107,10 @@ const (
 	// msgTargetSwitchedPasted 粘贴已经发出而目标窗口随即改变: 落点可能已
 	// 不是锁定目标, 内容是否送达无法确认 —— 不能报"输入完成"
 	msgTargetSwitchedPasted = "输入中断：目标窗口已切换，粘贴结果无法确认"
+	// msgClipboardNotRestored 粘贴成功但剪贴板没能换回原内容: 注入是成功的,
+	// 而用户原本复制的东西可能已经丢了。两处都不能含糊 —— 既不能报成
+	// "输入完成"让用户以为一切如常, 也不能报成"输入失败"抹掉注入已送达的事实
+	msgClipboardNotRestored = "输入完成，但剪贴板未恢复，原内容可能已丢失"
 )
 
 // msgTargetSwitchedTyped 逐字符路径中途检测到目标窗口切换。已注入的部分
@@ -277,6 +284,10 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 	injected := false
 	// failMsg 注入中途被拒的具体原因; 为空则终态用通用"输入失败"
 	failMsg := ""
+	// clipboardOK 剪贴板是否仍保有注入前的内容。只有粘贴路径会碰剪贴板,
+	// 恢复失败时终态必须如实说明: 报完"输入完成"就把用户原本复制的东西
+	// 当成还在, 是最容易让人吃亏的那种隐瞒
+	clipboardOK := true
 	if containsNonASCII(text) && !forceSendInput {
 		setStatus(&TypingStatus{
 			Phase: PhaseTyping, Message: "检测到中文，正在操作剪贴板...", Progress: -1,
@@ -284,7 +295,7 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 		})
 		// 失败原因由被调方给出: 剪贴板故障、目标窗口拒收 Ctrl+V、目标窗口
 		// 切换三者的处置不同, 不能都退化成通用的"输入失败"
-		success, failMsg = s.typeTextViaClipboard(text, locked.ID)
+		success, failMsg, clipboardOK = s.typeTextViaClipboard(text, locked.ID)
 		injected = success // 粘贴按键被接受即内容已送达
 		if !success && !cancelled() {
 			setStatus(&TypingStatus{
@@ -377,6 +388,9 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 	switch {
 	case cancelled():
 		// Cancel 已写入取消状态
+	case success && injected && !clipboardOK:
+		// 内容已送达, 但剪贴板没能换回原内容: 如实说明, 不报"输入完成"
+		setStatus(&TypingStatus{Phase: PhaseSuccess, Message: msgClipboardNotRestored, Progress: -1, TargetWindow: target})
 	case success && injected:
 		setStatus(&TypingStatus{Phase: PhaseSuccess, Message: "输入完成", Progress: -1, TargetWindow: target})
 	case success:
@@ -410,29 +424,28 @@ func (s *TypingService) sendEscaped(key func() bool) bool {
 // 返回值: success 粘贴按键是否被系统接受(即内容是否送达);
 // failMsg 失败时用户可见的具体原因 —— 剪贴板故障、目标窗口拒收 Ctrl+V、
 // 目标窗口切换三者必须分开报; 成功或中途取消时为空(取消的状态由 Cancel
-// 负责写入)
-func (s *TypingService) typeTextViaClipboard(text string, locked TargetID) (success bool, failMsg string) {
+// 负责写入);
+// clipboardOK 剪贴板是否仍保有注入前的内容(未被本次注入弄丢), 仅在 success
+// 为真时被终态采信: 注入成功而恢复失败要如实说明, 见 msgClipboardNotRestored
+func (s *TypingService) typeTextViaClipboard(text string, locked TargetID) (success bool, failMsg string, clipboardOK bool) {
 	// 粘贴前的漂移守卫: 目标已切走就一个字都不送, 也不碰剪贴板
 	if !s.targetHeld(locked) {
-		return false, msgTargetSwitchedIdle
+		return false, msgTargetSwitchedIdle, true // 没碰过剪贴板, 原内容还在
 	}
 	snap := s.clipboard.Snapshot()
 	if !s.clipboard.SetText(text) {
 		// EmptyClipboard 可能已执行(分配阶段失败), 直接写回快照
-		s.clipboard.RestoreSnapshotRaw(snap)
-		return false, msgClipboardFailed
+		return false, msgClipboardFailed, s.clipboard.RestoreSnapshotRaw(snap)
 	}
 	s.sleep(100 * time.Millisecond)
 
 	if s.cancelFlag.Load() {
-		s.restoreClipboardSnapshot(snap, text)
-		return false, ""
+		return false, "", s.restoreClipboardSnapshot(snap, text)
 	}
 	// 写入剪贴板与粘贴之间还隔着 100ms 稳定等待, 期间目标可能被切走;
 	// 此刻放弃粘贴, 但剪贴板已经写过, 快照恢复照旧执行
 	if !s.targetHeld(locked) {
-		s.restoreClipboardSnapshot(snap, text)
-		return false, msgTargetSwitchedIdle
+		return false, msgTargetSwitchedIdle, s.restoreClipboardSnapshot(snap, text)
 	}
 	pasted := s.injector.SendPaste()
 	// 紧随其后的复检: SendPaste 返回后再漂移, 说明这次粘贴的落点已不是
@@ -442,14 +455,14 @@ func (s *TypingService) typeTextViaClipboard(text string, locked TargetID) (succ
 	drifted := !s.targetHeld(locked)
 	s.sleep(200 * time.Millisecond)
 
-	s.restoreClipboardSnapshot(snap, text)
+	restored := s.restoreClipboardSnapshot(snap, text)
 	if drifted {
-		return false, msgTargetSwitchedPasted
+		return false, msgTargetSwitchedPasted, restored
 	}
 	if !pasted {
-		return false, msgPasteRejected
+		return false, msgPasteRejected, restored
 	}
-	return true, ""
+	return true, "", restored
 }
 
 // targetHeld 当前顶层前台窗口是否仍是锁定的目标窗口(漂移守卫的判据)。
@@ -459,16 +472,20 @@ func (s *TypingService) targetHeld(locked TargetID) bool {
 	return s.foreground.Sample().ID == locked
 }
 
-// restoreClipboardSnapshot 恢复快照: 仅当剪贴板仍为本次注入的文本时执行,
-// 避免覆盖用户在注入期间新复制的数据; 原内容为空则直接清空, 不留注入残留
-func (s *TypingService) restoreClipboardSnapshot(snap []ClipboardFormat, injected string) {
+// restoreClipboardSnapshot 恢复快照, 返回剪贴板是否仍保有注入前的内容。
+// 仅当剪贴板仍为本次注入的文本时执行, 避免覆盖用户在注入期间新复制的数据;
+// 原内容为空则直接清空, 不留注入残留。
+// 返回 false 的两种情形都意味着原内容可能已丢失: 快照本身没拿到(nil),
+// 或恢复时剪贴板被别的程序占着/写回失败。用户已复制新内容时跳过恢复不算失败
+// —— 剪贴板此刻归用户所有, 正是想要的结果
+func (s *TypingService) restoreClipboardSnapshot(snap []ClipboardFormat, injected string) bool {
 	if snap == nil {
-		return
+		return false // 原状态未知, 无从恢复
 	}
 	if !s.clipboard.HoldsText(injected) {
-		return // 用户期间已复制新内容
+		return true
 	}
-	s.clipboard.RestoreSnapshotRaw(snap)
+	return s.clipboard.RestoreSnapshotRaw(snap)
 }
 
 // ─── 输入判断 ─────────────────────────────────────────

@@ -241,6 +241,57 @@ func TestClipboardRestoreGuard(t *testing.T) {
 	}
 }
 
+// TestSkippableFormat 快照该跳过哪些格式。判据是"这块数据是不是普通内存块":
+// 句柄型与含句柄的格式照抄下来, 恢复时写回的是失效句柄或垃圾字节, 受害的是
+// 系统里别的程序; 而普通内存块格式(文本/图片/文件/注册格式/程序私有格式)
+// 必须照抄 —— 多跳一个就是凭空丢内容
+func TestSkippableFormat(t *testing.T) {
+	skip := []struct {
+		name string
+		fmt  uint32
+	}{
+		{"CF_BITMAP", CF_BITMAP},
+		{"CF_PALETTE", CF_PALETTE},
+		{"CF_ENHMETAFILE", CF_ENHMETAFILE},
+		{"CF_METAFILEPICT(块内含图形句柄)", CF_METAFILEPICT},
+		{"CF_OWNERDISPLAY", CF_OWNERDISPLAY},
+		{"CF_DSPTEXT", CF_DSPTEXT},
+		{"CF_DSPBITMAP", CF_DSPBITMAP},
+		{"CF_DSPMETAFILEPICT", CF_DSPMETAFILEPICT},
+		{"CF_DSPENHMETAFILE", CF_DSPENHMETAFILE},
+		{"CF_GDIOBJFIRST", CF_GDIOBJFIRST},
+		{"GDI 对象族中间值", 0x0350},
+		{"CF_GDIOBJLAST", CF_GDIOBJLAST},
+	}
+	for _, c := range skip {
+		if !skippableFormat(c.fmt) {
+			t.Errorf("%s (%#x) 应被跳过", c.name, c.fmt)
+		}
+	}
+
+	keep := []struct {
+		name string
+		fmt  uint32
+	}{
+		{"CF_UNICODETEXT", CF_UNICODETEXT},
+		{"CF_TEXT", 1},
+		{"CF_OEMTEXT", 7},
+		{"CF_DIB", 8},
+		{"CF_WAVE", 12},
+		{"CF_HDROP", 15},
+		{"CF_DIBV5", 17},
+		{"CF_PRIVATEFIRST", CF_PRIVATEFIRST},
+		{"CF_PRIVATELAST", CF_PRIVATELAST},
+		{"GDI 族下界前一个", CF_GDIOBJFIRST - 1},
+		{"GDI 族上界后一个", CF_GDIOBJLAST + 1},
+	}
+	for _, c := range keep {
+		if skippableFormat(c.fmt) {
+			t.Errorf("%s (%#x) 是普通内存块格式, 不该被跳过", c.name, c.fmt)
+		}
+	}
+}
+
 // ─── 窗口类图标索引(仅测试用到的 Win32 入口) ──────────
 
 var (

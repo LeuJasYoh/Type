@@ -70,16 +70,17 @@ func (f *fakeInjector) clear() {
 }
 
 // fakeClipboard 内存剪贴板: 记录操作序列("snap"/"set"/"restore"),
-// 可配置 SetText 失败; 快照/恢复按单一文本格式往返。
+// 可配置 SetText 失败与恢复失败; 快照/恢复按单一文本格式往返。
 // held 是"读回来的内容", 用来模拟用户在注入期间改动剪贴板: text 是
 // 程序写进去的, held 是下次读取时看到的
 type fakeClipboard struct {
-	mu      sync.Mutex
-	text    string
-	held    string
-	setFail bool
-	snap    []ClipboardFormat
-	events  []string
+	mu          sync.Mutex
+	text        string
+	held        string
+	setFail     bool
+	restoreFail bool // 恢复失败: 模拟剪贴板被别的程序占着, 原内容就此丢失
+	snap        []ClipboardFormat
+	events      []string
 }
 
 func (f *fakeClipboard) SetText(text string) bool {
@@ -116,23 +117,27 @@ func (f *fakeClipboard) Snapshot() []ClipboardFormat {
 	return []ClipboardFormat{{Fmt: CF_UNICODETEXT, Data: []byte(f.text)}}
 }
 
-func (f *fakeClipboard) RestoreSnapshotRaw(snap []ClipboardFormat) {
+func (f *fakeClipboard) RestoreSnapshotRaw(snap []ClipboardFormat) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.events = append(f.events, "restore")
+	if f.restoreFail {
+		return false // 剪贴板被占用: 一个字节都没写回去
+	}
 	if len(snap) == 0 {
 		f.text = ""
 		f.held = ""
-		return
+		return true
 	}
 	if f.snap != nil {
 		// 带 UTF-16LE 编码的快照(如设置失败路径的未落盘快照): 解码回文本
 		f.text = string(utf16.Decode(unitsOf(snap[0].Data)))
 		f.held = f.text
-		return
+		return true
 	}
 	f.text = string(snap[0].Data)
 	f.held = f.text
+	return true
 }
 
 // unitsOf 把字节流按 UTF-16LE 切回码元
@@ -273,7 +278,9 @@ func TestServiceClipboardGuard(t *testing.T) {
 		t.Fatal("SetText 失败")
 	}
 	opsBefore := len(cb.ops())
-	svc.restoreClipboardSnapshot(snap, "注入文本")
+	if !svc.restoreClipboardSnapshot(snap, "注入文本") {
+		t.Error("守卫放行且恢复成功时应返回 true")
+	}
 	if got := cb.GetText(); got != "用户原文本" {
 		t.Errorf("守卫放行时应恢复原文本, got %q", got)
 	}
@@ -281,12 +288,15 @@ func TestServiceClipboardGuard(t *testing.T) {
 		t.Errorf("守卫放行时应执行一次恢复, 操作数 %d → %d", opsBefore, len(cb.ops()))
 	}
 
-	// 用户在注入期间复制了新内容 → 守卫拦截, 不覆盖
+	// 用户在注入期间复制了新内容 → 守卫拦截, 不覆盖。剪贴板此刻归用户所有,
+	// 正是想要的结果, 因此不算"未恢复"
 	if !cb.SetText("用户新复制的内容") {
 		t.Fatal("SetText 失败")
 	}
 	opsBefore = len(cb.ops())
-	svc.restoreClipboardSnapshot(snap, "注入文本")
+	if !svc.restoreClipboardSnapshot(snap, "注入文本") {
+		t.Error("用户已接管剪贴板时应返回 true(剪贴板内容没丢)")
+	}
 	if got := cb.GetText(); got != "用户新复制的内容" {
 		t.Errorf("守卫应拦截恢复, 剪贴板被覆盖为 %q", got)
 	}
@@ -294,9 +304,11 @@ func TestServiceClipboardGuard(t *testing.T) {
 		t.Errorf("守卫拦截时不应有剪贴板操作, 操作数 %d → %d", opsBefore, len(cb.ops()))
 	}
 
-	// 快照失败(nil) → 原状态未知, 不动剪贴板
+	// 快照失败(nil) → 原状态未知, 不动剪贴板, 且必须报"没恢复"
 	opsBefore = len(cb.ops())
-	svc.restoreClipboardSnapshot(nil, "用户新复制的内容")
+	if svc.restoreClipboardSnapshot(nil, "用户新复制的内容") {
+		t.Error("快照缺失时无从恢复, 应返回 false")
+	}
 	if got := cb.GetText(); got != "用户新复制的内容" {
 		t.Errorf("nil 快照不应改动剪贴板, got %q", got)
 	}
@@ -473,6 +485,8 @@ func TestChineseTypesViaClipboard(t *testing.T) {
 	}
 	if st := waitTerminal(t, svc); st.Phase != PhaseSuccess {
 		t.Fatalf("终态 phase = %s, want success", st.Phase)
+	} else if st.Message != "输入完成" {
+		t.Errorf("剪贴板恢复成功时终态文案 = %q, want 输入完成", st.Message)
 	}
 
 	// 注入器只收到一次粘贴, 不逐字符
@@ -589,6 +603,32 @@ func TestSendPasteRejected(t *testing.T) {
 	}
 	if got := cb.GetText(); got != "用户原文本" {
 		t.Errorf("粘贴被拒后仍应恢复原文本, got %q", got)
+	}
+}
+
+// 粘贴送达但剪贴板没能换回原内容: 注入本身是成功的, 因此不报"输入失败";
+// 但用户原本复制的东西可能已经丢了, 也不许报成"输入完成"
+func TestClipboardNotRestoredIsReported(t *testing.T) {
+	inj := newFakeInjector()
+	cb := &fakeClipboard{text: "用户原文本", restoreFail: true}
+	svc := newTestService(inj, cb, noSleep)
+
+	if _, err := svc.Start("你好", 1, false, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	st := waitTerminal(t, svc)
+	if st.Phase != PhaseSuccess {
+		t.Fatalf("终态 phase = %s, want success (注入已经送达)", st.Phase)
+	}
+	if st.Message != msgClipboardNotRestored {
+		t.Errorf("终态文案 = %q, want %q", st.Message, msgClipboardNotRestored)
+	}
+	if got, want := inj.calls(), []string{"V"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("注入序列 = %v, want %v", got, want)
+	}
+	// 恢复失败 = 用户原内容丢失, 终态必须带上目标窗口, 便于判断注入落在了哪
+	if st.TargetWindow != "记事本" {
+		t.Errorf("终态目标窗口 = %q, want 记事本", st.TargetWindow)
 	}
 }
 

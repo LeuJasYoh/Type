@@ -17,3 +17,7 @@ func devServerURL() string {
 	}
 	return ""
 }
+
+// devMode 开发构建返回 true: 打开 WebView2 的 DevTools 与右键菜单,
+// 本地调试界面时可以按 F12 查看元素与日志
+func devMode() bool { return true }

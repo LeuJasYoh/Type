@@ -12,7 +12,7 @@ import (
 	"github.com/jchv/go-webview2"
 )
 
-var version = "1.5.3"
+var version = "1.5.4"
 
 var topmostFlag atomic.Bool // 窗口置顶开关(与输入任务无关, 归装配层)
 
@@ -24,7 +24,22 @@ func main() {
 		return
 	}
 
-	w := webview2.New(true)
+	// 界面由 WebView2 渲染: 运行时缺失时连窗口都建不出来, 而 GUI 子系统没有
+	// 控制台, 库里的报错没人看得见。先预检再创建, 缺什么就说什么
+	// (见 win32_webview2.go), 不让用户面对一片死寂
+	if !webview2Available() {
+		promptWebView2Unusable(msgWebView2Missing) // 提示后退出, 不返回
+	}
+
+	// Debug 直接决定库的两项设置: 默认右键菜单与 DevTools 是否可用。
+	// 正式构建必须两者皆关 —— 发布版留 DevTools 没有意义, 而右键菜单里的
+	// "重新加载"会让前端复位、与仍在跑的后端任务脱钩
+	w := webview2.NewWithOptions(webview2.WebViewOptions{Debug: devMode()})
+	// 判空必须在 defer 之前: New 同步失败时返回的是 nil 接口, 而 defer 语句
+	// 求值 receiver 的那一刻就会 panic(已实测: 栈顶正落在那条 defer 上)
+	if w == nil {
+		promptWebView2Unusable(msgWebView2InitFailed) // 提示后退出, 不返回
+	}
 	defer w.Destroy()
 	w.SetTitle("Type " + version)
 
