@@ -6,7 +6,7 @@
 // 那时唯一还能用的通道就是系统自己的对话框。
 // 单实例守卫与启动预检都通过它把话说出去。
 
-package main
+package win32
 
 import (
 	"syscall"

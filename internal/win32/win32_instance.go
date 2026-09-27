@@ -5,7 +5,7 @@
 // 可能把用户数据写丢, 注入内容也会串到错误的目标窗口。
 // 用本会话作用域的具名互斥体挡住第二个实例。
 
-package main
+package win32
 
 import (
 	"errors"
@@ -26,9 +26,9 @@ const (
 // 提前释放会让第二个实例有机会在第一个退出的瞬间挤进来
 var instanceMutex uintptr
 
-// guardSingleInstance 确保本会话中只有一个实例; 已有实例时提示并返回 false。
+// GuardSingleInstance 确保本会话中只有一个实例; 已有实例时提示并返回 false。
 // 返回值语义: true = 本实例可以继续启动(main 据此决定是否退出)
-func guardSingleInstance() bool {
+func GuardSingleInstance() bool {
 	if !claimInstanceMutex(instanceMutexName) {
 		messageBox("Type 已在运行",
 			"另一个 Type 窗口已经打开，请使用那个窗口。\n\n"+

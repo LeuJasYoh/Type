@@ -1,10 +1,8 @@
-//go:build windows && (amd64 || arm64)
-
 // ─── 输入任务业务层: 状态机 + 并发守卫 ─────────────────
 // 仅依赖本文件定义的 TextInjector/Clipboard/Foreground 接口,
-// 平台细节全部下沉到 win32_*.go; 状态机时序与用户可见文案是稳定契约。
+// 平台细节全部下沉到 internal/win32; 状态机时序与用户可见文案是稳定契约。
 
-package main
+package typing
 
 import (
 	"fmt"
@@ -13,7 +11,7 @@ import (
 	"time"
 )
 
-// ─── 平台能力接口(消费方定义, Win32 实现见 win32_*.go) ──
+// ─── 平台能力接口(消费方定义, Win32 实现见 internal/win32) ──
 
 // TextInjector 字符注入能力。
 // 五个方法均返回"本次注入是否被系统接受": SendInput 在 UIPI 拦截(目标窗口
@@ -177,7 +175,7 @@ type TypingService struct {
 	sleep func(time.Duration)
 }
 
-func newTypingService(inj TextInjector, cb Clipboard, fg Foreground) *TypingService {
+func NewTypingService(inj TextInjector, cb Clipboard, fg Foreground) *TypingService {
 	s := &TypingService{
 		injector:   inj,
 		clipboard:  cb,

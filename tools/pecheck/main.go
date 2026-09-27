@@ -153,7 +153,7 @@ func checkVersion(rs *winres.ResourceSet, ver string) error {
 }
 
 // checkManifest 校验 DPI 感知与执行级别声明。缺 DPI 声明的后果见
-// win32_window.go 的 scaledForDPI: 缩放非 100% 的显示器上整窗被位图拉伸
+// internal/win32 的 ScaledForDPI: 缩放非 100% 的显示器上整窗被位图拉伸
 func checkManifest(rs *winres.ResourceSet) error {
 	raw := firstResource(rs, winres.RT_MANIFEST)
 	if raw == nil {

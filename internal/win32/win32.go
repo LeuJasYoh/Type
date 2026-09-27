@@ -4,9 +4,13 @@
 // 集中声明全部 Win32 DLL 入口: 一页即可看清整个平台接触面,
 // 未来若评估移植, 此处即待替换清单
 
-package main
+package win32
 
-import "syscall"
+import (
+	"syscall"
+
+	"github.com/LeuJasYoh/type/internal/typing"
+)
 
 var (
 	user32   = syscall.NewLazyDLL("user32.dll")
@@ -45,4 +49,12 @@ var (
 	procShellExecuteW            = shell32.NewProc("ShellExecuteW")
 	procCreateMutexW             = kernel32.NewProc("CreateMutexW")
 	procCloseHandle              = kernel32.NewProc("CloseHandle")
+)
+
+// 三个平台实现与业务层接口的绑定在编译期核对: 签名一旦漂移立即构建失败,
+// 不必等到装配时才发现
+var (
+	_ typing.TextInjector = Injector{}
+	_ typing.Clipboard    = Clipboard{}
+	_ typing.Foreground   = Foreground{}
 )

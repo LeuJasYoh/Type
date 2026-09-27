@@ -72,7 +72,7 @@ var (
 	procGetAncestor         = user32.NewProc("GetAncestor")
 )
 
-// GUITHREADINFO 与 cmd/type/win32_window.go 同款: 解析前台线程的焦点窗口
+// GUITHREADINFO 与 internal/win32/win32_window.go 同款: 解析前台线程的焦点窗口
 type GUITHREADINFO struct {
 	cbSize        uint32
 	flags         uint32
@@ -85,7 +85,7 @@ type GUITHREADINFO struct {
 	rcCaret       [4]int32
 }
 
-// KEYBDINPUT/INPUT 与 cmd/type/win32_keyboard.go 同款: 手工填充仅匹配
+// KEYBDINPUT/INPUT 与 internal/win32/win32_keyboard.go 同款: 手工填充仅匹配
 // 64 位 ABI (开发机工具, 与产品同受 386 禁止约束, 不必可移植)
 type KEYBDINPUT struct {
 	wVk         uint16
@@ -217,7 +217,7 @@ func sendVK(vk uint16) bool {
 
 // sendDirect 镜像产品的文本直投算法: 字符(含 Tab)走 WM_CHAR 文本层; 换行
 // 无法走文本层(Chromium 过滤 \n/\r 控制字符), 先发 Esc 关闭可能挂着的
-// 补全弹窗, 稍候再发真回车 —— 与 typing.go 的 sendEscaped 同序
+// 补全弹窗, 稍候再发真回车 —— 与 internal/typing 的 sendEscaped 同序
 // (Esc + 20ms + 本键), 用于对产品算法做端到端预演
 func sendDirect(hwnd uintptr, text string) int {
 	failed := 0

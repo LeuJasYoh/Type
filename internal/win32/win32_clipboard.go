@@ -3,17 +3,19 @@
 // ─── 剪贴板 (全格式快照/恢复) ─────────────────────────
 // Clipboard 接口的 Win32 实现 + 内存块读写辅助函数
 
-package main
+package win32
 
 import (
 	"bytes"
 	"time"
 	"unicode/utf16"
 	"unsafe"
+
+	"github.com/LeuJasYoh/type/internal/typing"
 )
 
-// win32Clipboard Clipboard 的 Win32 实现
-type win32Clipboard struct{}
+// Clipboard Clipboard 接口的 Win32 实现
+type Clipboard struct{}
 
 const (
 	CF_UNICODETEXT = 13
@@ -81,7 +83,7 @@ func encodedText(text string) []byte {
 	return out
 }
 
-func (win32Clipboard) SetText(text string) bool {
+func (Clipboard) SetText(text string) bool {
 	if !openClipboardWithRetry() {
 		return false
 	}
@@ -110,7 +112,7 @@ func (win32Clipboard) SetText(text string) bool {
 	return ret != 0
 }
 
-func (win32Clipboard) GetText() string {
+func (Clipboard) GetText() string {
 	if !openClipboardWithRetry() {
 		return ""
 	}
@@ -143,7 +145,7 @@ func (win32Clipboard) GetText() string {
 // HoldsText 判断剪贴板当前文本是否就是 text。
 // 按原始字节比对而非 GetText 的字符串: CF_UNICODETEXT 内嵌 NUL 时 GetText 会截断,
 // 字符串比较将误判为"用户已改动"而跳过恢复
-func (win32Clipboard) HoldsText(text string) bool {
+func (Clipboard) HoldsText(text string) bool {
 	if !openClipboardWithRetry() {
 		return false
 	}
@@ -208,13 +210,13 @@ func skippableFormat(fmt uint32) bool {
 // Snapshot 复制当前剪贴板的全部内存块型格式(文本/图片 CF_DIB/文件
 // CF_HDROP/HTML Format 等)。返回 nil 表示剪贴板打开失败(原状态未知, 调用方应
 // 放弃恢复); 返回空切片表示剪贴板原本为空, 恢复时执行清空
-func (win32Clipboard) Snapshot() []ClipboardFormat {
+func (Clipboard) Snapshot() []typing.ClipboardFormat {
 	if !openClipboardWithRetry() {
 		return nil
 	}
 	defer procCloseClipboard.Call()
 
-	snap := make([]ClipboardFormat, 0, 8)
+	snap := make([]typing.ClipboardFormat, 0, 8)
 	for fmt := uint32(0); ; {
 		next, _, _ := procEnumClipboardFormats.Call(uintptr(fmt))
 		if next == 0 {
@@ -225,7 +227,7 @@ func (win32Clipboard) Snapshot() []ClipboardFormat {
 			continue
 		}
 		if data, ok := readClipboardFormat(fmt); ok {
-			snap = append(snap, ClipboardFormat{Fmt: fmt, Data: data})
+			snap = append(snap, typing.ClipboardFormat{Fmt: fmt, Data: data})
 		}
 	}
 	return snap
@@ -254,7 +256,7 @@ func readClipboardFormat(fmt uint32) ([]byte, bool) {
 // writeClipboardFormats 将快照按原格式顺序写回(剪贴板已打开且已清空时调用)。
 // 返回是否全部写回成功: 任一格式分配/写入失败都算没恢复干净, 调用方据此告诉
 // 用户"剪贴板没恢复", 而不是让他以为原内容还在
-func writeClipboardFormats(snap []ClipboardFormat) bool {
+func writeClipboardFormats(snap []typing.ClipboardFormat) bool {
 	all := true
 	for _, cf := range snap {
 		hMem, _, _ := procGlobalAlloc.Call(GHND, uintptr(len(cf.Data)))
@@ -281,7 +283,7 @@ func writeClipboardFormats(snap []ClipboardFormat) bool {
 // RestoreSnapshotRaw 无条件写回快照(调用方需确认剪贴板未被用户改动),
 // 返回剪贴板是否真的回到了快照状态。恢复用比读写更耐心的重试档位:
 // 失败意味着用户原本的内容丢失, 值得多等一会儿
-func (win32Clipboard) RestoreSnapshotRaw(snap []ClipboardFormat) bool {
+func (Clipboard) RestoreSnapshotRaw(snap []typing.ClipboardFormat) bool {
 	if snap == nil {
 		return false // 快照失败, 原状态未知, 不动剪贴板(也没恢复成任何东西)
 	}

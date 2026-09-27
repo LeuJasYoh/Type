@@ -69,11 +69,18 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 
 ## 布局与单一来源
 
-- `cmd/type/`：Go 入口包，业务层（typing.go 的 TypingService）+ Win32 平台层（win32_*.go）
-  单实例守卫在 win32_instance.go；`devserver_prod.go` / `devserver_dev.go` 由 `dev` 构建标签二选一，
-  两个文件各持有同一组开发开关：dev server 地址（devServerURL）与 WebView2 调试模式（devMode，
-  决定 DevTools 与右键菜单），正式构建里两者都关；启动预检与提示框在 win32_webview2.go 与
-  win32_msgbox.go，两者都不经过 WebView2（界面起不来时，系统自己的对话框是唯一还能用的通道）
+- 分三层三包，依赖方向单向：平台层 → 业务层，装配层 → 两者
+  - `internal/typing/`：业务层，TypingService 输入状态机 + 平台能力接口（消费方定义）
+    + 时序常量区；刻意不带构建约束，与平台无关，任何系统上都能 `go test ./internal/typing`
+  - `internal/win32/`：平台层，三个接口的 Win32 实现。win32.go 是 DLL 入口清单页；
+    win32_keyboard/clipboard/window/instance/msgbox/webview2 各管一摊；实现与业务层接口的
+    绑定在 win32.go 末尾以 `var _ typing.X = ...` 编译期核对，签名漂移直接构建失败。
+    **业务层不得反向依赖本包**（当前无此依赖，编译器会拒绝任何反向引用）
+  - `cmd/type/`：装配层，main.go 开窗与 Bind 绑定（平台能力在此注入）。`devserver_prod.go` /
+    `devserver_dev.go` 由 `dev` 构建标签二选一，两个文件各持有同一组开发开关：dev server 地址
+    （devServerURL）与 WebView2 调试模式（devMode，决定 DevTools 与右键菜单），正式构建里两者都关；
+    启动预检与提示框在 internal/win32 的 win32_webview2.go 与 win32_msgbox.go，两者都不经过
+    WebView2（界面起不来时，系统自己的对话框是唯一还能用的通道）
 - `internal/web/`：go:embed 前端产物包（dist/index.html 入库，免 Node 亦可 go build/test）
 - `frontend/`：自包含 Vite 项目（package.json / node_modules 都在这里，不在仓库根）
 - `assets/`：图标源图与产物（screenshot-light.png / screenshot-dark.png 为 README
@@ -251,16 +258,16 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
 - **DPI 感知不能丢**（v1.5.1 换 webview 绑定时踩过）：进程 DPI 感知由 `tools/mkres`
   生成的 manifest 声明（PerMonitorV2）。旧库是在运行时调 `SetProcessDpiAwarenessContext`，
   纯 Go 绑定没有这层，少了 manifest 就会在缩放非 100% 的显示器上被系统做位图拉伸、
-  整窗发虚。声明之后窗口坐标**一律按物理像素解释**，逻辑尺寸必须经 `win32_window.go`
-  的 `scaledForDPI` 换算，否则固定尺寸窗口会比预期小两成（旧库在内部做过同一件事）。
+  整窗发虚。声明之后窗口坐标**一律按物理像素解释**，逻辑尺寸必须经 internal/win32 的
+  `ScaledForDPI` 换算，否则固定尺寸窗口会比预期小两成（旧库在内部做过同一件事）。
   跨不同缩放显示器拖动时的重新适配（WM_DPICHANGED）需要子类化窗口过程，当前未做，
   已记在 README 已知限制里
-- Win32 怪癖的注释保留在 win32_*.go 实现内（全角标点 WM_CHAR 绕行、GDI 句柄型
+- Win32 怪癖的注释保留在 internal/win32 的实现内（全角标点 WM_CHAR 绕行、GDI 句柄型
   格式跳过、图标句柄所有权约定），它们是本代码库最有价值的文档，重构时勿删
 - 注入失败必须可见：`TextInjector` 五个方法都返回 bool（SendInput 被 UIPI 拦截时
   整体返回 0；WM_CHAR 直投的 SendMessageTimeout 超时/失败返回 0）。不要把返回值
   改成 void，那正是"静默失败被报成输入完成"的来源
-- **启动路径有两道闸门**（win32_webview2.go）：创建 WebView2 之前先用依赖自带的
+- **启动路径有两道闸门**（internal/win32 的 win32_webview2.go）：创建 WebView2 之前先用依赖自带的
   `webviewloader.GetInstalledVersion()` 预检（微软对这类设备的官方建议就是"先检测、
   再引导用户去官网安装"），创建之后仍要判 `New` 的返回值：预检通过不等于创建成功
   （运行时可能损坏或被策略拦下）。**nil 判空必须在 `defer w.Destroy()` 之前** ——
@@ -287,12 +294,14 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   新增格式时按判据决定，别退化成"全都照抄"（旧行为）或"只抄白名单"
 - **Win32 负常量以 `^uintptr(n)` 表达**（`^` 是按位取反不是取负：`^uintptr(13)` = -14，
   `^uintptr(33)` = -34），看着像笔误但不是，改成十进制负数字面量既编译不过也没必要。
-  这地方极易被误读误改，故 `main_test.go` 里 `TestApplyWindowIconClassIndex` 会真建窗口
-  跑一遍 `applyWindowIcon`、再按文档偏移把类图标读回来核对；新增同类 Win32 常量时照此补一条
-  实测用例，别只写"常量等于某值"式的自我复读
-- 仅支持 `windows && (amd64 || arm64)`；386 编译被刻意禁止（INPUT 结构体手工
-  填充仅匹配 64 位 ABI）。在非 Windows 上 `go test ./...` 会静默跳过主包（文件全被
-  构建约束排除），只剩几个 "no test files"，看着像通过，所以本地验证与 CI 都在 Windows 上跑
+  这地方极易被误读误改，故 `internal/win32/win32_test.go` 里 `TestApplyWindowIconClassIndex`
+  会真建窗口跑一遍 `applyWindowIcon`、再按文档偏移把类图标读回来核对；新增同类 Win32 常量时
+  照此补一条实测用例，别只写"常量等于某值"式的自我复读
+- 产品仅支持 `windows && (amd64 || arm64)`（约束落在 cmd/type 与 internal/win32 上）；
+  386 编译被刻意禁止（INPUT 结构体手工填充仅匹配 64 位 ABI）。业务层 internal/typing
+  刻意不带约束，非 Windows 上 `go test ./internal/typing` 能真跑状态机用例；但非 Windows 上
+  `go test ./...` 仍会静默跳过产品包，只剩几个 "no test files"，看着像通过，所以产品侧的
+  本地验证与 CI 都跑在 Windows 上
 - **Node 主版本只写在 `.node-version` 一处**（现为 24）：ci.yml 用 `node-version-file`
   读它，开发者的 nvm/fnm 也读同一个文件。它决定 vite/rollup 的产出字节，换版本后
   `internal/web/dist/index.html` 与入库版本对不上，漂移检查会报不一致

@@ -2,7 +2,7 @@
 
 // ─── 键盘模拟 (SendInput + WM_CHAR) ───────────────────
 
-package main
+package win32
 
 import (
 	"time"
@@ -23,7 +23,7 @@ const (
 	VK_ESCAPE  = 0x1B
 )
 
-// 注入之间的间隔与超时(调参集中处; 字符间隔的业务层三档见 typing.go 常量区)
+// 注入之间的间隔与超时(调参集中处; 字符间隔的业务层三档见 internal/typing 常量区)
 const (
 	// keyDownUpGap 单个 UTF-16 码元按下与抬起之间的间隔
 	keyDownUpGap = 2 * time.Millisecond
@@ -42,6 +42,8 @@ type KEYBDINPUT struct {
 	dwExtraInfo uintptr
 }
 
+// INPUT 结构体的手工填充(40 字节)仅匹配 64 位 ABI: 386 下真实布局为 28 字节,
+// SendInput 会静默注入乱码, 因此本包连同产品只按 64 位构建
 type INPUT struct {
 	_type uint32
 	_     [4]byte
@@ -51,12 +53,12 @@ type INPUT struct {
 
 // ─── 键盘模拟 ─────────────────────────────────────────
 
-// win32Injector TextInjector 的 Win32 实现:
+// Injector TextInjector 的 Win32 实现:
 // SendInput 注入 + 全角标点 WM_CHAR 绕行
-type win32Injector struct{}
+type Injector struct{}
 
 // SendRune 注入单个 rune, 返回是否被系统接受 (见 TextInjector 契约)
-func (win32Injector) SendRune(r rune) bool {
+func (Injector) SendRune(r rune) bool {
 	if r >= 0xFF00 && r <= 0xFFEF {
 		// 全角标点 (U+FF00-FFEF) — KEYEVENTF_UNICODE 有系统级 bug
 		// 改用 WM_CHAR 直接注入到前台窗口
@@ -75,17 +77,17 @@ func (win32Injector) SendRune(r rune) bool {
 // "接受候选")与括号自动配对均无从触发。实测(Edge/Chromium 网页编辑器,
 // tools/wmcharprobe + testdata/completion-guard.html): 普通字符与 Tab 逐字
 // 原样落盘、零 keydown、零配对; 但 \n/\r 控制字符会被 Chromium 过滤, 换行
-// 必须走真按键(见业务层 sendEscaped)。与 SendRune 的按键层注入互为镜像
-func (win32Injector) SendText(r rune) bool { return sendCharUnitsViaWMChar(r) }
+// 必须走真按键(见 internal/typing 的 sendEscaped)。与 SendRune 的按键层注入互为镜像
+func (Injector) SendText(r rune) bool { return sendCharUnitsViaWMChar(r) }
 
 // SendEscape 注入 Esc 真键: 关闭目标编辑器的补全弹窗(其键义劫持的唯一
 // 解除手段), 供文本直投模式在回车前调用
-func (win32Injector) SendEscape() bool { return sendVK(VK_ESCAPE) }
+func (Injector) SendEscape() bool { return sendVK(VK_ESCAPE) }
 
-func (win32Injector) SendEnter() bool { return sendVK(VK_RETURN) }
+func (Injector) SendEnter() bool { return sendVK(VK_RETURN) }
 
 // SendPaste 注入 Ctrl+V, 返回是否被系统接受
-func (win32Injector) SendPaste() bool {
+func (Injector) SendPaste() bool {
 	inputs := [4]INPUT{
 		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: VK_CONTROL}},
 		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: VK_V}},

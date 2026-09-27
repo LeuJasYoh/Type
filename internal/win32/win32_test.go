@@ -1,6 +1,6 @@
 //go:build windows && (amd64 || arm64)
 
-package main
+package win32
 
 import (
 	"bytes"
@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"testing"
 	"unsafe"
+
+	"github.com/LeuJasYoh/type/internal/typing"
 )
 
 func TestUtf16Units(t *testing.T) {
@@ -38,55 +40,12 @@ func TestUtf16Units(t *testing.T) {
 	}
 }
 
-func TestContainsNonASCII(t *testing.T) {
-	cases := []struct {
-		s    string
-		want bool
-	}{
-		{"hello", false},
-		{"hello world\n", false},
-		{"h\xe9llo", true},
-		{"中文", true},
-		{"123", false},
-		{"", false},
-		{"\t\r\n", false},
-		{"ab\xf0\x9f\x98\x80", true}, // ab😀
-	}
-	for _, c := range cases {
-		if got := containsNonASCII(c.s); got != c.want {
-			t.Errorf("containsNonASCII(%q) = %v, want %v", c.s, got, c.want)
-		}
-	}
-}
-
-func TestIsCJKPunct(t *testing.T) {
-	cases := []struct {
-		r    rune
-		want bool
-	}{
-		{'\u3001', true}, // 、
-		{'\u3002', true}, // 。
-		{'\uFF01', true}, // ！
-		{'\uFF1F', true}, // ？
-		{'\u201C', true}, // “
-		{'\u201D', true}, // ”
-		{'中', false},
-		{'a', false},
-		{'1', false},
-		{'.', false},
-	}
-	for _, c := range cases {
-		if got := isCJKPunct(c.r); got != c.want {
-			t.Errorf("isCJKPunct(%U) = %v, want %v", c.r, got, c.want)
-		}
-	}
-}
-
 // TestClipboardSnapshotRoundtrip 验证快照/恢复保留全部格式(文本 + 注册格式),
-// 使用真实系统剪贴板: 先保存原状态, 测试结束还原
+// 使用真实系统剪贴板: 先保存原状态, 测试结束还原。
+// 恢复守卫(剪贴板被用户改动时跳过恢复)属于业务层判断, 用例在 internal/typing
+// (fake 剪贴板); 这里只验证真剪贴板的快照与写回本身
 func TestClipboardSnapshotRoundtrip(t *testing.T) {
-	cb := win32Clipboard{}
-	svc := newTypingService(win32Injector{}, cb, win32Foreground{})
+	cb := Clipboard{}
 	orig := cb.Snapshot()
 	if orig == nil {
 		t.Skip("剪贴板被占用, 无法保存原始状态")
@@ -105,7 +64,7 @@ func TestClipboardSnapshotRoundtrip(t *testing.T) {
 	if !openClipboardWithRetry() {
 		t.Fatal("打开剪贴板失败")
 	}
-	writeClipboardFormats([]ClipboardFormat{{Fmt: uint32(reg), Data: marker}})
+	writeClipboardFormats([]typing.ClipboardFormat{{Fmt: uint32(reg), Data: marker}})
 	procCloseClipboard.Call()
 
 	snap := cb.Snapshot()
@@ -127,11 +86,11 @@ func TestClipboardSnapshotRoundtrip(t *testing.T) {
 		t.Fatalf("快照缺少格式: text=%v reg=%v (共 %d 个格式)", sawText, sawReg, len(snap))
 	}
 
-	// 覆盖破坏后恢复 (剪贴板当前文本即注入文本, 守卫应放行)
+	// 覆盖破坏后恢复
 	if !cb.SetText("覆盖后的内容") {
 		t.Fatal("覆盖剪贴板失败")
 	}
-	svc.restoreClipboardSnapshot(snap, "覆盖后的内容")
+	cb.RestoreSnapshotRaw(snap)
 
 	if got := cb.GetText(); got != "快照测试文本" {
 		t.Errorf("恢复后文本 = %q, want %q", got, "快照测试文本")
@@ -174,7 +133,7 @@ func TestEncodedText(t *testing.T) {
 // TestClipboardHoldsTextNul 内嵌 NUL 的文本必须被 holdsText 精确识别。
 // 旧实现用 GetText 的字符串比较, 会在 NUL 处截断而误判为"用户已改动", 跳过恢复
 func TestClipboardHoldsTextNul(t *testing.T) {
-	cb := win32Clipboard{}
+	cb := Clipboard{}
 	orig := cb.Snapshot()
 	if orig == nil {
 		t.Skip("剪贴板被占用, 无法保存原始状态")
@@ -197,7 +156,7 @@ func TestClipboardHoldsTextNul(t *testing.T) {
 // 认领名由调用方传入, 测试用带 PID 的名字: 同名第二次调用即"第二个进程
 // 认领同一个名字"的场景, 又不会与真正在运行的 Type 相互干扰
 // (生产守卫用的是不带 PID 的固定名, 跨进程互斥全靠名字相同)。
-// 这里验证 claimInstanceMutex 而不是 guardSingleInstance: 后者会弹模态提示框,
+// 这里验证 claimInstanceMutex 而不是 GuardSingleInstance: 后者会弹模态提示框,
 // 在无头 CI 上没人点确定, 会让 go test 一直挂到超时(已实际发生过一次)
 func TestClaimInstanceMutex(t *testing.T) {
 	name := instanceMutexName + "-test-" + strconv.Itoa(os.Getpid())
@@ -209,35 +168,6 @@ func TestClaimInstanceMutex(t *testing.T) {
 	}
 	if claimInstanceMutex(name) {
 		t.Error("第二次认领应被拦下, 否则单实例形同虚设")
-	}
-}
-
-// TestClipboardRestoreGuard 验证守卫: 用户在注入期间复制了新内容时不覆盖
-func TestClipboardRestoreGuard(t *testing.T) {
-	cb := win32Clipboard{}
-	svc := newTypingService(win32Injector{}, cb, win32Foreground{})
-	orig := cb.Snapshot()
-	if orig == nil {
-		t.Skip("剪贴板被占用, 无法保存原始状态")
-	}
-	defer cb.RestoreSnapshotRaw(orig)
-
-	if !cb.SetText("旧文本") {
-		t.Fatal("SetText 失败")
-	}
-	snap := cb.Snapshot()
-	if snap == nil {
-		t.Fatal("Snapshot 返回 nil")
-	}
-
-	// 模拟注入后用户又复制了新内容: 剪贴板文本 != 注入文本, 恢复应跳过
-	if !cb.SetText("用户新复制的内容") {
-		t.Fatal("SetText 失败")
-	}
-	svc.restoreClipboardSnapshot(snap, "注入文本")
-
-	if got := cb.GetText(); got != "用户新复制的内容" {
-		t.Errorf("守卫未生效, 剪贴板被覆盖为 %q", got)
 	}
 }
 

@@ -107,9 +107,15 @@
 ```
 Type/
 ├── Type.exe                 ← 可执行文件 (构建产物, 输出于根目录, 不入库)
-├── cmd/type/                ← Go 入口包
-│   ├── main.go              ← webview 装配与 Bind 绑定
-│   ├── typing.go            ← 业务层: TypingService 输入状态机 + 平台能力接口
+├── cmd/type/                ← 装配层: 开窗、绑定与开发开关
+│   ├── main.go              ← webview 装配与 Bind 绑定 (平台能力在此注入)
+│   ├── devserver_prod.go    ← 正式构建: 加载嵌入页面, WebView2 调试能力(DevTools/右键菜单)一律关闭
+│   └── devserver_dev.go     ← dev 构建 (`-tags dev`): 指向 Vite dev server, 并打开 DevTools 与右键菜单
+├── internal/typing/         ← 业务层: 输入状态机 (平台无关, 在任意系统上都能编译并跑测试)
+│   ├── typing.go            ← TypingService 输入状态机 + 平台能力接口 + 时序常量
+│   ├── typing_test.go       ← 状态机单元测试 (fake 注入器/剪贴板/前台窗口, 不触真实系统)
+│   └── helpers_test.go      ← 输入路径判断的纯函数测试 (ASCII 判断 / CJK 标点)
+├── internal/win32/          ← 平台层: Win32 实现 (windows && 64 位构建约束)
 │   ├── win32.go             ← Win32 清单页: DLL 与 API 入口集中声明
 │   ├── win32_keyboard.go    ← 键盘注入 (SendInput / WM_CHAR 全角标点绕行)
 │   ├── win32_clipboard.go   ← 剪贴板全格式快照/恢复
@@ -117,10 +123,7 @@ Type/
 │   ├── win32_instance.go    ← 单实例守卫 (具名互斥体)
 │   ├── win32_msgbox.go      ← 原生提示框 (MessageBoxW, 不依赖 WebView2)
 │   ├── win32_webview2.go    ← WebView2 运行时预检与启动提示
-│   ├── devserver_prod.go    ← 正式构建: 加载嵌入页面, WebView2 调试能力(DevTools/右键菜单)一律关闭
-│   ├── devserver_dev.go     ← dev 构建 (`-tags dev`): 指向 Vite dev server, 并打开 DevTools 与右键菜单
-│   ├── main_test.go         ← 单元测试 (UTF-16 拆分/ASCII/CJK 标点/剪贴板快照与守卫/窗口标题与类图标索引)
-│   └── typing_test.go       ← 状态机单元测试 (fake 注入器/剪贴板/前台窗口, 不触真实系统)
+│   └── win32_test.go        ← 平台用例 (真剪贴板快照/真建窗口读回类图标索引/单实例判定)
 ├── internal/web/            ← go:embed 前端产物包
 │   ├── web.go               ← IndexHTML 嵌入声明 (供 cmd/type 经 SetHtml 加载)
 │   └── dist/index.html      ← Vite 构建产物: 自包含单文件 (入库)
@@ -170,8 +173,8 @@ Type/
 
 ```powershell
 # 前置条件
-#   - Windows 10/11 (构建与测试都在 Windows 上, 与 CI 一致; 非 Windows 上
-#     go test ./... 会静默跳过主包, 因为源码带 windows 构建约束)
+#   - Windows 10/11 (打包 exe 需要; 业务层 internal/typing 与平台无关,
+#     在别的系统上也能单独 go test ./internal/typing)
 #   - Go 1.26+ (与 go.mod 声明一致; 不需要 C 工具链)
 #   - Node.js 24 (前端构建期需要, 产物无需; 版本写在 .node-version, CI 同源。
 #     换主版本会改变 vite 的产出字节, CI 的产物漂移检查会报不一致)
@@ -189,12 +192,12 @@ cd frontend
 npm install                         # 安装前端依赖 (仅首次)
 npm run build                       # vue-tsc 类型检查 + Vite → ../internal/web/dist/index.html
 cd ..
-go run ./tools/mkres -version 1.5.3 -icon assets/icon.ico -out cmd/type/version
+go run ./tools/mkres -version 1.5.5 -icon assets/icon.ico -out cmd/type/version
 go build -ldflags="-H windowsgui -s -w" -o Type.exe ./cmd/type
 
 # 读回校验: 图标/版本信息/DPI 声明是否真的链进了产物(.syso 缺失时
 # go build 不会失败, 产物只是悄悄少了这些)
-go run ./tools/pecheck -exe Type.exe -version 1.5.3 -arch amd64
+go run ./tools/pecheck -exe Type.exe -version 1.5.5 -arch amd64
 
 # 交叉编译 ARM64 版 (纯 Go, 不需要额外工具链; 资源上一步已按架构生成)
 $env:GOARCH = "arm64"; go build -ldflags="-H windowsgui -s -w" -o Type-arm64.exe ./cmd/type

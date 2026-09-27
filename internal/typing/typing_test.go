@@ -1,9 +1,7 @@
-//go:build windows && (amd64 || arm64)
-
 // 状态机单元测试: 通过 fake 注入器/剪贴板/前台窗口与假睡眠,
 // 不触碰真实系统, 覆盖取消衔接、防重入、恢复守卫等曾出缺陷的路径
 
-package main
+package typing
 
 import (
 	"reflect"
@@ -83,6 +81,10 @@ type fakeClipboard struct {
 	events      []string
 }
 
+// cfUnicodeText 假剪贴板里充当文本条目的格式号, 与 Win32 的 CF_UNICODETEXT
+// 同值; 业务层只把它当作不透明的格式标识, 不解释内容
+const cfUnicodeText = 13
+
 func (f *fakeClipboard) SetText(text string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -114,7 +116,7 @@ func (f *fakeClipboard) Snapshot() []ClipboardFormat {
 	if f.snap != nil {
 		return f.snap
 	}
-	return []ClipboardFormat{{Fmt: CF_UNICODETEXT, Data: []byte(f.text)}}
+	return []ClipboardFormat{{Fmt: cfUnicodeText, Data: []byte(f.text)}}
 }
 
 func (f *fakeClipboard) RestoreSnapshotRaw(snap []ClipboardFormat) bool {
@@ -209,7 +211,7 @@ func (f *samplingForeground) count() int {
 // ─── 测试辅助 ─────────────────────────────────────────
 
 func newTestService(inj TextInjector, cb Clipboard, sleep func(time.Duration)) *TypingService {
-	s := newTypingService(inj, cb, fakeForeground{title: "记事本"})
+	s := NewTypingService(inj, cb, fakeForeground{title: "记事本"})
 	s.sleep = sleep
 	return s
 }
@@ -556,7 +558,7 @@ func seedSnapshot(cb *fakeClipboard, text string) {
 	}
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
-	cb.snap = []ClipboardFormat{{Fmt: CF_UNICODETEXT, Data: raw}}
+	cb.snap = []ClipboardFormat{{Fmt: cfUnicodeText, Data: raw}}
 }
 
 // 逐字符注入被系统拒绝(UIPI 等): 立即中止, 终态给出可读原因, 不虚报"输入完成"
@@ -763,7 +765,7 @@ func TestTargetWindowLockedIntoFinalStatus(t *testing.T) {
 func TestSelfForegroundAbortsBeforeInjection(t *testing.T) {
 	inj := newFakeInjector()
 	cb := &fakeClipboard{}
-	svc := newTypingService(inj, cb, fakeForeground{title: "Type 测试", self: true})
+	svc := NewTypingService(inj, cb, fakeForeground{title: "Type 测试", self: true})
 	svc.sleep = noSleep
 	if _, err := svc.Start("你好", 1, false, false); err != nil {
 		t.Fatalf("Start 失败: %v", err)
@@ -792,7 +794,7 @@ func TestCountdownPreviewFollowsCurrentForeground(t *testing.T) {
 	var history []TypingStatus
 	var sleeps int
 	var svc *TypingService
-	svc = newTypingService(inj, &fakeClipboard{}, fg)
+	svc = NewTypingService(inj, &fakeClipboard{}, fg)
 	svc.sleep = func(time.Duration) {
 		sleeps++
 		switch sleeps {
@@ -843,7 +845,7 @@ func TestCountdownTicksAndSecondBoundaries(t *testing.T) {
 	var history []TypingStatus
 	var sleeps int
 	var svc *TypingService
-	svc = newTypingService(inj, &fakeClipboard{}, fg)
+	svc = NewTypingService(inj, &fakeClipboard{}, fg)
 	svc.sleep = func(time.Duration) {
 		sleeps++
 		mu.Lock()
@@ -893,7 +895,7 @@ func TestCountdownPreviewFollowsSwitchWithinOneTick(t *testing.T) {
 	var history []TypingStatus
 	var sleeps int
 	var svc *TypingService
-	svc = newTypingService(inj, &fakeClipboard{}, fg)
+	svc = NewTypingService(inj, &fakeClipboard{}, fg)
 	svc.sleep = func(time.Duration) {
 		sleeps++
 		if sleeps == 3 { // 在第一秒内切走
@@ -966,7 +968,7 @@ func TestTypingStopsWhenTargetSwitches(t *testing.T) {
 	fg := &switchableForeground{id: 1, title: "记事本"}
 	var svc *TypingService
 	var sleeps int
-	svc = newTypingService(inj, &fakeClipboard{}, fg)
+	svc = NewTypingService(inj, &fakeClipboard{}, fg)
 	svc.sleep = func(time.Duration) {
 		sleeps++
 		// 倒计时 10 拍 + 150ms 稳定等待 1 次 = 11 次; 第 12/13 次分别是
@@ -1010,7 +1012,7 @@ func TestTitleChangeOnSameWindowDoesNotStopTyping(t *testing.T) {
 	fg := &switchableForeground{id: 1, title: "记事本"}
 	var svc *TypingService
 	var sleeps int
-	svc = newTypingService(inj, &fakeClipboard{}, fg)
+	svc = NewTypingService(inj, &fakeClipboard{}, fg)
 	svc.sleep = func(time.Duration) {
 		sleeps++
 		if sleeps == 13 { // 键入途中标题变了, 窗口标识还是同一个
@@ -1037,7 +1039,7 @@ func TestClipboardStopsWhenTargetSwitchesBeforePaste(t *testing.T) {
 	cb := &fakeClipboard{text: "用户原文本"}
 	var svc *TypingService
 	var sleeps int
-	svc = newTypingService(inj, cb, fg)
+	svc = NewTypingService(inj, cb, fg)
 	svc.sleep = func(time.Duration) {
 		sleeps++
 		// 倒计时 10 拍 + 稳定等待 1 次 → 第 12 次是写入剪贴板后的 100ms 等待
@@ -1074,7 +1076,7 @@ func TestClipboardReportsUnconfirmedWhenTargetSwitchesAtPaste(t *testing.T) {
 			fg.set(2, "浏览器", false)
 		}
 	}
-	svc := newTypingService(inj, cb, fg)
+	svc := NewTypingService(inj, cb, fg)
 	svc.sleep = noSleep
 
 	if _, err := svc.Start("你好", 1, false, false); err != nil {

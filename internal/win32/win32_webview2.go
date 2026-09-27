@@ -8,7 +8,7 @@
 // 官网安装", 这里照做: 检测在创建之前完成, 提示走原生消息框(不经过 WebView2,
 // 因此在界面起不来的场景里必然可用)。
 
-package main
+package win32
 
 import (
 	"os"
@@ -25,28 +25,28 @@ const (
 	webview2PromptTitle = "Type 无法启动"
 	// 两条正文都是发布语言, 逐字固定(见 AGENTS.md 行为契约)。目标读者是
 	// 从没听说过"运行时"的人: 只需要说清缺什么、点哪里、之后做什么
-	msgWebView2Missing = "缺少 Microsoft Edge WebView2 运行时，Type 的界面需要它才能显示。\n\n" +
+	MsgWebView2Missing = "缺少 Microsoft Edge WebView2 运行时，Type 的界面需要它才能显示。\n\n" +
 		"点\"是\"打开微软官方下载页；装好后重新运行 Type 即可，不必重启电脑。\n" +
 		"点\"否\"直接退出。"
 	// 运行时查得到、创建仍失败时用这条(如装的是损坏的运行时, 或被策略拦下)
-	msgWebView2InitFailed = "WebView2 初始化失败，Type 的界面无法创建。\n\n" +
+	MsgWebView2InitFailed = "WebView2 初始化失败，Type 的界面无法创建。\n\n" +
 		"点\"是\"打开微软官方下载页；装好或修复后重新运行 Type 即可。\n" +
 		"点\"否\"直接退出。"
 )
 
-// webview2Available 创建 WebView2 之前预检运行时。用的是依赖自带的加载器,
+// WebView2Available 创建 WebView2 之前预检运行时。用的是依赖自带的加载器,
 // 问的正是创建时同一个问题: 没装时它返回空串且不报错; 查询本身失败(返回
 // 错误)时同样继续不下去, 一并按不可用处理。
 // 预检通过不等于创建必定成功(运行时可能损坏或被策略拦下), 故创建后仍要判空
-func webview2Available() bool {
+func WebView2Available() bool {
 	version, err := webviewloader.GetInstalledVersion()
 	return err == nil && version != ""
 }
 
-// promptWebView2Unusable 把"界面起不来"的原因交到用户手上: 点"是"打开官方
+// PromptWebView2Unusable 把"界面起不来"的原因交到用户手上: 点"是"打开官方
 // 下载页, 然后以非零退出码收尾 —— 这是"没能启动", 不是"用户主动关掉", 便于
 // 脚本与支持排查。不返回(提示之后流程到此为止)
-func promptWebView2Unusable(text string) {
+func PromptWebView2Unusable(text string) {
 	if messageBox(webview2PromptTitle, text,
 		MB_YESNO|MB_ICONWARNING|MB_SETFOREGROUND|MB_TOPMOST) == IDYES {
 		openInBrowser(webview2DownloadURL)

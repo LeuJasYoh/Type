@@ -6,8 +6,8 @@ on:
   pull_request:
   workflow_dispatch:
 
-# 全流程在 Windows 上跑: 代码带 windows && (amd64 || arm64) 构建约束,
-# 且 main_test.go 里有两个用例操作真实系统剪贴板
+# 全流程在 Windows 上跑: 产品代码带 windows && (amd64 || arm64) 构建约束,
+# 且 internal/win32 的测试里有用例操作真实系统剪贴板
 jobs:
   verify:
     runs-on: windows-latest

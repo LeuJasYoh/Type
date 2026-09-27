@@ -2,7 +2,7 @@
 
 // ─── 窗口: 尺寸与 DPI/置顶/图标/前台窗口探测 ──────────
 
-package main
+package win32
 
 import (
 	"os"
@@ -10,6 +10,8 @@ import (
 	"time"
 	"unicode/utf16"
 	"unsafe"
+
+	"github.com/LeuJasYoh/type/internal/typing"
 )
 
 const (
@@ -22,11 +24,11 @@ const (
 
 // ─── 窗口尺寸与 DPI ───────────────────────────────────
 
-// scaledForDPI 把以 96 DPI 为基准的逻辑尺寸换算成窗口所在显示器的物理像素。
+// ScaledForDPI 把以 96 DPI 为基准的逻辑尺寸换算成窗口所在显示器的物理像素。
 // 进程的 DPI 感知由 tools/mkres 生成的 manifest 声明(PerMonitorV2), 声明之后
 // 窗口坐标一律按物理像素解释: 不换算的话, 在 125% 缩放的显示器上固定尺寸的
 // 窗口会比预期小两成(旧的 webview 库在内部替调用方做了同一件事)
-func scaledForDPI(hwnd uintptr, w, h int) (int, int) {
+func ScaledForDPI(hwnd uintptr, w, h int) (int, int) {
 	dpi, _, _ := procGetDpiForWindow.Call(hwnd)
 	if dpi < 96 {
 		dpi = 96 // 调用失败(0)或异常值: 按 100% 处理
@@ -45,7 +47,7 @@ const (
 	SWP_NOACTIVATE = 0x0010
 )
 
-func setTopmost(hwnd uintptr, topmost bool) bool {
+func SetTopmost(hwnd uintptr, topmost bool) bool {
 	insertAfter := HWND_NOTOPMOST
 	if topmost {
 		insertAfter = HWND_TOPMOST
@@ -122,7 +124,7 @@ func applyWindowIcon(hwnd, hLarge, hSmall uintptr, withSetIcon bool) {
 	// GCLP_HICON = -14 / GCLP_HICONSM = -34 —— 这里以按位取反表达负数
 	// (^x 是取反不是取负): ^uintptr(13) = -14, ^uintptr(33) = -34。
 	// 值写错时 SetClassLongPtr 会以 ERROR_INVALID_INDEX 静默返回 0(无人采信),
-	// 图标重设整体空转; main_test.go 有真建窗口读回的实测用例钉住这两个值
+	// 图标重设整体空转; win32_test.go 有真建窗口读回的实测用例钉住这两个值
 	const GCLP_HICON = ^uintptr(13)
 	const GCLP_HICONSM = ^uintptr(33)
 	if hLarge != 0 {
@@ -144,9 +146,9 @@ var iconRetryDelays = []time.Duration{
 	3000 * time.Millisecond,
 }
 
-// retrySetIcon 设置窗口图标: 句柄只加载一次, 常驻至进程结束;
+// RetrySetIcon 设置窗口图标: 句柄只加载一次, 常驻至进程结束;
 // 延迟重试弥补 WebView2 窗口创建早期图标未生效的情况
-func retrySetIcon(hwnd uintptr) {
+func RetrySetIcon(hwnd uintptr) {
 	hLarge, hSmall := loadAppIcon()
 	applyWindowIcon(hwnd, hLarge, hSmall, true)
 	go func() {
@@ -192,9 +194,9 @@ func focusedHWND() uintptr {
 	return hwnd
 }
 
-// win32Foreground Foreground 的 Win32 实现。
-// hwnd 为本程序主窗口句柄, 用于识别"前台是否是自己"
-type win32Foreground struct{ hwnd uintptr }
+// Foreground Foreground 接口的 Win32 实现。
+// HWND 为本程序主窗口句柄, 用于识别"前台是否是自己"
+type Foreground struct{ HWND uintptr }
 
 // Sample 读取当前顶层前台窗口: 句柄 + 标题 + 是否为本程序自身。
 // 三要素取自同一次 GetForegroundWindow: 分多次读会在两次调用的间隙发生
@@ -202,15 +204,15 @@ type win32Foreground struct{ hwnd uintptr }
 // 判定与目标锁定之间切回 Type, 漂移守卫从第一步就失效)。
 // 跨进程顶层窗口的标题是 GetWindowTextW 直接取回的缓存文本, 不会因目标
 // 进程无响应而阻塞(系统如此设计), 因此每拍都读标题是安全的
-func (f win32Foreground) Sample() ForegroundSample {
+func (f Foreground) Sample() typing.ForegroundSample {
 	hwnd, _, _ := procGetForegroundWindow.Call()
 	if hwnd == 0 {
-		return ForegroundSample{} // 无前台窗口: 标识 0, 标题空, 非自身
+		return typing.ForegroundSample{} // 无前台窗口: 标识 0, 标题空, 非自身
 	}
-	return ForegroundSample{
-		ID:    TargetID(hwnd),
+	return typing.ForegroundSample{
+		ID:    typing.TargetID(hwnd),
 		Title: windowTitle(hwnd),
-		Self:  hwnd == f.hwnd,
+		Self:  hwnd == f.HWND,
 	}
 }
 
