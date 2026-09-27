@@ -23,6 +23,17 @@ const (
 	VK_ESCAPE  = 0x1B
 )
 
+// 注入之间的间隔与超时(调参集中处; 字符间隔的业务层三档见 typing.go 常量区)
+const (
+	// keyDownUpGap 单个 UTF-16 码元按下与抬起之间的间隔
+	keyDownUpGap = 2 * time.Millisecond
+	// charUnitGap 文本直投相邻码元(代理对拆分后)之间的间隔
+	charUnitGap = 2 * time.Millisecond
+	// wmCharTimeoutMS WM_CHAR 直投的超时(毫秒): 目标窗口挂起时放弃消息,
+	// 不阻塞发送方
+	wmCharTimeoutMS = 1000
+)
+
 type KEYBDINPUT struct {
 	wVk         uint16
 	wScan       uint16
@@ -106,7 +117,7 @@ func sendChar16(code uint16) bool {
 		ki:    KEYBDINPUT{wScan: code, dwFlags: KEYEVENTF_UNICODE},
 	}}
 	ok := sendInput(down[:]) == 1
-	time.Sleep(2 * time.Millisecond)
+	time.Sleep(keyDownUpGap)
 
 	up := [1]INPUT{{
 		_type: INPUT_KEYBOARD,
@@ -143,11 +154,11 @@ func sendCharUnitsViaWMChar(r rune) bool {
 	// 带超时发送, 目标窗口挂起时放弃而不是卡死输入循环
 	var result uintptr
 	for _, u := range utf16Units(r) {
-		ret, _, _ := procSendMessageTimeoutW.Call(hwnd, WM_CHAR, uintptr(u), 1, SMTO_ABORTIFHUNG, 1000, uintptr(unsafe.Pointer(&result)))
+		ret, _, _ := procSendMessageTimeoutW.Call(hwnd, WM_CHAR, uintptr(u), 1, SMTO_ABORTIFHUNG, wmCharTimeoutMS, uintptr(unsafe.Pointer(&result)))
 		if ret == 0 {
 			return false
 		}
-		time.Sleep(2 * time.Millisecond)
+		time.Sleep(charUnitGap)
 	}
 	return true
 }

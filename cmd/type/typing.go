@@ -119,6 +119,45 @@ func msgTargetSwitchedTyped(n int) string {
 	return fmt.Sprintf("输入中断：目标窗口已切换，已输入 %d 字", n)
 }
 
+// ─── 输入任务时序(调参集中处) ─────────────────────────
+// 状态机里所有等待与节拍只有这一处定义, 各处按名字取用。改动前先想清楚
+// 对取消响应与字符间隔的影响(见 AGENTS.md「焦点锁定与漂移防护」)。
+// 同值不同义的不要合并: 100ms 在倒计时节拍与剪贴板稳定等待上各出现一次,
+// 两处可以独立调整
+const (
+	// countdownTick 倒计时节拍: 100ms 一拍, 每秒 10 拍, 取消与切窗的
+	// 响应都缩到一拍内, 总时长仍是 delay 秒
+	countdownTick = 100 * time.Millisecond
+	// countdownTicksPerSec 每秒拍数, 由节拍推出
+	countdownTicksPerSec = int(time.Second / countdownTick)
+
+	// lockSettleWait 倒计时结束到采样并锁定目标之间的稳定等待
+	lockSettleWait = 150 * time.Millisecond
+
+	// yieldDeadline 取消收尾衔接: 等待上一任务让出运行标志的上限,
+	// 超过则报"启动失败：上一任务未能及时退出"
+	yieldDeadline = 2 * time.Second
+	// yieldPollInterval 衔接轮询间隔
+	yieldPollInterval = 25 * time.Millisecond
+
+	// progressEvery 逐字符路径每注入这么多个字刷新一次进度(末字必刷)
+	progressEvery = 8
+
+	// 逐字符输入的字符间隔三档: ASCII 最快, 中日韩文字居中, 标点最慢
+	// (给输入法留出上屏时间)
+	charDelayASCII = 8 * time.Millisecond
+	charDelayCJK   = 12 * time.Millisecond
+	charDelayPunct = 16 * time.Millisecond
+
+	// escapeGap 文本直投换行前, Esc 与回车之间的间隔(补全弹窗需要时间关闭)
+	escapeGap = 20 * time.Millisecond
+
+	// clipboardSettleWait 写入剪贴板到发出粘贴之间的稳定等待
+	clipboardSettleWait = 100 * time.Millisecond
+	// pasteSettleWait 粘贴发出到恢复剪贴板之间的稳定等待
+	pasteSettleWait = 200 * time.Millisecond
+)
+
 // ─── TypingService ────────────────────────────────────
 
 // TypingService 持有输入任务生命周期的全部可变状态
@@ -134,7 +173,7 @@ type TypingService struct {
 	typingStatus atomic.Value  // 存 *TypingStatus
 
 	// 倒计时/逐字符/粘贴的等待, 测试可注入假时钟;
-	// 取消衔接的 25ms 轮询与 2 秒 deadline 刻意保持真实时钟
+	// 取消衔接的轮询与 deadline 刻意保持真实时钟(数值见上方常量区)
 	sleep func(time.Duration)
 }
 
@@ -205,8 +244,9 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 		}
 	}
 
-	// 取消收尾衔接: 等待上一任务释放 runningFlag (取消标志会加速其退出, 上限 2 秒)
-	for deadline := time.Now().Add(2 * time.Second); s.runningFlag.Load(); {
+	// 取消收尾衔接: 等待上一任务释放 runningFlag (取消标志会加速其退出,
+	// 上限 yieldDeadline)
+	for deadline := time.Now().Add(yieldDeadline); s.runningFlag.Load(); {
 		if gen != s.taskGen.Load() {
 			return // 已被新操作接管, 本次启动作废
 		}
@@ -214,7 +254,7 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 			setStatus(&TypingStatus{Phase: PhaseError, Message: "启动失败：上一任务未能及时退出", Progress: -1})
 			return
 		}
-		time.Sleep(25 * time.Millisecond)
+		time.Sleep(yieldPollInterval)
 	}
 	if !s.runningFlag.CompareAndSwap(false, true) {
 		return
@@ -229,21 +269,19 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 	cancelled := s.cancelFlag.Load
 
 	// ── 倒计时 ──
-	// 目标预览 = 当前前台窗口, 100ms 节拍采样, 但只在可见内容变化时才写
+	// 目标预览 = 当前前台窗口, countdownTick 节拍采样, 但只在可见内容变化时才写
 	// 状态: 秒边界写一次(文案与旧版逐字符一致), 窗口标识或标题一变立即
 	// 跟上(用户切到哪个窗口, 预览最多迟一拍), 其余节拍只采样不写。
 	// 采样与写状态分离后, 取消与切窗的响应从最坏 1 秒缩到 1 拍, 而每秒
 	// 10 次的冗余状态写入并不存在; 总时长仍是 delay 秒 —— 每拍
-	// sleep(tick), 共 delay*ticksPerSec 拍, 与旧实现每次写入后 sleep(1s)
-	// 的总时长一致
-	const tick = 100 * time.Millisecond
-	const ticksPerSec = int(time.Second / tick)
+	// sleep(countdownTick), 共 delay*countdownTicksPerSec 拍, 与旧实现
+	// 每次写入后 sleep(1s) 的总时长一致
 	shownSec, shown := delay, baseline
-	for i := 0; i < delay*ticksPerSec; i++ {
+	for i := 0; i < delay*countdownTicksPerSec; i++ {
 		if cancelled() {
 			return // Cancel 已写入取消状态
 		}
-		sec := delay - i/ticksPerSec
+		sec := delay - i/countdownTicksPerSec
 		sample := s.foreground.Sample()
 		if sec != shownSec || sample != shown {
 			shownSec, shown = sec, sample
@@ -255,13 +293,13 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 				TargetWindow: sample.Title,
 			})
 		}
-		s.sleep(tick)
+		s.sleep(countdownTick)
 	}
 	if cancelled() {
 		return
 	}
 
-	s.sleep(150 * time.Millisecond)
+	s.sleep(lockSettleWait)
 
 	// 执行目标锁定: 倒计时结束时的前台窗口, 贯穿到执行与终态状态。
 	// 标识与标题取自同一次采样, 展示的标题一定就是锁定下来的那个窗口;
@@ -349,7 +387,7 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 			injected = true
 			typed++
 
-			if typed%8 == 0 || typed == total {
+			if typed%progressEvery == 0 || typed == total {
 				setStatus(&TypingStatus{
 					Phase:        PhaseTyping,
 					Message:      fmt.Sprintf("正在逐字符输入 %d / %d ...", typed, total),
@@ -358,13 +396,13 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 				})
 			}
 
-			// 固定快速延迟: ASCII 8ms, CJK 12ms, 标点 16ms (给 IME 喘息)
-			charDelay := 8 * time.Millisecond
+			// 固定快速延迟: 三档数值见常量区 (给 IME 喘息)
+			charDelay := charDelayASCII
 			if r > 127 {
 				if isCJKPunct(r) {
-					charDelay = 16 * time.Millisecond
+					charDelay = charDelayPunct
 				} else {
-					charDelay = 12 * time.Millisecond
+					charDelay = charDelayCJK
 				}
 			}
 			s.sleep(charDelay)
@@ -414,7 +452,7 @@ func (s *TypingService) sendEscaped(key func() bool) bool {
 	if !s.injector.SendEscape() {
 		return false
 	}
-	s.sleep(20 * time.Millisecond)
+	s.sleep(escapeGap)
 	return key()
 }
 
@@ -437,12 +475,12 @@ func (s *TypingService) typeTextViaClipboard(text string, locked TargetID) (succ
 		// EmptyClipboard 可能已执行(分配阶段失败), 直接写回快照
 		return false, msgClipboardFailed, s.clipboard.RestoreSnapshotRaw(snap)
 	}
-	s.sleep(100 * time.Millisecond)
+	s.sleep(clipboardSettleWait)
 
 	if s.cancelFlag.Load() {
 		return false, "", s.restoreClipboardSnapshot(snap, text)
 	}
-	// 写入剪贴板与粘贴之间还隔着 100ms 稳定等待, 期间目标可能被切走;
+	// 写入剪贴板与粘贴之间还隔着 clipboardSettleWait 稳定等待, 期间目标可能被切走;
 	// 此刻放弃粘贴, 但剪贴板已经写过, 快照恢复照旧执行
 	if !s.targetHeld(locked) {
 		return false, msgTargetSwitchedIdle, s.restoreClipboardSnapshot(snap, text)
@@ -450,10 +488,10 @@ func (s *TypingService) typeTextViaClipboard(text string, locked TargetID) (succ
 	pasted := s.injector.SendPaste()
 	// 紧随其后的复检: SendPaste 返回后再漂移, 说明这次粘贴的落点已不是
 	// 锁定目标, 内容是否送达无法确认。检查刻意紧贴 SendPaste 而不放在
-	// 200ms 稳定等待之后 —— 用户在看到内容粘贴成功后才切窗口是正常操作,
+	// pasteSettleWait 稳定等待之后 —— 用户在看到内容粘贴成功后才切窗口是正常操作,
 	// 那时顶多是"没多等一会儿", 不该被误报成失败
 	drifted := !s.targetHeld(locked)
-	s.sleep(200 * time.Millisecond)
+	s.sleep(pasteSettleWait)
 
 	restored := s.restoreClipboardSnapshot(snap, text)
 	if drifted {

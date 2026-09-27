@@ -136,14 +136,21 @@ func applyWindowIcon(hwnd, hLarge, hSmall uintptr, withSetIcon bool) {
 	procRedrawWindow.Call(hwnd, 0, 0, 0x0001|0x0100)
 }
 
+// iconRetryDelays 图标延迟重试的三档间隔: 句柄加载一次即可, 但 WebView2
+// 窗口创建早期图标可能未生效, 按这三档补设类图标并重绘
+var iconRetryDelays = []time.Duration{
+	500 * time.Millisecond,
+	1500 * time.Millisecond,
+	3000 * time.Millisecond,
+}
+
 // retrySetIcon 设置窗口图标: 句柄只加载一次, 常驻至进程结束;
 // 延迟重试弥补 WebView2 窗口创建早期图标未生效的情况
 func retrySetIcon(hwnd uintptr) {
 	hLarge, hSmall := loadAppIcon()
 	applyWindowIcon(hwnd, hLarge, hSmall, true)
 	go func() {
-		delays := []time.Duration{500 * time.Millisecond, 1500 * time.Millisecond, 3000 * time.Millisecond}
-		for _, d := range delays {
+		for _, d := range iconRetryDelays {
 			time.Sleep(d)
 			applyWindowIcon(hwnd, hLarge, hSmall, false)
 		}
