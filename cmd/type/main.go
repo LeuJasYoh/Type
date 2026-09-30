@@ -15,7 +15,7 @@ import (
 	"github.com/jchv/go-webview2"
 )
 
-var version = "1.5.6"
+var version = "1.5.7"
 
 var topmostFlag atomic.Bool // 窗口置顶开关(与输入任务无关, 归装配层)
 
