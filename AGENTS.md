@@ -35,6 +35,10 @@ cd frontend; npm run dev            # 终端 1
 go build -tags dev -o Type-dev.exe ./cmd/type   # 终端 2
 .\Type-dev.exe                      # (-dev 参数或 TYPE_DEV_URL 指定端口)
 
+# 前端单测 (useTypingTask 的轮询状态机; 零新依赖: Node 自带测试跑器直接跑 TS,
+# 打桩 window/document 与定时器, 不依赖 WebView2 与真实时间)
+cd frontend; npm test
+
 # 图标资产再生成 (uv, 字节级可复现, 仅在更换 assets/icon.jpg 时需要)
 uv run scripts/gen_icon.py
 
@@ -87,7 +91,10 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
     启动预检与提示框在 internal/win32 的 win32_webview2.go 与 win32_msgbox.go，两者都不经过
     WebView2（界面起不来时，系统自己的对话框是唯一还能用的通道）
 - `internal/web/`：go:embed 前端产物包（dist/index.html 入库，免 Node 亦可 go build/test）
-- `frontend/`：自包含 Vite 项目（package.json / node_modules 都在这里，不在仓库根）
+- `frontend/`：自包含 Vite 项目（package.json / node_modules 都在这里，不在仓库根）。
+  `test/` 是前端单测：用 Node 自带的测试跑器（`npm test`），零新依赖，不引测试框架；
+  `ts-resolve.mjs` 是测试期的解析钩子（给省略扩展名的相对导入补 `.ts`，
+  因为 src 的导入是按打包器写的）。tsconfig 只含 `src/**`，测试不进类型检查与打包
 - `assets/`：图标源图与产物（screenshot-light.png / screenshot-dark.png 为 README
   配图，README 用 `<picture>` + `prefers-color-scheme` 引用，GitHub 会自行按访问者主题切换）
 - **README 配图的复现方式**（1080×900，2 倍像素密度）：
@@ -116,7 +123,7 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
   - `less-ai-tone/`：对外文字的去 AI 味规则与检测脚本（写、改散文前读它，不进产品与 CI）
 - `.github/workflows/`：
   - `verify.yml`：**检查项的唯一处**，`on: workflow_call`，被 ci.yml 与 release.yml 共用。
-    内容：gofmt / vet / `-race` 测试 / 漏洞扫描 / build / 前端产物漂移检查 / 版本同步检查。
+    内容：gofmt / vet / `-race` 测试 / 漏洞扫描 / build / 前端单测 / 前端产物漂移检查 / 版本同步检查。
     漏洞扫描用 `govulncheck` 的退出码当判据：可达的漏洞返回非零（构建失败），只在依赖里
     存在而调不到的返回零（不算失败，否则一个用不上的 CVE 就能卡住发版）；分析器版本钉住，
     免得 releases 上冒出问题版本时构建莫名其妙地红
@@ -144,7 +151,7 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 | 用途 | 工具 |
 |---|---|
 | 业务代码 / Go 测试 / 入库工具脚本 | Go（equivcheck 即 Go 写的） |
-| 前端 | TypeScript + Vite |
+| 前端 | TypeScript + Vite；单测用 Node 自带的测试跑器（零新依赖） |
 | 构建编排 / 发布打包 | PowerShell（build.ps1、release.yml 的步骤） |
 | Windows 资源生成（图标/版本信息） | Go（tools/mkres，winres 库），取代 windres + .rc |
 | 构建产物校验（PE 架构 / 资源读回） | Go（tools/pecheck，winres 库，仅构建期使用） |
@@ -214,6 +221,13 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   判断"链条继续"，而 pollTimer 只在该判断保护的分支里赋值，直接调用会让链条
   第一拍后断裂、状态永不刷新（症状：预览不跟随、完成后启动键卡死）。
   恢复可见/焦点时无条件重启链条，作为 WebView2 挂起定时器的兜底
+- **链条身份靠代数令牌，不靠 `pollTimer` 是否为空**：`pollTimer` 是共享变量，
+  一拍在飞时重启链条，旧那拍回来会看到非空的 `pollTimer`，于是给自己再排一拍，
+  两条链同时轮询（每秒请求数翻倍）；用户此时点取消，旧那拍还会把"已取消"盖回
+  倒计时，而链条已停、界面不会自愈。`stopPolling` 递增 `chain`，tick 回来先比
+  `my !== chain` 就返回，旧代的响应一律不写状态、不续链条。回归用例在
+  `frontend/test/typingTask.test.ts`（⑤ 迟到响应、⑥ 双链条两条），
+  改轮询前后都跑一次 `cd frontend; npm test`
 
 ### 焦点锁定与漂移防护（v1.5.3）
 

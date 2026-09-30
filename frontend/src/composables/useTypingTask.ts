@@ -21,21 +21,30 @@ export function useTypingTask() {
   const isRunning = ref(false);
 
   let pollTimer: number | null = null;
+  // 链条身份: 每次开始或停止都换一代。旧代的响应即使晚回来也不作数 ——
+  // pollTimer 是共享的, 单靠它判断"链条还在不在"会被重启骗过去(v1.5.7 之前:
+  // 一拍在飞时切回窗口, healPolling 重启链条, 旧那拍回来看到非空 pollTimer
+  // 又给自己排一拍, 两条链同时轮询; 若用户此时点了取消, 旧那拍还会把
+  // "已取消"盖成倒计时, 而链条已停、界面再也不会自愈)
+  let chain = 0;
   let warmedUp = false; // 首次 tick 只渲染不终止，避免读到上一轮残留的终止态
 
   function stopPolling(): void {
+    chain += 1;
     if (pollTimer !== null) {
-      window.clearInterval(pollTimer);
+      window.clearTimeout(pollTimer);
       pollTimer = null;
     }
   }
 
   function startPolling(): void {
     stopPolling();
+    const my = chain; // 本代标识: 只有它还对得上时才允许写状态与续链条
     warmedUp = false;
     const tick = async (): Promise<void> => {
       try {
         const s = await getTypingStatus();
+        if (my !== chain) return; // 已被停止或重启接管, 不许盖状态
         status.value = s;
         if (warmedUp && isTerminal(s.phase)) {
           stopPolling();
@@ -45,10 +54,11 @@ export function useTypingTask() {
         warmedUp = true;
       } catch {
         // 页面关闭时可能会 reject，忽略
+        if (my !== chain) return;
       }
       // 一次跑完再排下一次, 而不是 setInterval: IPC 偶尔变慢时不会有两个
       // 请求同时在飞, 也就不会出现旧响应盖掉新状态(进度/倒计时回跳)
-      if (pollTimer !== null) {
+      if (my === chain && pollTimer !== null) {
         pollTimer = window.setTimeout(tick, 100);
       }
     };

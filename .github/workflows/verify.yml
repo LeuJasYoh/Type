@@ -70,6 +70,12 @@ jobs:
         run: npm ci
         working-directory: frontend
 
+      # 前端单测: 轮询状态机(定时器 + IPC)靠打桩的 window/document 与假时钟驱动,
+      # 不依赖 WebView2, 也不依赖真实时间。零新依赖 —— 用 Node 自带的测试跑器
+      # 直接跑 TS(解析钩子见 frontend/test/ts-resolve.mjs)
+      - name: 前端单测
+        run: npm --prefix frontend test
+
       - name: 前端产物漂移检查
         shell: pwsh
         run: |

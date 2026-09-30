@@ -99,7 +99,7 @@
 | GUI | WebView2（Edge Chromium） |
 | 前端 | Vue 3 + TypeScript，Vite 构建为单文件 HTML（无其他运行时依赖） |
 | 构建 | vue-tsc 类型检查 + Vite（vite-plugin-singlefile）+ `go run ./tools/mkres` + `go build` |
-| CI | GitHub Actions（windows-latest）：gofmt / go vet / `go test -race` / 依赖漏洞扫描（govulncheck）/ go build + 前端产物漂移检查 + 版本同步检查；另按 amd64/arm64 矩阵做发布构建，并用 `tools/pecheck` 读回校验图标、版本与 DPI 声明确实已链入产物。发版走的是同一套检查（`verify.yml`），不会比平时松 |
+| CI | GitHub Actions（windows-latest）：gofmt / go vet / `go test -race` / 依赖漏洞扫描（govulncheck）/ go build + 前端单测（`npm test`）+ 前端产物漂移检查 + 版本同步检查；另按 amd64/arm64 矩阵做发布构建，并用 `tools/pecheck` 读回校验图标、版本与 DPI 声明确实已链入产物。发版走的是同一套检查（`verify.yml`），不会比平时松 |
 | 发布 | 打 `v<版本>` 标签即由 GitHub Actions 自动发行：校验版本与发布说明一致 → 双架构构建 + 读回校验 → 打包 → 建 Release；说明文字取自入库的 `release-notes/v<版本>.md` |
 | Win32 API | SendInput（KEYEVENTF_UNICODE）+ WM_CHAR 文本直投（SendMessageTimeoutW 直投焦点窗口）+ 剪贴板（CF_UNICODETEXT、EnumClipboardFormats 全格式快照、RtlMoveMemory）+ 前台窗口检测（GetForegroundWindow）+ 单实例互斥体（CreateMutexW） |
 | 图标 | 圆角多尺寸 ICO（uv + Pillow 生成，`scripts/gen_icon.py` 字节级可复现） |
@@ -137,6 +137,9 @@ Type/
 │   ├── vite.config.ts       ← Vite 配置 (单文件打包, 产物输出 ../internal/web/dist)
 │   ├── index.html           ← Vite 入口
 │   ├── tsconfig.json        ← TypeScript 配置 (vue-tsc)
+│   ├── test/                ← 前端单测 (Node 自带测试跑器 + 假时钟, 零新依赖)
+│   │   ├── typingTask.test.ts   ← useTypingTask 轮询状态机回归 (npm test)
+│   │   └── ts-resolve.mjs       ← 测试期模块解析钩子 (补省略的 .ts 扩展名)
 │   └── src/
 │       ├── main.ts          ← 应用入口 (createApp)
 │       ├── App.vue          ← 界面骨架
@@ -166,7 +169,7 @@ Type/
 ├── testdata/                ← 手工测试页 (paste-guard.html 防粘贴 / completion-guard.html 补全+配对, 用法见页内注释)
 ├── release-notes/           ← 各版本发布说明 (v<版本>.md, 发布时原样作为 Release 正文)
 ├── .github/workflows/
-│   ├── verify.yml           ← 检查项的唯一处 (gofmt / vet / -race 测试 / build + 前端产物漂移检查 + 版本同步), CI 与发版共用
+│   ├── verify.yml           ← 检查项的唯一处 (gofmt / vet / -race 测试 / build + 前端单测 + 前端产物漂移检查 + 版本同步), CI 与发版共用
 │   ├── ci.yml               ← CI: 调用 verify.yml, 另按 amd64/arm64 矩阵做发布构建与资源读回
 │   └── release.yml          ← 发版: 打 v<版本> 标签触发, 先跑 verify.yml 再构建/校验/打包/建 Release (也可在 Actions 页面手动触发)
 ├── go.mod / go.sum          ← Go 模块定义
@@ -216,6 +219,9 @@ uv run scripts/gen_icon.py
 gofmt -l ./cmd ./internal ./tools   # 应输出为空
 go vet ./...
 go test -count=1 -race ./...        # -race 需要 cgo, 即 MinGW 的 gcc; 发布构建不需要 C 工具链
+
+# 前端单测 (轮询状态机: 打桩 window/document 与假时钟, 不依赖 WebView2 与真实时间)
+cd frontend; npm test
 ```
 
 ### 前端开发模式 (HMR)
