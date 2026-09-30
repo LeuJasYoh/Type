@@ -249,7 +249,7 @@ body {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--ring);
 }
-#textInput {
+.text-input {
   width: 100%;
   flex: 1;
   padding: 10px 12px;
@@ -263,10 +263,10 @@ body {
   resize: none;
   outline: none;
 }
-#textInput::placeholder {
+.text-input::placeholder {
   color: var(--ink-300);
 }
-.dark #textInput::placeholder {
+.dark .text-input::placeholder {
   color: var(--ink-500);
 }
 .char-count {
@@ -408,7 +408,6 @@ body {
 .btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
-  transform: none !important;
 }
 .btn:focus-visible {
   outline: 2px solid var(--accent);
@@ -474,13 +473,12 @@ body {
 .status-bar.error .status-text {
   color: var(--error-text);
 }
-.status-bar.info,
+/* 运行态(倒计时/键入中)共用一套灰蓝。phase 枚举里没有 info, 别再加回 .status-bar.info */
 .status-bar.countdown,
 .status-bar.typing {
   border-color: var(--info-border);
   background: var(--info-bg);
 }
-.status-bar.info .status-text,
 .status-bar.countdown .status-text,
 .status-bar.typing .status-text {
   color: var(--info-text);

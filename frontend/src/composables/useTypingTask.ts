@@ -1,7 +1,7 @@
 // ═══ 输入任务状态机 ═══════════════════════════════════
 // 封装 startTyping/cancelTyping 的生命周期与 getTypingStatus 轮询。
 
-import { ref } from 'vue';
+import { getCurrentScope, onScopeDispose, ref } from 'vue';
 import { cancelTyping, errMsg, getTypingStatus, startTyping } from '../ipc';
 import type { TypingPhase, TypingStatus } from '../types';
 
@@ -105,6 +105,16 @@ export function useTypingTask() {
   }
   document.addEventListener('visibilitychange', healPolling);
   window.addEventListener('focus', healPolling);
+
+  // 摘监听与停表。现在只在 App 顶层调用一次、组件不卸载, 所以不做也暂时无害;
+  // 但条件渲染、KeepAlive 或第二次调用都会让它变成"监听越挂越多、定时器停不掉"
+  if (getCurrentScope()) {
+    onScopeDispose(() => {
+      document.removeEventListener('visibilitychange', healPolling);
+      window.removeEventListener('focus', healPolling);
+      stopPolling();
+    });
+  }
 
   // 挂载时先同步一次后端状态。页面重载有两条不受控的来路 —— 用户按
   // Ctrl+R/F5(浏览器加速键, 网页拦不住), 以及渲染进程崩溃后 WebView2 自动

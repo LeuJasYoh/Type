@@ -56,13 +56,12 @@ async function onTogglePin(): Promise<void> {
         </svg>
       </button>
       <button
-        id="btnPin"
         class="pin-btn"
         :class="{ active: pinned }"
         :title="pinned ? '取消窗口置顶' : '窗口置顶'"
         @click="onTogglePin"
       >
-        <span id="pinLabel">{{ pinned ? '取消置顶' : '置顶' }}</span>
+        <span>{{ pinned ? '取消置顶' : '置顶' }}</span>
       </button>
     </div>
   </div>
@@ -70,16 +69,15 @@ async function onTogglePin(): Promise<void> {
   <div class="app-container">
     <!-- 输入区域 -->
     <div class="section">
-      <label class="section-label">输入要模拟键入的文本</label>
+      <label class="section-label" for="textInput">输入要模拟键入的文本</label>
       <div class="input-wrap">
-        <textarea id="textInput" v-model="text" placeholder="请输入文本..."></textarea>
-        <div class="char-count"><span id="charCount">{{ charCount }}</span> 个字符</div>
+        <textarea id="textInput" class="text-input" v-model="text" placeholder="请输入文本..."></textarea>
+        <div class="char-count"><span>{{ charCount }}</span> 个字符</div>
       </div>
     </div>
 
     <div class="options-row">
       <button
-        id="chkForceRaw"
         type="button"
         class="pill-toggle"
         role="switch"
@@ -92,7 +90,6 @@ async function onTogglePin(): Promise<void> {
         <span>绕过粘贴检测</span>
       </button>
       <button
-        id="chkTextDirect"
         type="button"
         class="pill-toggle"
         role="switch"
@@ -108,26 +105,26 @@ async function onTogglePin(): Promise<void> {
       </button>
       <div class="delay-slider-row">
         <span class="slider-label">延迟</span>
-        <input id="delaySlider" v-model.number="delay" type="range" min="1" max="9" class="slider">
-        <span id="delayValue" class="delay-value">{{ delay }} 秒</span>
+        <input v-model.number="delay" type="range" min="1" max="9" class="slider">
+        <span class="delay-value">{{ delay }} 秒</span>
       </div>
     </div>
 
     <div class="actions-row">
-      <button id="btnStart" class="btn btn-primary" :disabled="isRunning" @click="onStart">
+      <button class="btn btn-primary" :disabled="isRunning" @click="onStart">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden><polygon points="5 3 19 12 5 21 5 3" /></svg>
         启动
       </button>
-      <button id="btnCancel" class="btn btn-secondary" :disabled="!isRunning" @click="onCancel">
+      <button class="btn btn-secondary" :disabled="!isRunning" @click="onCancel">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
         取消
       </button>
     </div>
 
     <!-- 目标窗口预览 -->
-    <div id="targetRow" class="target-row" :class="{ active: !!status.targetWindow }">
+    <div class="target-row" :class="{ active: !!status.targetWindow }">
       <span class="target-label">目标窗口</span>
-      <span id="targetName" class="target-name">{{ status.targetWindow || '—' }}</span>
+      <span class="target-name">{{ status.targetWindow || '—' }}</span>
     </div>
 
     <!-- 状态与进度 -->
