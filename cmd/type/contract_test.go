@@ -153,3 +153,131 @@ func TestFrontendMirrorsBindNames(t *testing.T) {
 		}
 	}
 }
+
+// ─── 前端镜像: types.ts / 倒计时文案 / 主题防闪烁脚本 ─────
+
+// repoFile 读仓库内的文本文件(路径相对 cmd/type)
+func repoFile(t *testing.T, parts ...string) string {
+	t.Helper()
+	path := filepath.Join(append([]string{"..", ".."}, parts...)...)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读取 %s 失败: %v (文件被移动了?)", path, err)
+	}
+	return string(data)
+}
+
+var (
+	tsStatusBodyRE = regexp.MustCompile(`(?s)export interface TypingStatus \{(.*?)\n\}`)
+	tsFieldRE      = regexp.MustCompile(`(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\??\s*:`)
+	tsPhaseBodyRE  = regexp.MustCompile(`(?s)export type TypingPhase =(.*?);`)
+	tsPhaseLitRE   = regexp.MustCompile(`'([a-z]+)'`)
+	goPhaseDeclRE  = regexp.MustCompile(`(?m)Phase[A-Za-z]+\s+TypingPhase\s*=\s*"([a-z]+)"`)
+	// 前端自己拼的倒计时文案(不为等第一次轮询): 秒数必须来自插值
+	tsCountdownRE = regexp.MustCompile(`剩余 \$\{[^}]+\} 秒`)
+)
+
+// TypingStatus 的 JSON 键以 Go 结构体的 tag 为准。前端少一个键, 运行时读到
+// undefined(倒计时变成 NaN); 多一个键说明后端删了字段而镜像没跟上
+func TestFrontendTypesStatusFields(t *testing.T) {
+	body := tsStatusBodyRE.FindStringSubmatch(repoFile(t, "frontend", "src", "types.ts"))
+	if body == nil {
+		t.Fatal("frontend/src/types.ts 里找不到 export interface TypingStatus")
+	}
+	got := map[string]bool{}
+	for _, f := range tsFieldRE.FindAllStringSubmatch(body[1], -1) {
+		got[f[1]] = true
+	}
+
+	rt := reflect.TypeOf(typing.TypingStatus{})
+	want := map[string]bool{}
+	for i := 0; i < rt.NumField(); i++ {
+		name, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			t.Fatalf("TypingStatus.%s 缺少 json tag", rt.Field(i).Name)
+		}
+		want[name] = true
+	}
+	for name := range want {
+		if !got[name] {
+			t.Errorf("types.ts 的 TypingStatus 缺少字段 %q (Go 端有这个 JSON 键)", name)
+		}
+	}
+	for name := range got {
+		if !want[name] {
+			t.Errorf("types.ts 的 TypingStatus 多出字段 %q (Go 端没有这个 JSON 键)", name)
+		}
+	}
+}
+
+// phase 取值对着 internal/typing 的常量声明核。前端多一个取值, 界面会进入
+// 一个后端永不产生的分支; 少一个取值, 该 phase 的样式与终止判断全部失效
+func TestFrontendTypesPhaseValues(t *testing.T) {
+	body := tsPhaseBodyRE.FindStringSubmatch(repoFile(t, "frontend", "src", "types.ts"))
+	if body == nil {
+		t.Fatal("frontend/src/types.ts 里找不到 export type TypingPhase")
+	}
+	got := map[string]bool{}
+	for _, p := range tsPhaseLitRE.FindAllStringSubmatch(body[1], -1) {
+		got[p[1]] = true
+	}
+
+	want := map[string]bool{}
+	for _, p := range goPhaseDeclRE.FindAllStringSubmatch(repoFile(t, "internal", "typing", "typing.go"), -1) {
+		want[p[1]] = true
+	}
+	if len(want) == 0 {
+		t.Fatal("internal/typing/typing.go 里找不到 TypingPhase 常量声明")
+	}
+	for p := range want {
+		if !got[p] {
+			t.Errorf("types.ts 的 TypingPhase 缺少取值 %q (Go 端有这个 phase)", p)
+		}
+	}
+	for p := range got {
+		if !want[p] {
+			t.Errorf("types.ts 的 TypingPhase 多出取值 %q (Go 端没有这个 phase)", p)
+		}
+	}
+}
+
+// 倒计时那句在仓库里有三份: 后端 msgCountdownFormat、typing/contract_test.go
+// 的字面量、以及前端为了不等第一次轮询而自己拼的这份。前两份由 internal 的
+// 测试钉着, 这一份此前无人管 —— 它走散的症状是界面上的秒数文案与后端不一致,
+// 而没有任何环节会失败
+func TestFrontendCountdownMessageMirrorsGo(t *testing.T) {
+	src := repoFile(t, "frontend", "src", "composables", "useTypingTask.ts")
+	if !tsCountdownRE.MatchString(src) {
+		t.Error("useTypingTask.ts 的倒计时文案不再是 `剩余 ${...} 秒` 的插值形式")
+	}
+	if !strings.Contains(src, "— 请聚焦目标窗口...") {
+		t.Error("useTypingTask.ts 的倒计时文案尾部与后端 msgCountdownFormat 不一致")
+	}
+}
+
+// 主题的存储键写在两处: 首帧内联脚本读它、useTheme 写它。走散的症状是
+// "切换过主题, 重启又变回系统主题", 且没有任何环节会失败。内联脚本还必须
+// 排在入口脚本之前, 挪到 Vue 里就等于首帧闪白(见 AGENTS.md)
+func TestThemeBootScriptKeepsKeyAndOrder(t *testing.T) {
+	ts := repoFile(t, "frontend", "src", "composables", "useTheme.ts")
+	m := regexp.MustCompile(`THEME_KEY = '([^']+)'`).FindStringSubmatch(ts)
+	if m == nil {
+		t.Fatal("useTheme.ts 里找不到 THEME_KEY 字面量")
+	}
+
+	html := repoFile(t, "frontend", "index.html")
+	boot := strings.Index(html, "localStorage.getItem('"+m[1]+"')")
+	if boot < 0 {
+		t.Fatalf("index.html 的防闪烁脚本没有读存储键 %q (与 useTheme.ts 不一致?)", m[1])
+	}
+	if !strings.Contains(html[boot:], "classList.add('dark')") {
+		t.Error("index.html 的防闪烁脚本没有把 .dark 挂到 <html> 上")
+	}
+	entry := strings.Index(html, `<script type="module"`)
+	if entry < 0 {
+		t.Fatal("index.html 里找不到入口 module script")
+	}
+	if boot > entry {
+		t.Error("防闪烁脚本必须排在入口 module script 之前, 否则首帧会闪一下")
+	}
+}
