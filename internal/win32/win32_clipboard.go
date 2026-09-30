@@ -208,15 +208,28 @@ func skippableFormat(fmt uint32) bool {
 }
 
 // Snapshot 复制当前剪贴板的全部内存块型格式(文本/图片 CF_DIB/文件
-// CF_HDROP/HTML Format 等)。返回 nil 表示剪贴板打开失败(原状态未知, 调用方应
-// 放弃恢复); 返回空切片表示剪贴板原本为空, 恢复时执行清空
-func (Clipboard) Snapshot() []typing.ClipboardFormat {
+// CF_HDROP/HTML Format 等)。
+//
+// Complete 的含义只有一条: 这份快照能不能拿来恢复。读某个格式失败时如实报
+// false —— 恢复流程会先清空剪贴板, 拿残缺的快照去恢复等于把没抄到的那些格式
+// 永久销毁, 而用户看到的会是"输入完成"。调用方据此放弃剪贴板这条路(见
+// internal/typing 的 ClipboardSnapshot)。
+//
+// 两个容易误读的地方:
+//   - 打开失败与"一个格式都没读到"同样报 Complete=false。这两种情况分不清
+//     (枚举不到也可能只是剪贴板本来就空), 对调用方也没区别, 都按无从恢复处理;
+//   - skippableFormat 跳过的那些格式不计入 Complete。那是既定的取舍: 句柄型
+//     与含句柄的格式照抄下来恢复时会写回失效句柄或垃圾字节, 受害的是系统里
+//     别的程序, 宁可不恢复(见该函数的说明)。所以"带截图/位图的剪贴板"照样是
+//     完整快照, 不会因此把整条粘贴路径踢掉
+func (Clipboard) Snapshot() typing.ClipboardSnapshot {
 	if !openClipboardWithRetry() {
-		return nil
+		return typing.ClipboardSnapshot{} // 原状态未知, 无从恢复
 	}
 	defer procCloseClipboard.Call()
 
 	snap := make([]typing.ClipboardFormat, 0, 8)
+	complete := true
 	for fmt := uint32(0); ; {
 		next, _, _ := procEnumClipboardFormats.Call(uintptr(fmt))
 		if next == 0 {
@@ -226,11 +239,20 @@ func (Clipboard) Snapshot() []typing.ClipboardFormat {
 		if skippableFormat(fmt) {
 			continue
 		}
-		if data, ok := readClipboardFormat(fmt); ok {
-			snap = append(snap, typing.ClipboardFormat{Fmt: fmt, Data: data})
+		data, ok := readClipboardFormat(fmt)
+		if !ok {
+			// 没能照抄下来的格式: 恢复时写不回去, 这份快照就不算完整
+			complete = false
+			continue
 		}
+		snap = append(snap, typing.ClipboardFormat{Fmt: fmt, Data: data})
 	}
-	return snap
+	if len(snap) == 0 {
+		// 一个格式都没读到: 分不清"剪贴板本来就空"与"全部读失败",
+		// 按无从恢复处理, 免得把没能照抄的内容当成空剪贴板清掉
+		return typing.ClipboardSnapshot{}
+	}
+	return typing.ClipboardSnapshot{Formats: snap, Complete: complete}
 }
 
 // readClipboardFormat 读取单一格式的数据块(剪贴板已打开时调用)

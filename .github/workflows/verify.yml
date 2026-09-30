@@ -1,0 +1,113 @@
+name: 验证
+
+# verify 抽成可复用工作流, 唯一的用处是让 ci.yml 与 release.yml 跑同一套检查。
+#
+# 为什么必须共用: 发版走的是"打标签"这条路, 而标签未必打在跑过 CI 的提交上
+# (打标签的提交未必走过 main 的 CI)。此前 release.yml 只做 go test + 打包,
+# 于是一份"改了 frontend/src 却忘了重新生成 internal/web/dist/index.html"的
+# 提交照样能把 Release 发出去 —— exe 里嵌着与源码不符的旧界面, 谁都不会失败。
+# 检查写在两处就会走散, 所以只有这一处。
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v5
+        with:
+          # Node 主版本只写在 .node-version 一处: 产品的字节级可复现性依赖它
+          # (换主版本会改变 vite/rollup 产出的转义与 chunk 命名, 见产物漂移检查),
+          # 开发者的 nvm/fnm 也读同一个文件, 两边不会各写一份而走散
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # ── Go 三件套 ──
+      - name: gofmt
+        shell: pwsh
+        run: |
+          $bad = gofmt -l ./cmd ./internal ./tools
+          if ($bad) { Write-Host "以下文件未格式化:"; $bad; exit 1 }
+
+      - name: go vet
+        run: go vet ./...
+
+      # -race 是刻意的: 状态机里出过"两次启动都通过判定、同一段文本注入两遍"
+      # 这类只有并发交错才暴露的缺陷, 而行覆盖率看不到并发路径。Windows 上
+      # 竞态检测需要 cgo, runner 自带 MinGW 的 gcc
+      - name: go test
+        run: go test -count=1 -race ./...
+
+      # 漏洞扫描: 退出码就是判据 —— 可达的漏洞返回非零(构建失败), 只在依赖里
+      # 存在而调不到的返回零(不算失败, 否则一个用不上的 CVE 就能卡住发版)。
+      # 分析器钉住版本, 免得 releases 上冒出问题版本时构建莫名其妙地红
+      - name: 漏洞扫描
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+      # 全部包的快速编译冒烟: 真正带资源链接的发布构建在 release.yml 里
+      - name: go build
+        run: go build ./...
+
+      # ── 入库的前端产物必须与源码一致 ──
+      # dist/index.html 入库是刻意的(免 Node 亦可 go build), 代价是改了
+      # frontend/src 却忘了重新构建时 go:embed 会静默用旧界面, 这里堵住。
+      # 比对用 git hash-object --path=<原路径>: 它套用与 git diff 相同的
+      # 行尾归一, 因此 Windows 检出(autocrlf 使 CRLF)与 vite 产出(LF)
+      # 不会误报, 而真实的内容漂移照样能被抓住(直接比字节或比哈希都会误报,
+      # 第一版就是栽在这里)
+      - name: 前端依赖
+        run: npm ci
+        working-directory: frontend
+
+      - name: 前端产物漂移检查
+        shell: pwsh
+        run: |
+          $artifact = 'internal/web/dist/index.html'
+          $committed = git rev-parse "HEAD:$artifact"
+          if ($LASTEXITCODE -ne 0 -or -not $committed) {
+            Write-Host "无法从 HEAD 读取入库产物 $artifact"; exit 1
+          }
+          npm --prefix frontend run build
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $built = git hash-object "--path=$artifact" $artifact
+          if ($LASTEXITCODE -ne 0 -or -not $built) {
+            Write-Host "重新构建未产出 $artifact"; exit 1
+          }
+          if ($built -ne $committed) {
+            Write-Host "$artifact 与 frontend/src 不一致"
+            Write-Host "  入库版本: $committed"
+            Write-Host "  重新构建: $built"
+            Write-Host "  环境: node $(node --version) / vite $((npm ls vite --depth=0 --json 2>$null | ConvertFrom-Json).dependencies.vite.version)"
+            Write-Host "请在本地运行 scripts/build.ps1 并提交重新生成的产物"
+            exit 1
+          }
+          Write-Host "前端产物与源码一致 ($committed)"
+
+      - name: 版本同步检查
+        shell: pwsh
+        run: |
+          # 与 build.ps1 同款正则: 版本可带预发布后缀(如 1.5.0-rc.1)
+          # 用 ConvertFrom-Json 取字段本身, 而不是在文本里找子串:
+          # 子串匹配在版本号恰好出现在别处时会漏判
+          $m = Select-String -Path cmd/type/main.go -Pattern 'version\s*=\s*"([\d.]+(?:-[0-9A-Za-z.]+)?)"'
+          if (-not $m) { throw "cmd/type/main.go 中未找到 version 变量" }
+          $ver = $m.Matches[0].Groups[1].Value
+          $f = 'frontend/package.json'
+          $pkg = Get-Content -Raw $f | ConvertFrom-Json
+          if ($pkg.version -ne $ver) {
+            Write-Host "$f 的 version = '$($pkg.version)', main.go 是 '$ver'"
+            Write-Host "跑一次 scripts/build.ps1 让两边同步(它会重写 package.json)"
+            exit 1
+          }
+          Write-Host "版本号 $ver 已同步到 $f"

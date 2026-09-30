@@ -23,7 +23,7 @@ $env:GOARCH = "arm64"; go build -ldflags="-H windowsgui -s -w" -o Type-arm64.exe
 # Go 验证三件套 (任何 Go 改动后, 与 CI 同款)
 gofmt -l ./cmd ./internal ./tools   # 应输出为空
 go vet ./...
-go test -count=1 ./...
+go test -count=1 -race ./...        # Windows 上竞态检测需要 cgo, 要 MinGW 的 gcc
 
 # 发布构建的读回校验: 图标/版本/DPI manifest 是否真的链进了 exe。
 # 资源缺失或架构不匹配时 go build 不报错, 只有读回才看得见 (CI 同款)
@@ -53,8 +53,13 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 
 发布前有三道闸门，任何一道不过都不产出（宁可没发出去，也不发名不副实的包）：
 
-1. **版本一致**：标签 == `cmd/type/main.go` 的 `version`，且 `release-notes/v<版本>.md` 存在、里面确实写了本版包名、`package.json` 已同步（后两条专治"复制上一版说明忘了改版本号"）；
-2. **测试全绿**：`go test -count=1 ./...` 在打包之前先跑一遍；
+1. **检查全绿**：`verify.yml` 先跑完（gofmt / vet / `-race` 测试 / 漏洞扫描 / 前端产物漂移 / 版本同步）。
+   它与 CI 是同一个工作流，**检查项只有那一处定义**；发版这条路上的检查不能比平时松，
+   因为"改了 `frontend/src` 忘了重新生成产物"的提交如果放过去，Release 里的 exe 会嵌着
+   与源码不符的旧界面，而且没有任何环节会失败（这件事曾经真的会漏，v1.5.6 补的）；
+2. **版本一致**：标签 == `cmd/type/main.go` 的 `version`，且 `release-notes/v<版本>.md` 存在、
+   里面确实写了本版包名、`package.json` 的 `version` 字段已同步（后两条专治"复制上一版说明
+   忘了改版本号"）；
 3. **读回校验**：`tools/pecheck` 逐项确认架构、版本号、图标、DPI manifest 真的链进了 exe。
 
 发布说明与代码放在同一次提交里（`release-notes/v<版本>.md`），原样作为 Release 正文：
@@ -110,11 +115,17 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
   - `equivcheck/`：重构等价性验证（逐函数比对函数体，证明结构调整零行为变化）
   - `less-ai-tone/`：对外文字的去 AI 味规则与检测脚本（写、改散文前读它，不进产品与 CI）
 - `.github/workflows/`：
-  - `ci.yml`：两个作业。`verify`（gofmt / vet / test / build + 前端产物漂移检查 +
-    版本同步检查，只跑一遍）与 `build`（amd64/arm64 矩阵：mkres 生成资源 → 发布参数构建 →
-    `tools/pecheck` 读回校验；arm64 另做 `go vet` 与 `go test -c` 测试编译）。
+  - `verify.yml`：**检查项的唯一处**，`on: workflow_call`，被 ci.yml 与 release.yml 共用。
+    内容：gofmt / vet / `-race` 测试 / 漏洞扫描 / build / 前端产物漂移检查 / 版本同步检查。
+    漏洞扫描用 `govulncheck` 的退出码当判据：可达的漏洞返回非零（构建失败），只在依赖里
+    存在而调不到的返回零（不算失败，否则一个用不上的 CVE 就能卡住发版）；分析器版本钉住，
+    免得 releases 上冒出问题版本时构建莫名其妙地红
+  - `ci.yml`：两个作业。`verify`（调用上面的 verify.yml）与 `build`（amd64/arm64 矩阵：
+    mkres 生成资源 → 发布参数构建 → `tools/pecheck` 读回校验；arm64 另做 `go vet` 与
+    `go test -c` 测试编译，编的是 internal 两个包与 cmd/type）。
     拆开是刻意的：前端构建不必按架构重复，而"资源有没有链进产物"只有真构建一次才回答得了
-  - `release.yml`：发版（见「发布流程」）
+  - `release.yml`：发版（见「发布流程」）。它的 `release` 作业 `needs: verify`，
+    所以发布包不可能出自检查不过的提交
 - **版本号单一来源**：`cmd/type/main.go` 的 `version` 变量；build.ps1 自动同步到
   package.json，并在构建期把它传给 `tools/mkres` 生成资源，改版本只改 main.go，
   然后跑 build.ps1。版本可带预发布后缀（如 `1.5.0-rc.1`）：资源里的数字字段取后缀前
@@ -143,7 +154,22 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 `go build` / `go test` 都不再需要 cgo，新增依赖时别把 cgo 带回来（那会重新要求
 MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
 
+唯一的例外是 `go test -race`：Windows 上的竞态检测器要 cgo，所以它需要 gcc
+（本机有 MinGW 时可直接跑，CI 的 runner 自带）。这只是**测试期**的依赖，
+产品构建与发布仍然不需要 C 编译器；`CGO_ENABLED=0` 下 `go build` / `go test`
+照常通过，只有 `-race` 会被拒绝。
+
 ## 行为契约（冻结，改动需双端同步）
+
+**这一节的内容有自动守护**，改动了会有测试变红，别只改一边：
+
+- `internal/typing/contract_test.go`：冻结文案逐字表 + `TypingStatus` 的 JSON 键集合
+  与六个 phase 取值 + 初始状态的整体 JSON；
+- `cmd/type/contract_test.go`：四个 Bind 函数名、`startTyping` 的四个参数与类型、
+  `Status`/`Cancel` 的签名，并读 `frontend/src/ipc.ts` 核对前端那份镜像。
+
+文案断言刻意写成**字面量**而不是引用常量（看着像自我复读，但那正是它的用途：
+别处断言用的是同名常量，改了常量测试照样绿）。新增文案请一并登记进下面两张清单与表。
 
 - webview Bind 函数名：`startTyping` / `cancelTyping` / `toggleTopmost` / `getTypingStatus`
   （`startTyping` 参数：text, delay, forceSendInput, textDirect）
@@ -224,6 +250,41 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   会变）。要真正覆盖得上 UI Automation 做元素级比对，成本与稳定性风险都高，
   当前决定是维持现状并写进 README 已知限制
 
+### 任务槽与并发启动（v1.5.6）
+
+- **"启动成功"必须与"占住任务槽"是同一个事实**。`Start` 里读一次运行标志就放行、
+  再由新开的 goroutine 自己去认领任务，是两次几乎同时到达的启动都能通过的原因：
+  实测两路并发 300 轮里 246 轮把同一段文本注入两遍。判定与占领现在同在 `s.mu`
+  临界区里完成，`Start` 返回 nil 即已占住
+- **"有没有任务在跑"只有一个权威：`s.prevTask`**。曾经同时用 `runningFlag` 与它，
+  结果新任务一进来就置上了运行标志，而"等上一任务让位"也靠这个标志判断，等于在等
+  自己，于是必然误报超时（v1.5.6 修复过程中踩到，症状是"取消后立刻重启"变成
+  `启动失败：上一任务未能及时退出`）。要等上一任务，等它自己的 `taskSlot.done`
+- **"这次取消是不是冲我来的"靠取消标志的前后两次读**。采样前读一次、占领时
+  再读一次：采样前就是 true 的，那是分配给上一任务的取消（它正靠这个标志退出），
+  本次启动是"取消后立即重启"，不该被它拦下；采样前 false、之后变 true 的，
+  是用户在这次采样的间隙里点的取消，必须认。**别改用"取消计数器 + 基线"那套**：
+  取消发生在上一任务还活着的时候、新任务又从采样窗口里进来，两种取消在计数上
+  长得一模一样，要分辨就得再引入一个"轮次"标识，越绕越容易错（v1.5.6 在这儿
+  反复栽了四次）
+- **标志一律不在 `Start` 里清**：清了会同时踩两个坑 —— 抹掉采样窗口里刚到达的
+  取消，以及让"取消后立即重启"的第二次启动被重入判定拒掉。给 `runTypingTask`
+  在等到上一任务停手之后再清
+- **被判"出发前就取消"的任务必须自己把终态说出来**。它接着 `return` 而不写状态的话，
+  界面就停在 `Start` 写下的倒计时上，而倒计时不是终态、前端会一直轮询，
+  用户看到永远不动的"剩余 N 秒"。写的时候带 `gen` 守卫，已被新一代接管时不插嘴
+- **`Start` 里的前台采样放在锁外**。`Foreground.Sample` 是 Win32 调用，目标进程
+  无响应时回不来；抓着锁采样会把用户的取消一起冻住（`Cancel` 要取同一把锁）。
+  同理，`runTypingTask` 里等上一任务让位时也不许持锁
+- **用超时那条终态写入必须带 `gen` 守卫**，别写成 `s.taskGen.Load()`：那是拿自己
+  和自己比、恒真，退位的任务会把"启动失败：上一任务未能及时退出"盖到在途的新任务
+  头上，前端在终止态停轮询，用户看到假失败而文本其实已经送进目标窗口
+- 回归用例在 `typing_test.go`：`TestConcurrentStartNeverStacks`、
+  `TestCancelDuringStartLeavesNoStuckCountdown`（断言终态必须是 cancel 且零注入，
+  只断言 isTerminal 会被"吞掉取消后的假成功"满足）、
+  `TestRestartAfterCancelSupersedesOldTask`、`TestStartDeadlineWhenPreviousTaskStuck`、
+  `TestSupersededTaskTimeoutDoesNotOverwriteNewerTask`。改这块前后都要跑 `-race`
+
 ### 文本直投（v1.5.0，WM_CHAR 文本层注入）
 
 - 带代码补全的在线编辑器（在线作业/考试平台的代码框一类）有两个按键层行为会打乱注入的代码：
@@ -247,8 +308,16 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   勿改成"探测后再 Esc"。默认关闭：无弹窗目标里凭空 Esc 有副作用
   （浏览器全屏退出、Vim 退出插入态、关页面弹窗）
 - 仅逐字符路径生效；剪贴板粘贴不经弹窗劫持，无此逻辑。textDirect 为
-  startTyping 第 4 参；发送目标沿用 focusedHWND()（前台线程焦点窗口），
-  拿不到窗口时 SendText 退化为 SendInput 按键注入
+  startTyping 第 4 参；发送目标沿用 focusedHWND()（前台线程焦点窗口）
+- **拿不到焦点子窗口就退化为按键注入**（v1.5.6）：`focusedHWND` 不再拿顶层窗口
+  兜底，取不到焦点子窗口时返回 0，`sendCharUnitsViaWMChar` 据此走
+  `sendCharUnitsViaInput`。原因是顶层容器窗口会把 `WM_CHAR` 丢掉，而
+  `SendMessageTimeout` 照样返回成功，"一个字都没进去"会被报成注入成功。
+  已知盲区（未实测）：全角标点的绕行共用这个函数，而 `SendInput` 对
+  U+FF00-FFEF 恰有那个系统级 bug（症状是标点重复、后续字符被吞）。退化之后
+  这类字符会怎样没有真机验证过；`sendChar16` 判的是 SendInput 的入队计数，而
+  那个 bug 发生在目标侧渲染、入队照样成功，所以**很可能静默出错**而不是报失败。
+  要下结论得用 `tools/wmcharprobe` 在真窗口上逐字比对，别只读代码下判断
 - 验收/复现页 testdata/completion-guard.html（补全 + 配对开关、逐键日志、
   预期对比、title 遥测）；勿带 `?allow-paste=1` 做 Type 实测，那是停用
   粘贴拦截、供自动化注入的诊断模式
@@ -286,12 +355,35 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   恢复与读写的重试档位是分开的（4×50ms 对 8×100ms）：失败意味着用户原本复制的东西
   丢了，值得多等几百毫秒；这段时间在任务收尾，用户无感。用户已复制新内容时跳过恢复
   不算失败（剪贴板归用户所有，正是想要的结果），快照没拿到（nil）才算
+- **快照不完整时不许碰剪贴板**（v1.5.6）：`Snapshot()` 返回
+  `ClipboardSnapshot{Formats, Complete}`，`Complete` 是"这份快照能不能拿去恢复"的
+  唯一判据。恢复流程会先 `EmptyClipboard`，所以拿残缺的快照去恢复，等于把没抄到的
+  那些格式永久销毁，而用户看到的会是"输入完成"。读某个格式失败、一个格式都没读到、
+  或剪贴板打开失败，都算不完整（后两种无从区分，对调用方也没区别）。
+  这种情况下剪贴板这条路整个不作数，退回逐字符输入：慢一点，但用户剪贴板里的东西
+  一个字都不会动。**别把这条改回"照抄多少算多少，完事报个'可能丢了'"** ——
+  那是丢完了才告诉人家
+- **剪贴板路径失败之后不再退到逐字符**：能走到失败那一步说明剪贴板已经被写过
+  或粘贴已经发出，再打一遍就是注入两遍，也会用 `SendRune` 的失败原因把
+  `粘贴未生效：...` 那类具体原因盖成一句泛泛的 `输入中断`（v1.5.6 踩过：
+  终态文案被覆盖，两条既有用例当场变红）。入口那次漂移守卫失败（一个字都没
+  送出去、剪贴板也没碰）由调用方按整条路径处理，所以 `typeTextViaClipboard`
+  不必再回报"碰没碰过" —— 曾经加过一个这样的返回值，加上才发现它两个取值走法
+  完全相同，属于「返回多个同义值等于没返回」，已删
 - **快照只跳过"不是普通内存块"的格式**（`skippableFormat`）：句柄型（CF_BITMAP /
   CF_PALETTE / CF_ENHMETAFILE）、块内含句柄的 CF_METAFILEPICT、所有者绘制与
   私有显示格式、GDI 对象格式族（0x0300-0x03FF）。判据是"照抄下来恢复时会不会
   写回失效句柄或垃圾字节"，而不是"这个格式少见"：后者会把 HTML Format、RTF、
   PNG 这些注册格式一起丢掉；CF_PRIVATEFIRST..LAST 刻意不跳过，它们是内存块。
   新增格式时按判据决定，别退化成"全都照抄"（旧行为）或"只抄白名单"
+- **单实例守卫认两个错误码**（v1.5.6）：`CreateMutexW` 对"名字已被占用"有两种回报 ——
+  有权打开时报 `ERROR_ALREADY_EXISTS` 并返回句柄，无权打开时报 `ERROR_ACCESS_DENIED`
+  并返回 NULL。后者与"根本没建成"共用返回值 0 却语义相反，所以判定抽在
+  `mutexAlreadyHeld` 里、且有单测钉着（`TestMutexAlreadyHeld`），
+  `TestClaimInstanceMutex` 只能用同名第二次调用来验证前一支。
+  漏掉 `ERROR_ACCESS_DENIED` 的实际后果：README 建议需要向提权窗口注入的用户以管理员
+  身份运行，于是"先管理员开的实例、后普通权限的实例"会同时跑起来，而守卫存在的理由
+  正是这两个实例会互相抢剪贴板与键盘焦点
 - **Win32 负常量以 `^uintptr(n)` 表达**（`^` 是按位取反不是取负：`^uintptr(13)` = -14，
   `^uintptr(33)` = -34），看着像笔误但不是，改成十进制负数字面量既编译不过也没必要。
   这地方极易被误读误改，故 `internal/win32/win32_test.go` 里 `TestApplyWindowIconClassIndex`
@@ -299,12 +391,14 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   照此补一条实测用例，别只写"常量等于某值"式的自我复读
 - 产品仅支持 `windows && (amd64 || arm64)`（约束落在 cmd/type 与 internal/win32 上）；
   386 编译被刻意禁止（INPUT 结构体手工填充仅匹配 64 位 ABI）。业务层 internal/typing
-  刻意不带约束，非 Windows 上 `go test ./internal/typing` 能真跑状态机用例；但非 Windows 上
-  `go test ./...` 仍会静默跳过产品包，只剩几个 "no test files"，看着像通过，所以产品侧的
-  本地验证与 CI 都跑在 Windows 上
-- **Node 主版本只写在 `.node-version` 一处**（现为 24）：ci.yml 用 `node-version-file`
-  读它，开发者的 nvm/fnm 也读同一个文件。它决定 vite/rollup 的产出字节，换版本后
-  `internal/web/dist/index.html` 与入库版本对不上，漂移检查会报不一致
+  刻意不带约束，任何系统上都能编译（`go vet` / `go test -c` 都过）；但在非 Windows 上
+  `go test ./...` 会**明确失败**而不是静默通过：`internal/win32` 与 `cmd/type` 因构建约束
+  被整个排除，`internal/typing` 则被编译成宿主平台的目标文件再拿去执行，报
+  `fork/exec ... is not a valid Win32 application` 并 exit 1（2026-09 实测，此前这里
+  写的是"静默跳过"，与事实不符）。所以产品侧的本地验证与 CI 都跑在 Windows 上
+- **Node 主版本只写在 `.node-version` 一处**（现为 24）：`.github/workflows/verify.yml`
+  用 `node-version-file` 读它，开发者的 nvm/fnm 也读同一个文件。它决定 vite/rollup 的
+  产出字节，换版本后 `internal/web/dist/index.html` 与入库版本对不上，漂移检查会报不一致
 - 提交信息：中文一行式主题 + 正文说明要点
 
 ## 提交前：检查文档同步（每次提交必做）

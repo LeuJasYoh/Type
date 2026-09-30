@@ -47,10 +47,10 @@ func TestUtf16Units(t *testing.T) {
 func TestClipboardSnapshotRoundtrip(t *testing.T) {
 	cb := Clipboard{}
 	orig := cb.Snapshot()
-	if orig == nil {
-		t.Skip("剪贴板被占用, 无法保存原始状态")
+	if orig.UnsafeToRestore() {
+		t.Skip("剪贴板被占用或读不全, 无法保存原始状态")
 	}
-	defer cb.RestoreSnapshotRaw(orig)
+	defer cb.RestoreSnapshotRaw(orig.Formats)
 
 	if !cb.SetText("快照测试文本") {
 		t.Fatal("SetText 失败")
@@ -68,13 +68,13 @@ func TestClipboardSnapshotRoundtrip(t *testing.T) {
 	procCloseClipboard.Call()
 
 	snap := cb.Snapshot()
-	if snap == nil {
-		t.Fatal("Snapshot 返回 nil")
+	if snap.UnsafeToRestore() {
+		t.Fatal("快照不可用")
 	}
 	// 注: 系统会为 CF_UNICODETEXT 自动合成 CF_TEXT/CF_OEMTEXT/CF_LOCALE 并一并
 	// 枚举, 故快照格式数 >= 2, 此处只验证两种关键格式均被捕获
 	var sawText, sawReg bool
-	for _, cf := range snap {
+	for _, cf := range snap.Formats {
 		switch cf.Fmt {
 		case CF_UNICODETEXT:
 			sawText = true
@@ -83,14 +83,14 @@ func TestClipboardSnapshotRoundtrip(t *testing.T) {
 		}
 	}
 	if !sawText || !sawReg {
-		t.Fatalf("快照缺少格式: text=%v reg=%v (共 %d 个格式)", sawText, sawReg, len(snap))
+		t.Fatalf("快照缺少格式: text=%v reg=%v (共 %d 个格式)", sawText, sawReg, len(snap.Formats))
 	}
 
 	// 覆盖破坏后恢复
 	if !cb.SetText("覆盖后的内容") {
 		t.Fatal("覆盖剪贴板失败")
 	}
-	cb.RestoreSnapshotRaw(snap)
+	cb.RestoreSnapshotRaw(snap.Formats)
 
 	if got := cb.GetText(); got != "快照测试文本" {
 		t.Errorf("恢复后文本 = %q, want %q", got, "快照测试文本")
@@ -135,10 +135,10 @@ func TestEncodedText(t *testing.T) {
 func TestClipboardHoldsTextNul(t *testing.T) {
 	cb := Clipboard{}
 	orig := cb.Snapshot()
-	if orig == nil {
-		t.Skip("剪贴板被占用, 无法保存原始状态")
+	if orig.UnsafeToRestore() {
+		t.Skip("剪贴板被占用或读不全, 无法保存原始状态")
 	}
-	defer cb.RestoreSnapshotRaw(orig)
+	defer cb.RestoreSnapshotRaw(orig.Formats)
 
 	const text = "A\x00B"
 	if !cb.SetText(text) {
@@ -168,6 +168,35 @@ func TestClaimInstanceMutex(t *testing.T) {
 	}
 	if claimInstanceMutex(name) {
 		t.Error("第二次认领应被拦下, 否则单实例形同虚设")
+	}
+}
+
+// TestMutexAlreadyHeld 认领结果的分类: 哪些返回值算"已有实例占着"。
+//
+// 这条必须单独测, 因为 ERROR_ACCESS_DENIED 那一支在本机造不出来(要两个不同
+// 完整性级别的进程), 而它恰恰是守卫会失效的地方: 该错误码与"根本没建成"
+// 共用返回值 0, 语义却相反。判据是文档写明的 CreateMutexW 语义 ——
+// 名字已存在且有权打开时报 ERROR_ALREADY_EXISTS 并返回句柄; 名字已存在但
+// 无权打开时报 ERROR_ACCESS_DENIED 并返回 NULL
+func TestMutexAlreadyHeld(t *testing.T) {
+	const someHandle = uintptr(0x1234)
+	cases := []struct {
+		name    string
+		h       uintptr
+		callErr error
+		want    bool
+	}{
+		{"有权打开已存在的同名对象", someHandle, syscall.Errno(ERROR_ALREADY_EXISTS), true},
+		{"无权打开已存在的同名对象(提权实例在先)", 0, syscall.Errno(ERROR_ACCESS_DENIED), true},
+		{"新建成功", someHandle, syscall.Errno(0), false},
+		{"创建失败但不是已存在(如命名空间受限)", 0, syscall.Errno(ERROR_ACCESS_DENIED + 1000), false},
+		{"无错误信息但拿到句柄", someHandle, nil, false},
+		{"无错误信息且没有句柄", 0, nil, false},
+	}
+	for _, c := range cases {
+		if got := mutexAlreadyHeld(c.h, c.callErr); got != c.want {
+			t.Errorf("mutexAlreadyHeld(%#x, %v) = %v, want %v (%s)", c.h, c.callErr, got, c.want, c.name)
+		}
 	}
 }
 

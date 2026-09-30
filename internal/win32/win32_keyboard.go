@@ -64,12 +64,7 @@ func (Injector) SendRune(r rune) bool {
 		// 改用 WM_CHAR 直接注入到前台窗口
 		return sendCharUnitsViaWMChar(r)
 	}
-	for _, u := range utf16Units(r) {
-		if !sendChar16(u) {
-			return false
-		}
-	}
-	return true
+	return sendCharUnitsViaInput(r)
 }
 
 // SendText 文本直投: 逐 UTF-16 码元经 WM_CHAR 直达前台焦点窗口 —— 不产生
@@ -141,16 +136,20 @@ func utf16Units(r rune) []uint16 {
 // sendCharUnitsViaWMChar 通过 WM_CHAR 消息向前台焦点窗口注入一个 rune
 // (超出 BMP 时按代理对拆成两条消息)。两条用途共用: 全角标点绕行
 // (KEYEVENTF_UNICODE 系统级 bug)与文本直投 SendText
+//
+// 拿不到焦点子窗口(返回 0)时退化为 SendInput 按键注入, 与"没有前台窗口"
+// 同等对待: 顶层容器窗口会把 WM_CHAR 丢掉, 而 SendMessageTimeout 仍返回成功,
+// 于是"一个字都没进去"被报成注入成功。
+//
+// 已知盲区, 未实测: 全角标点(SendRune 的第一条分支)也走这里, 而 SendInput 对
+// U+FF00-FFEF 恰有那个系统级 bug(症状是标点重复、后续字符被吞)。退化为按键
+// 之后这类字符会怎样, 没有真机验证过 —— `sendChar16` 判的是 SendInput 的入队
+// 计数, 而那个 bug 发生在目标侧渲染, 入队照样成功, 所以很可能静默出错而不是
+// 报失败。要下结论得用 tools/wmcharprobe 在真窗口上逐字比对
 func sendCharUnitsViaWMChar(r rune) bool {
 	hwnd := focusedHWND()
 	if hwnd == 0 {
-		// 兜底：退化为 SendInput (逐码元按键注入)
-		for _, u := range utf16Units(r) {
-			if !sendChar16(u) {
-				return false
-			}
-		}
-		return true
+		return sendCharUnitsViaInput(r)
 	}
 	// WM_CHAR 的 lParam 设 1 表示模拟键盘输入;
 	// 带超时发送, 目标窗口挂起时放弃而不是卡死输入循环
@@ -161,6 +160,16 @@ func sendCharUnitsViaWMChar(r rune) bool {
 			return false
 		}
 		time.Sleep(charUnitGap)
+	}
+	return true
+}
+
+// sendCharUnitsViaInput 退化路径: 逐 UTF-16 码元走按键注入
+func sendCharUnitsViaInput(r rune) bool {
+	for _, u := range utf16Units(r) {
+		if !sendChar16(u) {
+			return false
+		}
 	}
 	return true
 }

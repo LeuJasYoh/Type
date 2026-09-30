@@ -176,22 +176,37 @@ type GUITHREADINFO struct {
 	rcCaret       RECT
 }
 
+// focusedTarget 从 GetGUIThreadInfo 的结果里挑出可安全投递 WM_CHAR 的落点。
+// 拿不到焦点子窗口(hwndFocus 为 0)时返回 0, 不拿容器窗口顶替 —— 顶层窗口
+// (浏览器主窗口那类)会把 WM_CHAR 丢掉, 而 SendMessageTimeout 照样返回成功,
+// 于是"一个字都没进去"被报成注入成功。
+// 单独抽出来是为了能直接测这个判断, 它的另一半(GUI 线程查询本身)要靠真窗口
+func focusedTarget(hwndFocus uintptr) uintptr {
+	if hwndFocus == 0 {
+		return 0
+	}
+	return hwndFocus
+}
+
 // focusedHWND 返回当前实际持有键盘焦点的窗口;
-// 前台顶层窗口通常只是容器(如浏览器主窗口), 直接向其发消息会被丢弃
+// 前台顶层窗口通常只是容器(如浏览器主窗口), 直接向其发消息会被丢弃。
+// 拿不到焦点子窗口时返回 0 —— 这与"没有前台窗口"一样, 都意味着没有可安全
+// 投递 WM_CHAR 的落点, 调用方据此退化为按键注入(见 win32_keyboard.go)
 func focusedHWND() uintptr {
 	hwnd, _, _ := procGetForegroundWindow.Call()
 	if hwnd == 0 {
 		return 0
 	}
 	tid, _, _ := procGetWindowThreadProcessId.Call(hwnd, 0)
-	if tid != 0 {
-		var gti GUITHREADINFO
-		gti.cbSize = uint32(unsafe.Sizeof(gti))
-		if ret, _, _ := procGetGUIThreadInfo.Call(tid, uintptr(unsafe.Pointer(&gti))); ret != 0 && gti.hwndFocus != 0 {
-			return gti.hwndFocus
-		}
+	if tid == 0 {
+		return 0
 	}
-	return hwnd
+	var gti GUITHREADINFO
+	gti.cbSize = uint32(unsafe.Sizeof(gti))
+	if ret, _, _ := procGetGUIThreadInfo.Call(tid, uintptr(unsafe.Pointer(&gti))); ret != 0 {
+		return focusedTarget(gti.hwndFocus)
+	}
+	return 0
 }
 
 // Foreground Foreground 接口的 Win32 实现。

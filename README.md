@@ -76,6 +76,9 @@
 - **目标窗口权限**：受 Windows UIPI 限制，以普通权限运行的 Type 无法向管理员权限的窗口（如管理员 CMD/PowerShell）注入输入，此时 `SendInput` 不产生任何按键。程序检查注入结果并按路径给出具体原因（逐字符路径报"输入中断：目标窗口拒绝了模拟按键…"；剪贴板路径区分"剪贴板操作失败"与"粘贴未生效：目标窗口拒绝了模拟按键…"），不会把静默失败报成"输入完成"。如需面向提权窗口，请以管理员身份运行 Type.exe。
 - **剪贴板特殊格式**：延迟渲染（delayed rendering）及无法按字节复制的格式（CF_BITMAP 等 GDI 句柄型、元文件图形 CF_METAFILEPICT、所有者绘制/私有显示格式、GDI 对象格式族）不进快照，粘贴模式结束时会丢失；常见场景（截图工具、浏览器复制图片、资源管理器复制文件）均在快照恢复范围内。
 - **为什么含中文会自动改用剪贴板**：`SendInput` + `KEYEVENTF_UNICODE` 对全角标点（U+FF00~FFEF）存在系统级处理异常，表现为标点重复、后续字符被吞。程序检测到文本含中文时自动降级为剪贴板 `Ctrl+V`，输入才准确无误。
+- **剪贴板读不全时不再动剪贴板**：中文内容是靠"写进剪贴板再粘贴"送出去的，完事要把你原本复制的东西放回去。为此程序会先把剪贴板整个抄一份；只要有一个格式抄不到（对方程序延迟提供数据、或拒绝提供），这份备份就是残缺的，拿它去恢复会先把剪贴板清空、那个格式就永久没了。所以现在遇到这种情况就绕开剪贴板、改用逐字符方式把文字打进去：慢一些，但你原本复制的内容一个字都不会丢。
+- **剪贴板路径失败后不会再改走逐字符**：已经写过剪贴板或已经发出粘贴之后，失败就到此为止并如实报出原因。再打一遍会把内容输入两遍，也会把"粘贴未生效"这类具体原因盖成一句笼统的提示。
+- **文本直投取不到输入焦点时会退化成按键注入**：文字要发到目标窗口内部的焦点框里，程序会先问系统"焦点框是哪个"，问不到就改用模拟按键（这一步不会把内容发给外层窗口，那样它会被直接丢掉，而系统仍回报成功）。退化之后"不产生按键事件"这个特性就不成立了，补全弹窗劫持与括号自动配对会重新生效；个别不处理文本消息的目标（如部分游戏）不适用，关掉即可。
 - **杀毒软件误报**：键盘模拟（SendInput）与剪贴板操作是杀软启发式扫描的常见敏感组合，若下载或运行时被误报，请添加信任或自行编译。
 - **单实例**：同时只允许运行一个实例（第二个实例会提示并退出），避免两个实例争抢剪贴板与键盘焦点。
 - **焦点仍在 Type 自身时不输入**：倒计时结束时若焦点仍停留在 Type 窗口（未切换到目标窗口），程序会明确报错并放弃输入，不会把内容打进自己的输入框。
@@ -96,7 +99,7 @@
 | GUI | WebView2（Edge Chromium） |
 | 前端 | Vue 3 + TypeScript，Vite 构建为单文件 HTML（无其他运行时依赖） |
 | 构建 | vue-tsc 类型检查 + Vite（vite-plugin-singlefile）+ `go run ./tools/mkres` + `go build` |
-| CI | GitHub Actions（windows-latest）：gofmt / go vet / go test / go build + 前端产物漂移检查 + 版本同步检查；另按 amd64/arm64 矩阵做发布构建，并用 `tools/pecheck` 读回校验图标、版本与 DPI 声明确实已链入产物 |
+| CI | GitHub Actions（windows-latest）：gofmt / go vet / `go test -race` / 依赖漏洞扫描（govulncheck）/ go build + 前端产物漂移检查 + 版本同步检查；另按 amd64/arm64 矩阵做发布构建，并用 `tools/pecheck` 读回校验图标、版本与 DPI 声明确实已链入产物。发版走的是同一套检查（`verify.yml`），不会比平时松 |
 | 发布 | 打 `v<版本>` 标签即由 GitHub Actions 自动发行：校验版本与发布说明一致 → 双架构构建 + 读回校验 → 打包 → 建 Release；说明文字取自入库的 `release-notes/v<版本>.md` |
 | Win32 API | SendInput（KEYEVENTF_UNICODE）+ WM_CHAR 文本直投（SendMessageTimeoutW 直投焦点窗口）+ 剪贴板（CF_UNICODETEXT、EnumClipboardFormats 全格式快照、RtlMoveMemory）+ 前台窗口检测（GetForegroundWindow）+ 单实例互斥体（CreateMutexW） |
 | 图标 | 圆角多尺寸 ICO（uv + Pillow 生成，`scripts/gen_icon.py` 字节级可复现） |
@@ -109,11 +112,13 @@ Type/
 ├── Type.exe                 ← 可执行文件 (构建产物, 输出于根目录, 不入库)
 ├── cmd/type/                ← 装配层: 开窗、绑定与开发开关
 │   ├── main.go              ← webview 装配与 Bind 绑定 (平台能力在此注入)
+│   ├── contract_test.go     ← 跨端契约: 绑定名与签名, 并核对前端 ipc.ts 的镜像
 │   ├── devserver_prod.go    ← 正式构建: 加载嵌入页面, WebView2 调试能力(DevTools/右键菜单)一律关闭
 │   └── devserver_dev.go     ← dev 构建 (`-tags dev`): 指向 Vite dev server, 并打开 DevTools 与右键菜单
 ├── internal/typing/         ← 业务层: 输入状态机 (平台无关, 在任意系统上都能编译并跑测试)
 │   ├── typing.go            ← TypingService 输入状态机 + 平台能力接口 + 时序常量
 │   ├── typing_test.go       ← 状态机单元测试 (fake 注入器/剪贴板/前台窗口, 不触真实系统)
+│   ├── contract_test.go     ← 冻结文案逐字表 + 状态 JSON 的键与 phase 取值
 │   └── helpers_test.go      ← 输入路径判断的纯函数测试 (ASCII 判断 / CJK 标点)
 ├── internal/win32/          ← 平台层: Win32 实现 (windows && 64 位构建约束)
 │   ├── win32.go             ← Win32 清单页: DLL 与 API 入口集中声明
@@ -161,8 +166,9 @@ Type/
 ├── testdata/                ← 手工测试页 (paste-guard.html 防粘贴 / completion-guard.html 补全+配对, 用法见页内注释)
 ├── release-notes/           ← 各版本发布说明 (v<版本>.md, 发布时原样作为 Release 正文)
 ├── .github/workflows/
-│   ├── ci.yml               ← CI: gofmt / vet / test / build + 前端产物漂移检查 + 版本同步检查 + 双架构发布构建与资源读回
-│   └── release.yml          ← 发版: 打 v<版本> 标签触发, 构建/校验/打包/建 Release (也可在 Actions 页面手动触发)
+│   ├── verify.yml           ← 检查项的唯一处 (gofmt / vet / -race 测试 / build + 前端产物漂移检查 + 版本同步), CI 与发版共用
+│   ├── ci.yml               ← CI: 调用 verify.yml, 另按 amd64/arm64 矩阵做发布构建与资源读回
+│   └── release.yml          ← 发版: 打 v<版本> 标签触发, 先跑 verify.yml 再构建/校验/打包/建 Release (也可在 Actions 页面手动触发)
 ├── go.mod / go.sum          ← Go 模块定义
 ├── pyproject.toml / uv.lock / .python-version ← Python 资产管线依赖 (uv 管理, 锁定 Pillow)
 ├── .node-version            ← 前端构建用的 Node 主版本 (CI 与本地同源)
@@ -192,12 +198,13 @@ cd frontend
 npm install                         # 安装前端依赖 (仅首次)
 npm run build                       # vue-tsc 类型检查 + Vite → ../internal/web/dist/index.html
 cd ..
-go run ./tools/mkres -version 1.5.5 -icon assets/icon.ico -out cmd/type/version
+# 下面的 1.5.6 要跟 cmd/type/main.go 里的 version 一致 (版本号只在那里定义)
+go run ./tools/mkres -version 1.5.6 -icon assets/icon.ico -out cmd/type/version
 go build -ldflags="-H windowsgui -s -w" -o Type.exe ./cmd/type
 
 # 读回校验: 图标/版本信息/DPI 声明是否真的链进了产物(.syso 缺失时
 # go build 不会失败, 产物只是悄悄少了这些)
-go run ./tools/pecheck -exe Type.exe -version 1.5.5 -arch amd64
+go run ./tools/pecheck -exe Type.exe -version 1.5.6 -arch amd64
 
 # 交叉编译 ARM64 版 (纯 Go, 不需要额外工具链; 资源上一步已按架构生成)
 $env:GOARCH = "arm64"; go build -ldflags="-H windowsgui -s -w" -o Type-arm64.exe ./cmd/type
@@ -208,7 +215,7 @@ uv run scripts/gen_icon.py
 # 代码校验 (与 CI 同款三件套)
 gofmt -l ./cmd ./internal ./tools   # 应输出为空
 go vet ./...
-go test -count=1 ./...
+go test -count=1 -race ./...        # -race 需要 cgo, 即 MinGW 的 gcc; 发布构建不需要 C 工具链
 ```
 
 ### 前端开发模式 (HMR)

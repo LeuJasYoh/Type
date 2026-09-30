@@ -5,7 +5,7 @@ name: Release
 #
 # 发布前的三道闸门 —— 全在下面按顺序执行，任何一道不过就不产出：
 #   ① 版本一致：标签 == cmd/type/main.go 的 version, 且发布说明与 package.json 同步
-#   ② 测试全绿：go test 在发布包生成之前先跑一遍
+#   ② 检查全绿：verify 作业（与 CI 同一个工作流）先跑完 gofmt/vet/test/前端漂移
 #   ③ 读回校验：tools/pecheck 逐项确认图标/版本/DPI manifest 真的链进了 exe
 #
 # 说明文字来自仓库里的 release-notes/v<版本>.md（与代码同一次提交、可 diff、可回看），
@@ -25,7 +25,14 @@ permissions:
   contents: write
 
 jobs:
+  # 与 CI 跑同一套检查（定义在 verify.yml 里，只有这一处）: 标签未必打在跑过
+  # CI 的提交上, 而"改了 frontend/src 忘了重新生成 internal/web/dist/index.html"
+  # 的提交如果放过去, Release 里的 exe 会嵌着与源码不符的旧界面且无人报错
+  verify:
+    uses: ./.github/workflows/verify.yml
+
   release:
+    needs: verify
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -61,17 +68,15 @@ jobs:
           if (-not (Select-String -Path $notes -Pattern ([regex]::Escape("Type-$ver-windows-")) -Quiet)) {
             throw "$notes 里没有出现 Type-$ver-windows-：说明里的包名与实际产物对不上"
           }
-          if (-not (Select-String -Path frontend/package.json -Pattern ([regex]::Escape($ver)) -Quiet)) {
-            throw "frontend/package.json 未同步到版本 $ver（跑一次 scripts/build.ps1）"
+          # package.json 的字段本身（不是"文本里出现过"）: 子串匹配会漏判
+          $pkg = Get-Content -Raw frontend/package.json | ConvertFrom-Json
+          if ($pkg.version -ne $ver) {
+            throw "frontend/package.json 的 version = '$($pkg.version)'，与 main.go 的 $ver 不一致（跑一次 scripts/build.ps1）"
           }
 
           Add-Content -Path $env:GITHUB_ENV -Value "version=$ver"
           Add-Content -Path $env:GITHUB_ENV -Value "tag=$tag"
           Write-Host "准备发布 $tag (版本 $ver)"
-
-      # 发布包不该来自测试不过的代码：打标签的提交未必走过 main 的 CI
-      - name: go test
-        run: go test -count=1 ./...
 
       # 资源两架构一并生成（.syso 不入库）；本步不能带 GOARCH
       - name: 生成资源 (mkres)

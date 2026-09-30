@@ -7,6 +7,7 @@ package typing
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -31,8 +32,23 @@ type ClipboardFormat struct {
 	Data []byte
 }
 
-// Clipboard 剪贴板能力; Snapshot 返回 nil 表示剪贴板打开失败
-// (原状态未知, 调用方应放弃恢复), 空切片表示剪贴板原本为空
+// ClipboardSnapshot 一次剪贴板快照。Formats 为 nil 表示剪贴板打开失败或
+// 根本没读到任何格式(原状态未知, 无从恢复); 空切片表示剪贴板原本为空。
+//
+// Complete 是这次快照能不能拿来恢复的唯一判据。恢复流程会先清空剪贴板,
+// 所以拿一份残缺的快照去恢复, 等于把没能照抄下来的那些格式永久销毁
+type ClipboardSnapshot struct {
+	Formats  []ClipboardFormat
+	Complete bool
+}
+
+// UnsafeToRestore 这份快照是否不能拿去覆盖剪贴板。
+// 空剪贴板(nil 切片但 Complete)可以恢复, 那是"恢复成空"而不是"没恢复"
+func (s ClipboardSnapshot) UnsafeToRestore() bool {
+	return !s.Complete
+}
+
+// Clipboard 剪贴板能力
 type Clipboard interface {
 	SetText(text string) bool
 	GetText() string
@@ -40,7 +56,9 @@ type Clipboard interface {
 	// 字符串比较: CF_UNICODETEXT 内嵌 NUL 时字符串会在 NUL 处被截断,
 	// 守卫会误判为"用户已改动"而跳过恢复
 	HoldsText(text string) bool
-	Snapshot() []ClipboardFormat
+	// Snapshot 取剪贴板全部格式。读不全时必须如实把 Complete 报成 false:
+	// 调用方据此放弃剪贴板这条路, 免得销毁用户原本复制的内容(见 ClipboardSnapshot)
+	Snapshot() ClipboardSnapshot
 	// RestoreSnapshotRaw 无条件写回快照(调用方需确认剪贴板未被用户改动),
 	// 返回是否真的恢复成功: 失败意味着用户原本的内容可能已丢失, 调用方
 	// 必须说出来而不是静默略过
@@ -117,6 +135,33 @@ func msgTargetSwitchedTyped(n int) string {
 	return fmt.Sprintf("输入中断：目标窗口已切换，已输入 %d 字", n)
 }
 
+// ─── 用户可见文案(冻结清单的其余部分) ─────────────────
+// 逐字固定, 改动会直接落到用户眼前; contract_test.go 里有一张字面量表钉着
+// 它们。允许新增, 但新增也要登记进 AGENTS.md 的清单
+const (
+	// 倒计时: 逐拍刷新秒数, 也是用户盯得最久的一句
+	msgCountdownFormat = "剩余 %d 秒 — 请聚焦目标窗口..."
+	// 逐字符进度: 分母是实际注入次数(已剔除 \r)
+	msgProgressFormat = "正在逐字符输入 %d / %d ..."
+	// 剪贴板路径的开工提示
+	msgClipboardStart = "检测到中文，正在操作剪贴板..."
+	// 终态
+	msgDone              = "输入完成"
+	msgNothingToType     = "无内容可输入"
+	msgCancelled         = "已取消"
+	msgGenericFailure    = "输入失败"
+	msgAlreadyRunning    = "已有输入任务在运行中，请先取消或等待完成"
+	msgPreviousTaskStuck = "启动失败：上一任务未能及时退出"
+	// 焦点仍在 Type 自身: 与"漂移"不同, 这是一开始就没切过去
+	msgFocusStayedOnSelf = "未切换到目标窗口：倒计时结束时焦点仍在 Type，请重新启动后聚焦目标窗口"
+)
+
+// countdownMessage 倒计时文案
+func countdownMessage(sec int) string { return fmt.Sprintf(msgCountdownFormat, sec) }
+
+// progressMessage 逐字符进度文案
+func progressMessage(done, total int) string { return fmt.Sprintf(msgProgressFormat, done, total) }
+
 // ─── 输入任务时序(调参集中处) ─────────────────────────
 // 状态机里所有等待与节拍只有这一处定义, 各处按名字取用。改动前先想清楚
 // 对取消响应与字符间隔的影响(见 AGENTS.md「焦点锁定与漂移防护」)。
@@ -132,11 +177,9 @@ const (
 	// lockSettleWait 倒计时结束到采样并锁定目标之间的稳定等待
 	lockSettleWait = 150 * time.Millisecond
 
-	// yieldDeadline 取消收尾衔接: 等待上一任务让出运行标志的上限,
+	// yieldDeadline 等上一任务让位的上限,
 	// 超过则报"启动失败：上一任务未能及时退出"
 	yieldDeadline = 2 * time.Second
-	// yieldPollInterval 衔接轮询间隔
-	yieldPollInterval = 25 * time.Millisecond
 
 	// progressEvery 逐字符路径每注入这么多个字刷新一次进度(末字必刷)
 	progressEvery = 8
@@ -158,6 +201,11 @@ const (
 
 // ─── TypingService ────────────────────────────────────
 
+// taskSlot 一次任务的收尾信号: 它的 done 关闭即表示该任务已停手。
+// 为什么不用运行标志来等上一任务: 标志是"任务槽被占", 新任务一进来就把它
+// 占掉了, 再拿它判断等于在等自己, 于是新任务必然误判超时(v1.5.6 踩过)
+type taskSlot struct{ done chan struct{} }
+
 // TypingService 持有输入任务生命周期的全部可变状态
 // (取消/运行互斥/任务代数/状态播报), 通过接口使用平台能力
 type TypingService struct {
@@ -165,13 +213,19 @@ type TypingService struct {
 	clipboard  Clipboard
 	foreground Foreground
 
-	cancelFlag   atomic.Bool
-	runningFlag  atomic.Bool   // 运行中互斥, 防止重复启动
-	taskGen      atomic.Uint64 // 任务代数: start/cancel 每次递增, 过代任务的状态写入一律作废
-	typingStatus atomic.Value  // 存 *TypingStatus
+	// mu 串行化任务槽的"判定 — 占领"与状态播报。任务槽、代数、状态三者必须
+	// 一起改: 光靠一个原子标志挡不住几乎同时到达的两次启动(v1.5.6 的缺陷)
+	mu         sync.Mutex
+	prevTask   *taskSlot // 在途任务; nil 表示空闲。它是"有没有任务在跑"的唯一权威
+	cancelFlag atomic.Bool
+
+	// taskGen 任务代数: 每次 start/cancel 都递增, 过代任务的状态写入作废
+	taskGen atomic.Uint64
+
+	typingStatus atomic.Value // 存 *TypingStatus
 
 	// 倒计时/逐字符/粘贴的等待, 测试可注入假时钟;
-	// 取消衔接的轮询与 deadline 刻意保持真实时钟(数值见上方常量区)
+	// 等上一任务让位走的是它自己的 taskSlot.done, 刻意保持真实时钟
 	sleep func(time.Duration)
 }
 
@@ -191,80 +245,150 @@ func (s *TypingService) Status() *TypingStatus {
 	return s.typingStatus.Load().(*TypingStatus)
 }
 
+// storeStatus 播报状态, 但只认自己那一代: 任务被更新一代的 start/cancel
+// 取代以后, 迟到的写入一律作废, 免得旧任务收尾时把新任务的状态盖回去
+func (s *TypingService) storeStatus(gen uint64, st *TypingStatus) {
+	if gen == s.taskGen.Load() {
+		s.typingStatus.Store(st)
+	}
+}
+
 // Start 启动一次输入任务(倒计时 + 注入)。
 // forceSendInput 绕过剪贴板降级强制逐字符; textDirect 为文本直投:
 // 字符经 WM_CHAR 文本层注入(无按键事件), 目标编辑器挂在 keydown 层的
 // 补全弹窗劫持与括号自动配对均无从触发; 回车/Tab 无法走文本层,
 // 自动先发 Esc 关闭补全弹窗再按键
+//
+// 判定与占领在同一个临界区里完成, 返回 nil 就意味着本任务已经拿到任务槽:
+// "启动成功"与"确实占住"必须是同一个事实。此前是先把运行标志读一遍就算通过,
+// 再由新开的 goroutine 自己去认领, 于是两次几乎同时到达的启动都能通过那次读、
+// 各跑各的, 同一段文本被注入两遍(实测 300 轮里 246 轮命中, v1.5.6 修复)。
+// 等待上一任务让位仍是异步的: 它最长要 yieldDeadline, 放在这里会把窗口冻住,
+// 而用户此刻点得动取消按钮, 取消必须马上有反应
 func (s *TypingService) Start(text string, delay int, forceSendInput bool, textDirect bool) (string, error) {
-	// 上一任务活跃且并非取消收尾: 拒绝重入
-	if s.runningFlag.Load() && !s.cancelFlag.Load() {
-		return "", fmt.Errorf("已有输入任务在运行中，请先取消或等待完成")
-	}
-	// 同步写入倒计时初态: 前端 await 本调用后才开启轮询,
-	// 保证首个 tick 必读到新状态; 过代旧任务被代数守卫拦截, 无法覆盖。
-	// baseline 随任务带走, 作为倒计时的初始显示状态 —— 与写入的状态同源,
-	// 倒计时循环据此判断"可见内容是否变化", 首拍不会重复写入
-	gen := s.taskGen.Add(1)
+	// 采样要在锁外做: 它是 Win32 调用, 目标进程无响应时回不来, 抓着锁做
+	// 会把用户的取消一起冻住。代价是"判定时的预览"与"锁定后的目标"之间
+	// 存在一次采样的间隔, 而这个间隔本来就存在(倒计时结束还要再采样一次)
+	//
+	// 采样前先读一眼取消标志: 它是"这一次取消是不是冲我来的"的判据之一。
+	// 采样前后两次读的差别正好区分两种情况 ——
+	//   采样前就是 true: 那是分配给上一任务的取消(它正靠这个标志退出),
+	//                    本次启动是"取消后立即重启", 不该被它拦下;
+	//   采样前 false、采样后 true: 用户是在这次采样的间隙里点的取消,
+	//                    目标就是本次启动, 必须认(v1.5.6 复核发现的缺口)
+	preCancel := s.cancelFlag.Load()
 	baseline := s.foreground.Sample()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 在途任务与取消标志都要在这里一次取全: 出了临界区再看, 看到的可能已经
+	// 是另一个任务的现场
+	prev := s.prevTask
+	if prev != nil && !s.cancelFlag.Load() {
+		// 有人在跑、又没人在取消: 这是重入, 当场拒绝
+		return "", fmt.Errorf(msgAlreadyRunning)
+	}
+	// 标志一律不在这里清: 采样窗口里到达的取消还要靠它被任务认出来(清了就
+	// 抹掉了), 上一任务退出的加速也靠它。等本任务开工时自己清(见 runTypingTask)
+	cancelHonored := !preCancel && s.cancelFlag.Load()
+
+	gen := s.taskGen.Add(1)
 	s.typingStatus.Store(&TypingStatus{
 		Phase:        PhaseCountdown,
-		Message:      fmt.Sprintf("剩余 %d 秒 — 请聚焦目标窗口...", delay),
+		Message:      countdownMessage(delay),
 		SecondsLeft:  delay,
 		Progress:     -1,
 		TargetWindow: baseline.Title,
 	})
-	go s.runTypingTask(gen, text, delay, forceSendInput, textDirect, baseline)
+	// 本任务的收尾信号: 挂到 prevTask 上, 下一个任务据此等本任务停手
+	slot := &taskSlot{done: make(chan struct{})}
+	s.prevTask = slot
+	go s.runTypingTask(gen, cancelHonored, text, delay, forceSendInput, textDirect, baseline, slot, prev)
 	return "started", nil
 }
 
-// Cancel 取消在途任务(不等待其退出)
+// waitPreviousTask 等上一任务停手, 返回是否等到。
+// 等的是它自己的收尾信号, 而不是某个共享标志: 共享标志早被本任务改过了,
+// 拿它当判据等于在等自己。上界是 yieldDeadline
+func (s *TypingService) waitPreviousTask(prev *taskSlot) bool {
+	select {
+	case <-prev.done:
+		return true
+	case <-time.After(yieldDeadline):
+		return false
+	}
+}
+
+// Cancel 取消在途任务(不等待其退出)。
+// 先置取消标志再取 mu: 标志是让任务尽快退出的手段, 若先等锁, 恰好赶上
+// Start 在临界区里时反而延长了旧任务的退出时间
 func (s *TypingService) Cancel() (string, error) {
-	// 递增代数使在途任务的所有后续状态写入作废, 取消标志则加速其退出;
-	// 此处不做等待 —— 旧实现阻塞 UI 线程最长 2 秒导致窗口冻结,
-	// "取消后立即启动"的衔接由 runTypingTask 自行等待旧任务让出 runningFlag
-	s.taskGen.Add(1)
 	s.cancelFlag.Store(true)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// 递增代数让在途任务的后续状态写入作废, 并立刻播报"已取消";
+	// 此处不等任务退出 —— 旧实现等最长 2 秒, 窗口会冻住
+	s.taskGen.Add(1)
 	s.typingStatus.Store(&TypingStatus{
-		Phase: PhaseCancel, Message: "已取消", Progress: -1,
+		Phase: PhaseCancel, Message: msgCancelled, Progress: -1,
 	})
 	return "cancelled", nil
 }
 
 // runTypingTask 执行一次完整的输入任务(倒计时 + 注入)。
-// 倒计时初态已由 Start 同步写入(baseline 即其采样), 此处从衔接/认领
-// runningFlag 开始。
-func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceSendInput bool, textDirect bool, baseline ForegroundSample) {
-	// gen 守卫的状态写入: 任务被更新一代的操作取代后, 静默停止输出
-	setStatus := func(st *TypingStatus) {
-		if gen == s.taskGen.Load() {
-			s.typingStatus.Store(st)
+// 任务槽已由 Start 在临界区内占好, 倒计时初态也已写好; slot 是本任务的
+// 收尾信号, prev 是占领时仍在收尾的上一任务(没有则为 nil)
+func (s *TypingService) runTypingTask(gen uint64, cancelHonored bool, text string, delay int, forceSendInput bool, textDirect bool, baseline ForegroundSample, slot *taskSlot, prev *taskSlot) {
+	// 收尾时先放信号再腾空任务槽: 下一个任务等的是信号, 而空闲判定看的是槽
+	defer func() {
+		close(slot.done)
+		s.mu.Lock()
+		if s.prevTask == slot {
+			s.prevTask = nil
 		}
+		s.mu.Unlock()
+	}()
+
+	// 等待点的取消判据:
+	//   ① 自己出生之后来的取消 —— 取消计数涨过了基线。这条是判据的主力:
+	//      取消标志会被下一次 Start 清掉, 而计数只增不减, 藏在采样窗口里的
+	//      那次取消也只有它认得出来;
+	//   ② 本任务已被更新一代的操作取代(任务代数变了);
+	//   ③ 取消标志本身, 它让循环尽快察觉, 但单独看它不可靠(见 ①)
+	cancelled := func() bool {
+		return gen != s.taskGen.Load() || s.cancelFlag.Load()
 	}
 
-	// 取消收尾衔接: 等待上一任务释放 runningFlag (取消标志会加速其退出,
-	// 上限 yieldDeadline)
-	for deadline := time.Now().Add(yieldDeadline); s.runningFlag.Load(); {
-		if gen != s.taskGen.Load() {
-			return // 已被新操作接管, 本次启动作废
-		}
-		if !time.Now().Before(deadline) {
-			setStatus(&TypingStatus{Phase: PhaseError, Message: "启动失败：上一任务未能及时退出", Progress: -1})
-			return
-		}
-		time.Sleep(yieldPollInterval)
-	}
-	if !s.runningFlag.CompareAndSwap(false, true) {
+	// 上一任务还在收尾时先等它停手, 免得两路注入交叠。等不到就让界面如实
+	// 显示"没能启动": 此刻状态是 Start 写下的倒计时, 而倒计时不是终态,
+	// 前端会一直轮询下去。
+	// 这里必须用本任务的代数(gen)去写, 不能拿 s.taskGen.Load() 当守卫 ——
+	// 那是拿自己和自己比, 恒真, 迟到的旧任务会把终态盖到在途的新任务上
+	// (v1.5.6 复核发现)
+	if prev != nil && !s.waitPreviousTask(prev) {
+		s.storeStatus(gen, &TypingStatus{
+			Phase: PhaseError, Message: msgPreviousTaskStuck, Progress: -1,
+		})
 		return
 	}
-	defer s.runningFlag.Store(false)
-	if gen != s.taskGen.Load() {
-		return // 等待期间发生了新的取消/启动, 本次启动作废
-	}
-	// 认领成功后才清取消标志: 过早清除会让尚未退出的上一任务漏检取消而继续注入
+	// 上一任务已经停手, 现在才轮到自己当"当前任务": 清掉那个用来催它退出的
+	// 取消标志。Start 里刻意没清(那时清会让第二次启动被误判成重入),
+	// 这里清才安全 —— 此刻再来的取消就是冲着我来的
 	s.cancelFlag.Store(false)
 
-	cancelled := s.cancelFlag.Load
+	// 出生之前那次取消已经把本次启动作废了: 这里必须自己把终态说出来。
+	// 不说的话状态就停在 Start 写下的倒计时上 —— 倒计时不是终态, 前端会一直
+	// 轮询下去, 用户看到的是永远不动的"剩余 N 秒"(v1.5.6 复核发现的缺口)。
+	// 用 gen 当守卫: 已被更新一代接管时不能插嘴, 状态归新任务写。
+	// 这一判必须放在上面"清标志"之后: 在那之前看到的标志还是上一轮留下的
+	if cancelHonored {
+		if gen == s.taskGen.Load() {
+			s.typingStatus.Store(&TypingStatus{Phase: PhaseCancel, Message: msgCancelled, Progress: -1})
+		}
+		return
+	}
 
 	// ── 倒计时 ──
 	// 目标预览 = 当前前台窗口, countdownTick 节拍采样, 但只在可见内容变化时才写
@@ -283,9 +407,9 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 		sample := s.foreground.Sample()
 		if sec != shownSec || sample != shown {
 			shownSec, shown = sec, sample
-			setStatus(&TypingStatus{
+			s.storeStatus(gen, &TypingStatus{
 				Phase:        PhaseCountdown,
-				Message:      fmt.Sprintf("剩余 %d 秒 — 请聚焦目标窗口...", sec),
+				Message:      countdownMessage(sec),
 				SecondsLeft:  sec,
 				Progress:     -1,
 				TargetWindow: sample.Title,
@@ -304,9 +428,9 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 	// 焦点仍在 Type 自身时注入会落进自己的输入框 —— 明确报错, 不静默打错地方
 	locked := s.foreground.Sample()
 	if locked.Self {
-		setStatus(&TypingStatus{
+		s.storeStatus(gen, &TypingStatus{
 			Phase:    PhaseError,
-			Message:  "未切换到目标窗口：倒计时结束时焦点仍在 Type，请重新启动后聚焦目标窗口",
+			Message:  msgFocusStayedOnSelf,
 			Progress: -1,
 		})
 		return
@@ -324,27 +448,56 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 	// 恢复失败时终态必须如实说明: 报完"输入完成"就把用户原本复制的东西
 	// 当成还在, 是最容易让人吃亏的那种隐瞒
 	clipboardOK := true
-	if containsNonASCII(text) && !forceSendInput {
-		setStatus(&TypingStatus{
-			Phase: PhaseTyping, Message: "检测到中文，正在操作剪贴板...", Progress: -1,
+	// 先试剪贴板路径: 含非 ASCII 且没有被强制逐字符时, 粘贴是最省事也最可靠的办法。
+	// 快照拿不全时(拿不全就恢复不回去)与剪贴板不可用时都退到逐字符, 而不是
+	// 硬走粘贴把用户原本复制的内容销毁掉
+	useClipboard := containsNonASCII(text) && !forceSendInput
+	// pasteSnap 剪贴板确实被本任务动过(终态要认这个事实);
+	// clipboardGaveUp 剪贴板这条路已经失败且不该重试, 逐字符通道必须让位,
+	// 否则它会用 SendRune 的失败原因把剪贴板那边的具体原因盖掉
+	pasteSnap, clipboardGaveUp := false, false
+	if useClipboard {
+		s.storeStatus(gen, &TypingStatus{
+			Phase: PhaseTyping, Message: msgClipboardStart, Progress: -1,
 			TargetWindow: target,
 		})
-		// 失败原因由被调方给出: 剪贴板故障、目标窗口拒收 Ctrl+V、目标窗口
-		// 切换三者的处置不同, 不能都退化成通用的"输入失败"
-		success, failMsg, clipboardOK = s.typeTextViaClipboard(text, locked.ID)
-		injected = success // 粘贴按键被接受即内容已送达
-		if !success && !cancelled() {
-			setStatus(&TypingStatus{
-				Phase: PhaseTyping, Message: failMsg, Progress: -1,
-				TargetWindow: target,
-			})
+		snap := s.clipboard.Snapshot()
+		if snap.UnsafeToRestore() {
+			// 剪贴板打开失败(原状态未知), 或有的格式没能照抄下来。这份快照
+			// 一写回去就会把没抄到的那些格式永久销毁, 所以干脆不碰剪贴板
+			useClipboard = false
+		} else {
+			// 失败原因由被调方给出: 剪贴板故障、目标窗口拒收 Ctrl+V、目标窗口
+			// 切换三者的处置不同, 不能都退化成通用的"输入失败"。
+			// 这里必须写在外层 failMsg 上(不是新声明一个): 终态要用它
+			success, failMsg, clipboardOK = s.typeTextViaClipboard(text, locked.ID, cancelled, snap.Formats)
+			injected = success // 粘贴按键被接受即内容已送达
+			if success {
+				pasteSnap = true // 剪贴板确实被本任务动过了, 终态要认这个事实
+			} else {
+				if cancelled() {
+					return // Cancel 已写入取消状态
+				}
+				if failMsg != "" {
+					s.storeStatus(gen, &TypingStatus{
+						Phase: PhaseTyping, Message: failMsg, Progress: -1,
+						TargetWindow: target,
+					})
+				}
+				// 到了这里一律不再退到逐字符: 能走到这一步说明剪贴板已经被
+				// 写过或粘贴已经发出(入口那次漂移守卫失败会在下个分支处理),
+				// 再打一遍就是把内容注入两遍, 也会把上面那个具体原因盖成
+				// 一句泛泛的"输入中断"
+				clipboardGaveUp = true
+			}
 		}
-	} else {
+	}
+	if !useClipboard && !clipboardGaveUp {
 		// 剔除 \r 使进度分母与实际注入次数一致 (\r\n 由 \n 触发回车)
 		runes := []rune(strings.ReplaceAll(text, "\r", ""))
 		total := len(runes)
-		setStatus(&TypingStatus{
-			Phase: PhaseTyping, Message: fmt.Sprintf("正在逐字符输入 0 / %d ...", total), Progress: 0,
+		s.storeStatus(gen, &TypingStatus{
+			Phase: PhaseTyping, Message: progressMessage(0, total), Progress: 0,
 			TargetWindow: target,
 		})
 
@@ -386,9 +539,9 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 			typed++
 
 			if typed%progressEvery == 0 || typed == total {
-				setStatus(&TypingStatus{
+				s.storeStatus(gen, &TypingStatus{
 					Phase:        PhaseTyping,
-					Message:      fmt.Sprintf("正在逐字符输入 %d / %d ...", typed, total),
+					Message:      progressMessage(typed, total),
 					Progress:     typed * 100 / total,
 					TargetWindow: target,
 				})
@@ -412,7 +565,7 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 			failMsg = msgTargetSwitchedTyped(typed)
 			success = false
 		} else if !ok {
-			setStatus(&TypingStatus{Phase: PhaseTyping, Message: msgPartialSendInput, Progress: -1, TargetWindow: target})
+			s.storeStatus(gen, &TypingStatus{Phase: PhaseTyping, Message: msgPartialSendInput, Progress: -1, TargetWindow: target})
 			failMsg = msgPartialSendInput
 			success = false
 		} else {
@@ -424,21 +577,21 @@ func (s *TypingService) runTypingTask(gen uint64, text string, delay int, forceS
 	switch {
 	case cancelled():
 		// Cancel 已写入取消状态
-	case success && injected && !clipboardOK:
+	case success && injected && pasteSnap && !clipboardOK:
 		// 内容已送达, 但剪贴板没能换回原内容: 如实说明, 不报"输入完成"
-		setStatus(&TypingStatus{Phase: PhaseSuccess, Message: msgClipboardNotRestored, Progress: -1, TargetWindow: target})
+		s.storeStatus(gen, &TypingStatus{Phase: PhaseSuccess, Message: msgClipboardNotRestored, Progress: -1, TargetWindow: target})
 	case success && injected:
-		setStatus(&TypingStatus{Phase: PhaseSuccess, Message: "输入完成", Progress: -1, TargetWindow: target})
+		s.storeStatus(gen, &TypingStatus{Phase: PhaseSuccess, Message: msgDone, Progress: -1, TargetWindow: target})
 	case success:
 		// 文本为空(或整段被剔除): 无可注入内容, 不算失败, 但也不能报"输入完成"
-		setStatus(&TypingStatus{Phase: PhaseSuccess, Message: "无内容可输入", Progress: -1, TargetWindow: target})
+		s.storeStatus(gen, &TypingStatus{Phase: PhaseSuccess, Message: msgNothingToType, Progress: -1, TargetWindow: target})
 	default:
 		// 保留注入器给出的具体原因(如权限不足), 而不是笼统的"输入失败"
 		msg := failMsg
 		if msg == "" {
-			msg = "输入失败"
+			msg = msgGenericFailure
 		}
-		setStatus(&TypingStatus{Phase: PhaseError, Message: msg, Progress: -1, TargetWindow: target})
+		s.storeStatus(gen, &TypingStatus{Phase: PhaseError, Message: msg, Progress: -1, TargetWindow: target})
 	}
 }
 
@@ -455,33 +608,43 @@ func (s *TypingService) sendEscaped(key func() bool) bool {
 }
 
 // typeTextViaClipboard 执行剪贴板粘贴输入（两种模式共用）。
-// 粘贴前快照全部剪贴板格式, 结束后原样恢复, 不销毁用户已有的
-// 图片/文件等非文本内容。
+// 快照由调用方给(snap), 结束后原样恢复, 不销毁用户已有的图片/文件等非文本
+// 内容; 调用方已确认这份快照完整, 否则不会走到这里。
 // 返回值: success 粘贴按键是否被系统接受(即内容是否送达);
 // failMsg 失败时用户可见的具体原因 —— 剪贴板故障、目标窗口拒收 Ctrl+V、
 // 目标窗口切换三者必须分开报; 成功或中途取消时为空(取消的状态由 Cancel
 // 负责写入);
 // clipboardOK 剪贴板是否仍保有注入前的内容(未被本次注入弄丢), 仅在 success
 // 为真时被终态采信: 注入成功而恢复失败要如实说明, 见 msgClipboardNotRestored
-func (s *TypingService) typeTextViaClipboard(text string, locked TargetID) (success bool, failMsg string, clipboardOK bool) {
+//
+// cancelled 由调用方给出: 它同时认用户取消、本任务是否已被取代, 以及开工时
+// 是否就已经被取消过; 本函数每个发送点都要问它一次, 免得一条已经过期的任务
+// 把内容送进目标窗口。调用方只在"剪贴板确实被写过"之后才需要区分失败要不要
+// 换条路重试 —— 而入口这次漂移守卫失败(没碰过剪贴板)由调用方按整条路径处理,
+// 所以本函数不必再回报"碰没碰过"
+func (s *TypingService) typeTextViaClipboard(text string, locked TargetID, cancelled func() bool, snap []ClipboardFormat) (success bool, failMsg string, clipboardOK bool) {
 	// 粘贴前的漂移守卫: 目标已切走就一个字都不送, 也不碰剪贴板
 	if !s.targetHeld(locked) {
 		return false, msgTargetSwitchedIdle, true // 没碰过剪贴板, 原内容还在
 	}
-	snap := s.clipboard.Snapshot()
 	if !s.clipboard.SetText(text) {
 		// EmptyClipboard 可能已执行(分配阶段失败), 直接写回快照
 		return false, msgClipboardFailed, s.clipboard.RestoreSnapshotRaw(snap)
 	}
 	s.sleep(clipboardSettleWait)
 
-	if s.cancelFlag.Load() {
+	if cancelled() {
 		return false, "", s.restoreClipboardSnapshot(snap, text)
 	}
 	// 写入剪贴板与粘贴之间还隔着 clipboardSettleWait 稳定等待, 期间目标可能被切走;
 	// 此刻放弃粘贴, 但剪贴板已经写过, 快照恢复照旧执行
 	if !s.targetHeld(locked) {
 		return false, msgTargetSwitchedIdle, s.restoreClipboardSnapshot(snap, text)
+	}
+	// 发送前最后确认一次: 上面那次检查之后还隔着一次采样, 用户在这中间点取消,
+	// 或者重启把本任务顶掉, 都不该再把内容送出去
+	if cancelled() {
+		return false, "", s.restoreClipboardSnapshot(snap, text)
 	}
 	pasted := s.injector.SendPaste()
 	// 紧随其后的复检: SendPaste 返回后再漂移, 说明这次粘贴的落点已不是
