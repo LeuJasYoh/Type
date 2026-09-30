@@ -350,12 +350,25 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
 - 注入失败必须可见：`TextInjector` 五个方法都返回 bool（SendInput 被 UIPI 拦截时
   整体返回 0；WM_CHAR 直投的 SendMessageTimeout 超时/失败返回 0）。不要把返回值
   改成 void，那正是"静默失败被报成输入完成"的来源
-- **启动路径有两道闸门**（internal/win32 的 win32_webview2.go）：创建 WebView2 之前先用依赖自带的
-  `webviewloader.GetInstalledVersion()` 预检（微软对这类设备的官方建议就是"先检测、
-  再引导用户去官网安装"），创建之后仍要判 `New` 的返回值：预检通过不等于创建成功
-  （运行时可能损坏或被策略拦下）。**nil 判空必须在 `defer w.Destroy()` 之前** ——
-  `New` 同步失败时返回的是 nil 接口，而 defer 语句求值 receiver 的那一刻就 panic，
-  栈顶落在那条 defer 上而不是后面的 SetTitle，看着像是别处的问题
+- **启动路径有三道闸门**（internal/win32 的 win32_webview2.go 与 cmd/type/main.go 的 createWebView2）：
+  ① 创建 WebView2 之前先用依赖自带的 `webviewloader.GetInstalledVersion()` 预检（微软对这类设备的
+  官方建议就是"先检测、再引导用户去官网安装"），缺运行时给 `MsgWebView2Missing`；
+  ② 创建之后仍要判 `New` 的返回值：预检通过不等于创建成功（运行时可能损坏或被策略拦下）。
+  **nil 判空必须在 `defer w.Destroy()` 之前** —— `New` 同步失败时返回的是 nil 接口，
+  而 defer 语句求值 receiver 的那一刻就 panic，栈顶落在那条 defer 上而不是后面的 SetTitle，
+  看着像是别处的问题；
+  ③ 控制器其实是在回调里**异步**创建的，失败时不走 `New` 的返回值：go-webview2 用
+  `int64(res) < 0` 判 HRESULT，而错误码是负的 32 位值、零扩展进 uintptr 之后 `int64()`
+  反而是正数，这个判断永不成立，它接着对 nil 控制器解引用，panic 从 `NewWithOptions`
+  里冒出来（帧都在库内，但整条链在 main 的 goroutine 上）。`createWebView2` 用 recover
+  把它折算成 nil，与 ①② 落到同一句 `Type 无法启动` 上。**别把 recover 当多余兜底删掉**：
+  GUI 子系统没有控制台，不接住的话症状就是"双击之后窗口一闪就没了"，正是这条路径要消灭的
+- **宿主进程完整性级别偏低时 WebView2 拒绝创建控制器**（2026-09 实测，走的就是上面第 ③ 条）：
+  把 exe 所在目录打上 Low 完整性标签（`icacls <目录> /setintegritylevel Low`，某些沙箱类
+  工具会对工作区这么做），同一份 exe 从该目录启动必崩、拷到别处就正常，实测此时进程的
+  完整性级别确为 Low。排查手法：`icacls <目录>` 看有没有
+  `Mandatory Label\Low Mandatory Level`；想复现就在别处给一份 exe 加同一个标签。
+  本地调试碰到"从仓库目录跑就崩、拷出去就好"，先看这条，别去怀疑代码或运行时版本
 - **复现"机器上没有 WebView2"的启动路径**（改动启动代码前后都该跑一遍，真机不用动）：
   把环境变量 `WEBVIEW2_BROWSER_EXECUTABLE_FOLDER` 指向一个不存在的目录再启动。
   期望：弹出 `Type 无法启动` 提示框，进程停在框上，stderr 为空。修这个之前这里是

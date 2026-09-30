@@ -36,9 +36,10 @@ func main() {
 
 	// Debug 直接决定库的两项设置: 默认右键菜单与 DevTools 是否可用。
 	// 正式构建必须两者皆关 —— 发布版留 DevTools 没有意义, 而右键菜单里的
-	// "重新加载"会让前端复位、与仍在跑的后端任务脱钩
-	w := webview2.NewWithOptions(webview2.WebViewOptions{Debug: devMode()})
-	// 判空必须在 defer 之前: New 同步失败时返回的是 nil 接口, 而 defer 语句
+	// "重新加载"会让前端复位、与仍在跑的后端任务脱钩。
+	// 建窗失败有两条来路(同步返回 nil 与库内部 panic), 都收在 createWebView2 里
+	w := createWebView2()
+	// 判空必须在 defer 之前: 失败时 New 返回的是 nil 接口, 而 defer 语句
 	// 求值 receiver 的那一刻就会 panic(已实测: 栈顶正落在那条 defer 上)
 	if w == nil {
 		win32.PromptWebView2Unusable(win32.MsgWebView2InitFailed) // 提示后退出, 不返回
@@ -85,4 +86,25 @@ func main() {
 	}
 
 	w.Run()
+}
+
+// createWebView2 建 WebView2; 建不出来时返回 nil, 由调用方给出"界面起不来"的提示。
+//
+// 除了 New 同步返回 nil 这条明路, 还有一条暗路: 控制器是在
+// CreateCoreWebView2Controller 的回调里异步创建的, 失败时 go-webview2 先用
+// int64(res) < 0 判 HRESULT —— 而 HRESULT 错误码是负的 32 位值, 零扩展进 uintptr
+// 之后 int64() 反而是正数, 这个判断永不成立, 该打印的
+// "Creating controller failed with %08x" 从不出现, 它接着对 nil 控制器解引用,
+// panic 从 NewWithOptions 里冒出来(帧都在库内, 但整条链都在 main 这个 goroutine 上,
+// 所以这里能接住)。不接住的话用户看到的是"双击之后窗口一闪就没了" —— GUI 子系统
+// 没有控制台, panic 文本一个字都到不了他眼前, 而这正是两条启动提示要避免的情形。
+// 实测触发条件: 宿主进程完整性级别偏低时(例如 exe 所在目录被沙箱类工具打上
+// Low 完整性标签)WebView2 拒绝创建控制器。
+func createWebView2() (w webview2.WebView) {
+	defer func() {
+		if recover() != nil {
+			w = nil
+		}
+	}()
+	return webview2.NewWithOptions(webview2.WebViewOptions{Debug: devMode()})
 }
