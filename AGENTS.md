@@ -423,6 +423,14 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   被整个排除，`internal/typing` 则被编译成宿主平台的目标文件再拿去执行，报
   `fork/exec ... is not a valid Win32 application` 并 exit 1（2026-09 实测，此前这里
   写的是"静默跳过"，与事实不符）。所以产品侧的本地验证与 CI 都跑在 Windows 上
+- **界面以 `about:blank` 加载，没有可用的源**（2026-09 实测）：exe 走 `SetHtml`，而
+  go-webview2 的 `SetHtml` 就是 `NavigateToString`（不是 data: URL），文档的 href 是
+  `about:blank`、`origin` 为 `null`，`localStorage` 与 `sessionStorage` 一律抛
+  `SecurityError`。所以主题的手动选择不跨启动保留（已写进 README 已知限制），界面里
+  任何"记住用户偏好"的打算都得走宿主侧存储（加 Bind），别直接调 localStorage 再靠
+  try/catch 兜着。探针写法：临时程序 `w.SetHtml(...)` + `w.Bind("report", ...)` 把结果
+  打到 stdout，`go build` 成控制台程序（不带 `-H windowsgui`）后到**仓库目录外**运行
+  （工作区带 Low 完整性标签时 WebView2 起不来，见上一条）
 - **Node 主版本只写在 `.node-version` 一处**（现为 24）：`.github/workflows/verify.yml`
   用 `node-version-file` 读它，开发者的 nvm/fnm 也读同一个文件。它决定 vite/rollup 的
   产出字节，换版本后 `internal/web/dist/index.html` 与入库版本对不上，漂移检查会报不一致

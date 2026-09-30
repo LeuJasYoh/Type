@@ -257,12 +257,17 @@ func TestFrontendCountdownMessageMirrorsGo(t *testing.T) {
 
 // 主题的存储键写在两处: 首帧内联脚本读它、useTheme 写它。走散的症状是
 // "切换过主题, 重启又变回系统主题", 且没有任何环节会失败。内联脚本还必须
-// 排在入口脚本之前, 挪到 Vue 里就等于首帧闪白(见 AGENTS.md)
+// 排在入口脚本之前, 挪到 Vue 里就等于首帧闪白(见 AGENTS.md)。
+// "该用哪套主题"的判定只许有一处: useTheme 自己再算一遍(读存储 + 跟随系统)
+// 就又多出一份会走散的逻辑, 所以这里连"它不许读存储"一起钉住
 func TestThemeBootScriptKeepsKeyAndOrder(t *testing.T) {
 	ts := repoFile(t, "frontend", "src", "composables", "useTheme.ts")
 	m := regexp.MustCompile(`THEME_KEY = '([^']+)'`).FindStringSubmatch(ts)
 	if m == nil {
 		t.Fatal("useTheme.ts 里找不到 THEME_KEY 字面量")
+	}
+	if strings.Contains(ts, "localStorage.getItem") || strings.Contains(ts, "matchMedia") {
+		t.Error("useTheme.ts 又自己判了一遍主题: 判定只许留在 index.html 的内联脚本里")
 	}
 
 	html := repoFile(t, "frontend", "index.html")

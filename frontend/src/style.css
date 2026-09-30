@@ -4,6 +4,9 @@
    暗色换算律：降亮度保色相——浅色实色晕染 → 暗色同色低透明度。
    离线工具，不引入任何 web font，衬线落到系统字体栈。 */
 :root {
+  /* 让浏览器按当前主题画原生部件(滚动条槽、光标、表单默认色): 下面这些
+     token 只管我们自己画的盒子, 画不到 UA 自己那层 */
+  color-scheme: light;
   /* 纸：全部带黄相，越深越像牛皮纸 */
   --paper-50: #fbf9f4;
   --paper-100: #f4f0e6;
@@ -77,6 +80,7 @@
 
 /* 暗色：墨底纸字，红与绿都降亮度保色相 */
 .dark {
+  color-scheme: dark;
   --bg: var(--ink-950);
   --surface: var(--ink-900);
   --surface-hover: var(--ink-800);
@@ -252,7 +256,9 @@ body {
 .text-input {
   width: 100%;
   flex: 1;
-  padding: 10px 12px;
+  /* 底部留出字数徽标的高度: 徽标绝对定位在输入框右下角, 不留白的话正文最后
+     一行会从它底下穿过去(徽标带底色, 压住的那段字看不见) */
+  padding: 10px 12px 24px;
   border: none;
   border-radius: var(--radius);
   background: transparent;
