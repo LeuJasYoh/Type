@@ -59,6 +59,19 @@ jobs:
       - name: go build
         run: go build ./...
 
+      # build.ps1 的 UTF-8 BOM 是硬性不变量: Windows PowerShell 5.1 对无 BOM 的
+      # .ps1 按系统 ANSI(中文系统为 GBK)解码, 中文注释的尾字节会吞掉换行, 把下一行
+      # 代码并进注释成为死代码 —— ProductVersion 同步曾因此静默失效。部分编辑器与
+      # 改写工具会顺手把 BOM 吞掉, 所以在 CI 里量一次首三字节
+      - name: build.ps1 BOM 检查
+        shell: pwsh
+        run: |
+          $bytes = [System.IO.File]::ReadAllBytes("scripts/build.ps1")
+          if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
+            throw "scripts/build.ps1 丢了 UTF-8 BOM (应为 EF BB BF): Windows PowerShell 5.1 会按 GBK 解码, 中文注释会吞掉换行"
+          }
+          Write-Host "build.ps1 的 UTF-8 BOM 在位"
+
       # ── 入库的前端产物必须与源码一致 ──
       # dist/index.html 入库是刻意的(免 Node 亦可 go build), 代价是改了
       # frontend/src 却忘了重新构建时 go:embed 会静默用旧界面, 这里堵住。
@@ -106,9 +119,12 @@ jobs:
           # 与 build.ps1 同款正则: 版本可带预发布后缀(如 1.5.0-rc.1)
           # 用 ConvertFrom-Json 取字段本身, 而不是在文本里找子串:
           # 子串匹配在版本号恰好出现在别处时会漏判
-          $m = Select-String -Path cmd/type/main.go -Pattern 'version\s*=\s*"([\d.]+(?:-[0-9A-Za-z.]+)?)"'
-          if (-not $m) { throw "cmd/type/main.go 中未找到 version 变量" }
-          $ver = $m.Matches[0].Groups[1].Value
+          # 必须锚定行首的 `var version =` 且大小写敏感(与 build.ps1 同款): 无锚点的
+          # 子串匹配会命中注释里的 `// version = "x"` 或将来某个 `minXxxVersion = "…"`
+          $m = @(Select-String -Path cmd/type/main.go -CaseSensitive `
+            -Pattern '(?m)^\s*var\s+version\s*=\s*"([\d.]+(?:-[0-9A-Za-z.]+)?)"')
+          if ($m.Count -ne 1) { throw "cmd/type/main.go 里应恰好有一处 var version = ""x.y.z"" (实际 $($m.Count) 处)" }
+          $ver = $m[0].Matches[0].Groups[1].Value
           $f = 'frontend/package.json'
           $pkg = Get-Content -Raw $f | ConvertFrom-Json
           if ($pkg.version -ne $ver) {

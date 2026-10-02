@@ -2,7 +2,8 @@
 # 用法: uv run scripts/gen_icon.py
 #
 # assets/icon.jpg (322×322 源图) → assets/icon.ico 圆角多尺寸应用图标
-# (version.rc 引用, windres 编译进 exe; 窗口图标经 SHGetFileInfoW 从 exe 提取)
+# (由 tools/mkres 连同版本信息与 DPI manifest 写进 version_<arch>.syso,
+#  go build 链接进 exe; 窗口图标再经 SHGetFileInfoW 从 exe 提取)
 #
 # 渲染参数经对既有产物(v1.3.4)的逆向标定, 生成结果与其字节级一致:
 #   - 圆角半径 57 (322 源图坐标系), rounded_rectangle 硬边掩膜后整体缩小

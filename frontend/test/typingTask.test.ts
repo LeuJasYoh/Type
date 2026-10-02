@@ -17,6 +17,7 @@ import { beforeEach, test } from 'node:test';
 import { effectScope } from 'vue';
 
 import { useTypingTask } from '../src/composables/useTypingTask.ts';
+import { errMsg } from '../src/ipc.ts';
 import type { TypingPhase, TypingStatus } from '../src/types.ts';
 
 type Handler = () => void;
@@ -32,6 +33,10 @@ const COUNTDOWN = (): TypingStatus =>
 let now = 0;
 let seq = 0;
 let calls = 0;
+let starts = 0;
+let startBlocked = false; // 置位后 startTyping 挂起, 由用例手动放行(模拟"等待后端返回")
+let startError: string | null = null; // 非空时后端拒绝启动, 以字符串 reject(go-webview2 的真实形态)
+let pendingStart: ((v: string) => void) | null = null;
 let reply: TypingStatus | null = null; // 非空即立即应答; 为空则把请求挂起, 由用例手动放行
 let timers: Map<number, { at: number; fn: Handler }>;
 let inflight: Deferred[];
@@ -80,6 +85,10 @@ beforeEach(() => {
   now = 0;
   seq = 0;
   calls = 0;
+  starts = 0;
+  startBlocked = false;
+  startError = null;
+  pendingStart = null;
   reply = null;
   timers = new Map();
   inflight = [];
@@ -100,7 +109,16 @@ beforeEach(() => {
     },
     addEventListener: (type: string, fn: Handler): void => bind(winListeners, type, fn),
     removeEventListener: (type: string, fn: Handler): void => unbind(winListeners, type, fn),
-    startTyping: (): Promise<string> => Promise.resolve('started'),
+    startTyping: (): Promise<string> => {
+      starts += 1;
+      if (startError) return Promise.reject(startError);
+      if (startBlocked) {
+        return new Promise<string>((resolve) => {
+          pendingStart = resolve;
+        });
+      }
+      return Promise.resolve('started');
+    },
     cancelTyping: (): Promise<string> => Promise.resolve('cancelled'),
     getTypingStatus: (): Promise<TypingStatus> => {
       calls += 1;
@@ -165,6 +183,8 @@ test('③ 取消后不恢复轮询, 状态停在已取消', async () => {
   assert.equal(t.status.value.message, '已取消');
   assert.equal(t.isRunning.value, false);
 
+  // 取消会回读一次真实状态(见 ⑩), 那次读完就该彻底停下
+  await settle();
   const seen = calls;
   await advance(1000);
   assert.equal(calls, seen, '取消之后仍在轮询');
@@ -250,4 +270,144 @@ test('⑦ 卸载时摘掉全局监听并停表', async () => {
   const seen = calls;
   await advance(1000);
   assert.equal(calls, seen, '卸载之后定时器还在跑');
+});
+
+test('⑧ 空文本在前端就被拦下, 不发 IPC', async () => {
+  reply = makeStatus('idle');
+  const t = useTypingTask();
+  await settle();
+
+  await t.start('', 5, false, false);
+
+  assert.equal(t.status.value.phase, 'error');
+  assert.equal(t.status.value.message, '请输入要模拟键入的文本');
+  assert.equal(t.isRunning.value, false);
+  assert.equal(starts, 0, '空文本不该发起 startTyping');
+});
+
+test('⑨ 只含空格/换行的文本照常启动, 不再被 trim() 连带拦掉', async () => {
+  reply = makeStatus('idle');
+  const t = useTypingTask();
+  await settle();
+
+  reply = COUNTDOWN();
+  await t.start(' \n ', 5, false, false);
+
+  assert.equal(starts, 1, '空格与换行是合法输入内容, 应当照常发起 startTyping');
+  assert.equal(t.status.value.phase, 'countdown');
+  assert.equal(t.isRunning.value, true);
+});
+
+test('⑩ 任务其实已经打完时点取消, 如实显示已完成而不是"已取消"', async () => {
+  reply = makeStatus('idle');
+  const t = useTypingTask();
+  await settle();
+
+  reply = COUNTDOWN();
+  await t.start('你好', 5, false, false);
+  await advance(200);
+
+  // 后端已经跑完, 只是界面还没刷到那一拍: 点取消后回读到的应是"输入完成"
+  reply = makeStatus('success', { message: '输入完成' });
+  t.cancel();
+  assert.equal(t.status.value.phase, 'cancel', '本地先给即时反馈');
+  await settle();
+  assert.equal(t.status.value.phase, 'success', '"已取消"会把已经打完的事实盖掉');
+  assert.equal(t.status.value.message, '输入完成');
+});
+
+test('⑪ 正常取消(后端仍在倒计时)继续停在"已取消"', async () => {
+  reply = makeStatus('idle');
+  const t = useTypingTask();
+  await settle();
+
+  reply = COUNTDOWN(); // 后端此刻仍是倒计时, 取消会被它接受
+  await t.start('你好', 5, false, false);
+  await advance(200);
+
+  t.cancel();
+  await settle();
+  assert.equal(t.status.value.phase, 'cancel');
+  assert.equal(t.status.value.message, '已取消');
+});
+
+test('⑫ 重启轮询后的第一拍不因残留的终止态而停表', async () => {
+  reply = makeStatus('idle');
+  const t = useTypingTask();
+  await settle();
+
+  reply = COUNTDOWN();
+  await t.start('你好', 5, false, false);
+  await advance(200);
+  assert.equal(t.isRunning.value, true);
+
+  // 恢复焦点会无条件重启链条; 第一拍读到的可能是上一轮残留的终止态
+  reply = makeStatus('success', { message: '输入完成' });
+  fire(winListeners, 'focus');
+  await advance(0);
+  assert.equal(t.status.value.phase, 'success', '第一拍要渲染');
+  assert.equal(t.isRunning.value, true, '第一拍不许终止链条(会留下不刷新的界面)');
+
+  // 第二拍再读到终止态, 这时才该停
+  await advance(200);
+  assert.equal(t.isRunning.value, false);
+});
+
+test('⑬ 启动还没返回时点了取消, 返回后不再重启轮询', async () => {
+  reply = makeStatus('idle');
+  const t = useTypingTask();
+  await settle();
+
+  startBlocked = true;
+  const started = t.start('你好', 5, false, false); // 挂在后端返回上
+  await settle();
+  assert.equal(t.isRunning.value, true);
+
+  t.cancel(); // 等待期间用户点了取消
+  assert.equal(t.isRunning.value, false);
+
+  pendingStart?.('started'); // 后端这时才返回
+  await started;
+  await settle();
+  assert.equal(t.isRunning.value, false, '取消后不该恢复轮询');
+  assert.equal(t.status.value.phase, 'cancel');
+
+  const seen = calls;
+  await advance(1000);
+  assert.equal(calls, seen, '取消之后仍在轮询');
+});
+
+test('⑭ 运行中再点启动不会发第二次请求', async () => {
+  reply = makeStatus('idle');
+  const t = useTypingTask();
+  await settle();
+
+  reply = COUNTDOWN();
+  await t.start('你好', 5, false, false);
+  assert.equal(starts, 1);
+
+  await t.start('再来一次', 5, false, false);
+  assert.equal(starts, 1, '运行中不该再发 startTyping(后端会拒, 界面会显示失败)');
+  assert.equal(t.status.value.message, '剩余 5 秒 — 请聚焦目标窗口...');
+  assert.equal(t.isRunning.value, true);
+});
+
+test('⑮ 后端拒绝启动时, 界面显示后端给的原因', async () => {
+  reply = makeStatus('idle');
+  const t = useTypingTask();
+  await settle();
+
+  startError = '已有输入任务在运行中，请先取消或等待完成';
+  await t.start('你好', 5, false, false);
+
+  assert.equal(t.status.value.phase, 'error');
+  assert.equal(t.status.value.message, startError);
+  assert.equal(t.isRunning.value, false, '失败后必须解锁启动键');
+});
+
+test('⑯ errMsg 认得后端的两种 reject 形态', () => {
+  // go-webview2 是以字符串 reject 的(见其 msgcb), Error 形态也得能读
+  assert.equal(errMsg('已有输入任务在运行中，请先取消或等待完成'), '已有输入任务在运行中，请先取消或等待完成');
+  assert.equal(errMsg(new Error('boom')), 'boom');
+  assert.equal(errMsg(undefined), '操作失败');
 });

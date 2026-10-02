@@ -39,21 +39,24 @@ jobs:
       - name: 提取版本号
         shell: pwsh
         run: |
-          $m = Select-String -Path cmd/type/main.go -Pattern 'version\s*=\s*"([\d.]+(?:-[0-9A-Za-z.]+)?)"'
-          if (-not $m) { throw "cmd/type/main.go 中未找到 version 变量" }
-          Add-Content -Path $env:GITHUB_ENV -Value "version=$($m.Matches[0].Groups[1].Value)"
+          # 必须锚定行首的 `var version =` 且大小写敏感(与 build.ps1 同款): 无锚点的
+          # 子串匹配会命中注释里的 `// version = "x"` 或将来某个 `minXxxVersion = "…"`
+          $m = @(Select-String -Path cmd/type/main.go -CaseSensitive `
+            -Pattern '(?m)^\s*var\s+version\s*=\s*"([\d.]+(?:-[0-9A-Za-z.]+)?)"')
+          if ($m.Count -ne 1) { throw "cmd/type/main.go 里应恰好有一处 var version = ""x.y.z"" (实际 $($m.Count) 处)" }
+          Add-Content -Path $env:GITHUB_ENV -Value "version=$($m[0].Matches[0].Groups[1].Value)"
 
       # 资源只在这里生成(.syso 不入库, 见 .gitignore); mkres 两架构一并产出,
       # 后续 go build 按 GOARCH 各取所需, 故本步不能带 GOARCH
       - name: 生成资源 (mkres)
         run: go run ./tools/mkres -version $env:version -icon assets/icon.ico -out cmd/type/version
 
-      # 与 scripts/build.ps1 / README 的发布命令一致(含 -H windowsgui -s -w)
+      # 与 scripts/build.ps1 / README 的发布命令一致(含 -H windowsgui -s -w -trimpath)
       - name: 构建 exe (发布参数, ${{ matrix.arch }})
         shell: pwsh
         run: |
           $env:GOARCH = '${{ matrix.arch }}'
-          go build -ldflags="-H windowsgui -s -w" -o "Type-${{ matrix.arch }}.exe" ./cmd/type
+          go build -trimpath -ldflags="-H windowsgui -s -w" -o "Type-${{ matrix.arch }}.exe" ./cmd/type
 
       - name: 读回校验 (PE 架构 + 图标/版本/manifest)
         run: go run ./tools/pecheck -exe "Type-${{ matrix.arch }}.exe" -version $env:version -arch ${{ matrix.arch }}
@@ -68,11 +71,19 @@ jobs:
         run: |
           $env:GOARCH = 'arm64'
           go vet ./...
-          $out = "$env:TEMP\type-arm64.test.exe"
-          go test -c -o $out ./internal/typing
-          if ($LASTEXITCODE -ne 0) { throw "internal/typing 的 arm64 测试编译失败" }
-          go test -c -o $out ./internal/win32
-          if ($LASTEXITCODE -ne 0) { throw "internal/win32 的 arm64 测试编译失败" }
-          go test -c -o $out ./cmd/type
-          if ($LASTEXITCODE -ne 0) { throw "cmd/type 的 arm64 测试编译失败" }
-          Write-Host "三个包的 arm64 测试二进制均编译通过"
+          if ($LASTEXITCODE -ne 0) { throw "arm64 的 go vet 失败" }
+
+          # 只判退出码是不够的: 包里没有测试文件时, go test -c 既不报错也不产出任何
+          # 文件, 于是这一步会变成假绿灯(旧坑, 见上面的注释)。所以逐个包编译, 并核对
+          # 产物真的存在且非空 —— 每个包用自己的输出名, 免得后一个把前一个覆盖掉
+          foreach ($pkg in 'internal/typing', 'internal/win32', 'cmd/type') {
+            $out = Join-Path $env:TEMP ('type-arm64-' + ($pkg -replace '[/\\]', '-') + '.test.exe')
+            if (Test-Path $out) { Remove-Item $out -Force }
+            go test -c -o $out "./$pkg"
+            if ($LASTEXITCODE -ne 0) { throw "$pkg 的 arm64 测试编译失败" }
+            if (-not (Test-Path $out)) {
+              throw "$pkg 没有产出测试二进制: 这个包里是不是没有测试文件? (go test -c 对空包静默成功)"
+            }
+            if ((Get-Item $out).Length -eq 0) { throw "$pkg 的测试二进制是空文件" }
+          }
+          Write-Host "三个包的 arm64 测试二进制均已产出并校验非空"

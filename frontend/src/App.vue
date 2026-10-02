@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import StatusBar from './components/StatusBar.vue';
 import { useTheme } from './composables/useTheme';
 import { useTypingTask } from './composables/useTypingTask';
-import { toggleTopmost } from './ipc';
+import { getTopmost, toggleTopmost } from './ipc';
 
 // ─── 主题 ───
 const { theme, toggle: toggleTheme } = useTheme();
@@ -34,6 +34,17 @@ const pinned = ref(false);
 async function onTogglePin(): Promise<void> {
   pinned.value = await toggleTopmost();
 }
+
+// 窗口的置顶不随页面重载复位, 而按钮每次都从"未置顶"起。重载(Ctrl+R、渲染进程
+// 崩溃后自动重载)之后不读回来的话, 按钮显示"置顶"而窗口仍钉在最上层, 用户点一下
+// 反而是把置顶取消掉, 按钮与窗口正好相反
+onMounted(async () => {
+  try {
+    pinned.value = await getTopmost();
+  } catch {
+    // 绑定不可用(如用普通浏览器打开 dev server)时保持未置顶
+  }
+});
 </script>
 
 <template>

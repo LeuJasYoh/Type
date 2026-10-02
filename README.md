@@ -25,7 +25,7 @@
   - **逐字符模拟**：纯英文用 `SendInput` 快速注入，含中文时自动切换为剪贴板
   - **剪贴板粘贴**：用 `Ctrl+V` 粘贴，速度快，自动保存/恢复剪贴板
 - **文本直投**（v1.5.0）：面向带代码补全/括号自动配对的在线编辑器，字符（含 Tab）绕过按键层、以文本层消息直接注入，编辑器的补全弹窗劫持（空格被当作"接受候选"）与括号自动配对都不会触发；换行无法走文本层（系统会过滤控制字符），程序会自动先注入 Esc 关闭补全弹窗再按回车
-- **目标窗口预览**：倒计时期间跟随当前前台窗口标题（切换窗口立即更新，同一窗口的标题变化每秒刷新一次），执行时锁定并显示实际注入目标
+- **目标窗口预览**：倒计时期间跟随当前前台窗口标题（切换窗口立即更新，同一窗口的标题变化也在下一拍跟上，约 0.1 秒），执行时锁定并显示实际注入目标
 - **焦点漂移防护**（v1.5.3）：键入过程中目标窗口被切走（弹出别的窗口、手动切到别处、切回 Type 自身）时立即停止输入，不把剩余内容打进错误的窗口；终态会说明已输入多少字
 - **可调延迟**：1~9 秒倒计时，给你时间聚焦目标窗口
 - **启动/取消**：随时中止操作；任务结束后自动复位（无需手动取消）；运行中防重入，不会叠加启动；界面若被意外重载（按了 Ctrl+R/F5，或浏览器内核崩溃后自行恢复），会自动接回正在进行的任务，进度与取消按钮不会掉线
@@ -101,7 +101,7 @@
 | GUI | WebView2（Edge Chromium） |
 | 前端 | Vue 3 + TypeScript，Vite 构建为单文件 HTML（无其他运行时依赖） |
 | 构建 | vue-tsc 类型检查 + Vite（vite-plugin-singlefile）+ `go run ./tools/mkres` + `go build` |
-| CI | GitHub Actions（windows-latest）：gofmt / go vet / `go test -race` / 依赖漏洞扫描（govulncheck）/ go build + 前端单测（`npm test`）+ 前端产物漂移检查 + 版本同步检查；另按 amd64/arm64 矩阵做发布构建，并用 `tools/pecheck` 读回校验图标、版本与 DPI 声明确实已链入产物。发版走的是同一套检查（`verify.yml`），不会比平时松 |
+| CI | GitHub Actions（windows-latest）：gofmt / go vet / `go test -race` / 依赖漏洞扫描（govulncheck）/ go build + 前端单测（`npm test`）+ 前端产物漂移检查 + 版本同步检查 + build.ps1 的 BOM 检查；另按 amd64/arm64 矩阵做发布构建，并用 `tools/pecheck` 读回校验图标、版本与 DPI 声明确实已链入产物。发版走的是同一套检查（`verify.yml`），不会比平时松 |
 | 发布 | 打 `v<版本>` 标签即由 GitHub Actions 自动发行：校验版本与发布说明一致 → 双架构构建 + 读回校验 → 打包 → 建 Release；说明文字取自入库的 `release-notes/v<版本>.md` |
 | Win32 API | SendInput（KEYEVENTF_UNICODE）+ WM_CHAR 文本直投（SendMessageTimeoutW 直投焦点窗口）+ 剪贴板（CF_UNICODETEXT、EnumClipboardFormats 全格式快照、RtlMoveMemory）+ 前台窗口检测（GetForegroundWindow）+ 单实例互斥体（CreateMutexW） |
 | 图标 | 圆角多尺寸 ICO（uv + Pillow 生成，`scripts/gen_icon.py` 字节级可复现） |
@@ -203,16 +203,16 @@ cd frontend
 npm install                         # 安装前端依赖 (仅首次)
 npm run build                       # vue-tsc 类型检查 + Vite → ../internal/web/dist/index.html
 cd ..
-# 下面的 1.5.6 要跟 cmd/type/main.go 里的 version 一致 (版本号只在那里定义)
-go run ./tools/mkres -version 1.5.6 -icon assets/icon.ico -out cmd/type/version
-go build -ldflags="-H windowsgui -s -w" -o Type.exe ./cmd/type
+# 下面的 1.5.7 要跟 cmd/type/main.go 里的 version 一致 (版本号只在那里定义)
+go run ./tools/mkres -version 1.5.7 -icon assets/icon.ico -out cmd/type/version
+go build -trimpath -ldflags="-H windowsgui -s -w" -o Type.exe ./cmd/type
 
 # 读回校验: 图标/版本信息/DPI 声明是否真的链进了产物(.syso 缺失时
 # go build 不会失败, 产物只是悄悄少了这些)
-go run ./tools/pecheck -exe Type.exe -version 1.5.6 -arch amd64
+go run ./tools/pecheck -exe Type.exe -version 1.5.7 -arch amd64
 
 # 交叉编译 ARM64 版 (纯 Go, 不需要额外工具链; 资源上一步已按架构生成)
-$env:GOARCH = "arm64"; go build -ldflags="-H windowsgui -s -w" -o Type-arm64.exe ./cmd/type
+$env:GOARCH = "arm64"; go build -trimpath -ldflags="-H windowsgui -s -w" -o Type-arm64.exe ./cmd/type
 
 # 图标资产再生成 (可选, 需 uv): 更换 assets/icon.jpg 后执行, 产物字节级可复现
 uv run scripts/gen_icon.py
@@ -267,5 +267,6 @@ go build -tags dev -o Type-dev.exe ./cmd/type   # 终端 2: 带 dev 标签构建
 
 本项目基于 [MIT License](LICENSE) 开源发布。
 
-发布产物内含第三方组件（go-webview2、go-winloader、golang.org/x/sys 与内嵌的 WebView2Loader.dll），
+发布产物内含第三方组件（go-webview2、go-winloader、golang.org/x/sys 与内嵌的 WebView2Loader.dll；
+界面框架 Vue 的运行时代码也打包进了内嵌页面），
 版权与许可全文见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

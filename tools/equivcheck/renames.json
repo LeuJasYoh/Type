@@ -1,9 +1,9 @@
 {
-  "clipboardSetText": "SetText",
-  "clipboardGetText": "GetText",
-  "clipboardSnapshot": "Snapshot",
-  "restoreSnapshotRaw": "RestoreSnapshotRaw",
-  "sendRune": "SendRune",
-  "sendCtrlV": "SendPaste",
-  "foregroundWindowTitle": "Title"
+  "clipboardSetText": "Clipboard.SetText",
+  "clipboardGetText": "Clipboard.GetText",
+  "clipboardSnapshot": "Clipboard.Snapshot",
+  "restoreSnapshotRaw": "Clipboard.RestoreSnapshotRaw",
+  "sendRune": "Injector.SendRune",
+  "sendCtrlV": "Injector.SendPaste",
+  "foregroundWindowTitle": "Foreground.Sample"
 }

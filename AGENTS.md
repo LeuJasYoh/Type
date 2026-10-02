@@ -18,7 +18,7 @@
 powershell -ExecutionPolicy Bypass -File ./scripts/build.ps1
 
 # ARM64 发行版 (纯 Go 交叉编译, 不需要额外工具链; 资源由 mkres 按架构生成)
-$env:GOARCH = "arm64"; go build -ldflags="-H windowsgui -s -w" -o Type-arm64.exe ./cmd/type
+$env:GOARCH = "arm64"; go build -trimpath -ldflags="-H windowsgui -s -w" -o Type-arm64.exe ./cmd/type
 
 # Go 验证三件套 (任何 Go 改动后, 与 CI 同款)
 gofmt -l ./cmd ./internal ./tools   # 应输出为空
@@ -73,6 +73,12 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 发布物：两个压缩包 `Type-<版本>-windows-<架构>.zip`（amd64 / arm64），
 **包内只有一个 `Type.exe`**（与既有 Release 一致：解压后双击即可，不加目录层级）。
 
+新打包进 exe 的第三方组件（**包括前端依赖**）要登记进 `THIRD_PARTY_NOTICES.md`：MIT/BSD
+这类宽松许可要求随二进制再分发时带上声明（Vue 就是这么补上的；打包工具默认会删掉 npm 包
+自带的许可横幅，所以声明文件是唯一的载体）。`release.yml` 里手动触发填的版本号一律走
+`env:` 传值，别把 `${{ inputs.* }}` 直接插值进 `run:` —— 那是文本替换，等于让人在构建机上
+执行任意脚本。
+
 版本号规则：**由人决定这次涨多少**，新功能进次版本号（1.5→1.6），修缺陷进补丁号（1.5.3→1.5.4），
 可带预发布后缀（如 `1.6.0-rc.1`）。写入位置只有 `cmd/type/main.go` 一处。
 
@@ -117,19 +123,24 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
   - `pecheck/`：读回校验构建产物，核对 PE 架构 + 图标/版本/manifest 是否真的链进 exe（发版与 CI 共用）
     不数图标帧数，那是 `assets/icon.ico` 的属性，重新生成图标就会变
   - `wmcharprobe/`：注入通道探针，WM_CHAR 文本直投 vs SendInput 按键的 A/B 验证，
-    direct 模式逐字镜像产品的文本直投算法；读 completion-guard.html 的 title 遥测（c/k/n/p/a/L/h）作判据；
+    direct 模式逐字镜像产品的文本直投算法；取焦点窗口的规则与产品同步（拿不到焦点子窗口就放弃 WM_CHAR 投递，不拿顶层窗口顶替，否则测出来的结论不属于产品）；读 completion-guard.html 的 title 遥测（c/k/n/p/a/L/h）作判据；
     用法见文件头注释
-  - `equivcheck/`：重构等价性验证（逐函数比对函数体，证明结构调整零行为变化）
+  - `equivcheck/`：重构等价性验证（逐函数比对函数体；键含 receiver（`类型.方法`），
+    不同结构体的同名方法不再互相覆盖）。**只比函数体**：签名、参数顺序、包级常量、
+    结构体字段与 tag 都在视野之外，别拿它的输出当"零行为变化"的唯一证据
   - `less-ai-tone/`：对外文字的去 AI 味规则与检测脚本（写、改散文前读它，不进产品与 CI）
 - `.github/workflows/`：
   - `verify.yml`：**检查项的唯一处**，`on: workflow_call`，被 ci.yml 与 release.yml 共用。
-    内容：gofmt / vet / `-race` 测试 / 漏洞扫描 / build / 前端单测 / 前端产物漂移检查 / 版本同步检查。
+    内容：gofmt / vet / `-race` 测试 / 漏洞扫描 / build / 前端单测 / 前端产物漂移检查 / 版本同步检查 /
+    `build.ps1` 的 BOM 检查。
     漏洞扫描用 `govulncheck` 的退出码当判据：可达的漏洞返回非零（构建失败），只在依赖里
     存在而调不到的返回零（不算失败，否则一个用不上的 CVE 就能卡住发版）；分析器版本钉住，
     免得 releases 上冒出问题版本时构建莫名其妙地红
   - `ci.yml`：两个作业。`verify`（调用上面的 verify.yml）与 `build`（amd64/arm64 矩阵：
     mkres 生成资源 → 发布参数构建 → `tools/pecheck` 读回校验；arm64 另做 `go vet` 与
-    `go test -c` 测试编译，编的是 internal 两个包与 cmd/type）。
+    `go test -c` 测试编译（编 internal 两个包与 cmd/type）。那一步必须**逐个包编译并核对
+    产物存在且非空**：只判退出码会假绿 —— 包里没有测试文件时 `go test -c` 既不报错也不
+    产出任何文件（2026-10 补，同一个坑踩过第二次）。
     拆开是刻意的：前端构建不必按架构重复，而"资源有没有链进产物"只有真构建一次才回答得了
   - `release.yml`：发版（见「发布流程」）。它的 `release` 作业 `needs: verify`，
     所以发布包不可能出自检查不过的提交
@@ -137,11 +148,21 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
   package.json，并在构建期把它传给 `tools/mkres` 生成资源，改版本只改 main.go，
   然后跑 build.ps1。版本可带预发布后缀（如 `1.5.0-rc.1`）：资源里的数字字段取后缀前
   的数字部分（只允许数字），ProductVersion / package.json 用完整串（semver 兼容）；
-  ci.yml / release.yml 的版本检查用同款正则校验完整串
+  ci.yml / release.yml 的版本检查用同款正则校验完整串。
+  **提取版本号的正则必须锚定 `(?m)^\s*var\s+version\s*=`、带 `-CaseSensitive`，并断言
+  匹配数恰好为 1**（build.ps1 / verify.yml / ci.yml / release.yml 四处同款，改一处要
+  一起改）：`version` 是常见词，无锚点的子串匹配会命中注释里的 `// version = "1.5.8"`
+  或将来某个 `minXxxVersion = "…"`，而下游（标签闸门、资源、包名）全用这个提取值 ——
+  取错值会一路错到底，且没有任何环节比对"提取值 == 程序真正用的 version"（v1.5.7 修）
 - **build.ps1 必须保留 UTF-8 BOM**（文件首三字节 EF BB BF）：Windows PowerShell 5.1
   对无 BOM 的 .ps1 按系统 ANSI（中文系统为 GBK）解码，中文注释的尾字节会吞掉换行，
   把下一行代码并进注释成为死代码，ProductVersion 同步曾因此静默失效。改脚本后若
-  BOM 丢失（部分编辑器会吞），构建产物版本属性会先出症状
+  BOM 丢失（部分编辑器会吞），构建产物版本属性会先出症状。**verify.yml 的「build.ps1 BOM 检查」量首三字节**（2026-10 补：这条检查加上来之前，改写工具刚吞过一次）
+- **build.ps1 自己钉住构建环境**（2026-10）：`GOARCH=amd64`、`GOFLAGS` 清空，跑完把两者还原给调用者。
+  调用者会话里遗留的 GOARCH（「常用命令」的 ARM64 配方就在同一个 shell 里导出）会让
+  `go run ./tools/mkres` 先交叉编译再执行，报 `This version of %1 is not compatible with the
+  version of Windows you're running`，理由看着像资源生成坏了；`GOFLAGS=-tags=dev` 会静默产出
+  带 DevTools 与右键菜单的开发版 exe，而 pecheck 只看资源、查不出来
 - **入库的前端产物必须与源码同步**：改了 `frontend/src` 就要跑 build.ps1 重新生成
   `internal/web/dist/index.html` 并一起提交；忘了的话 CI 的漂移检查会失败
   （go:embed 是静默的，本地不会有任何报错）
@@ -172,13 +193,13 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
 
 - `internal/typing/contract_test.go`：冻结文案逐字表 + `TypingStatus` 的 JSON 键集合
   与六个 phase 取值 + 初始状态的整体 JSON；
-- `cmd/type/contract_test.go`：四个 Bind 函数名、`startTyping` 的四个参数与类型、
+- `cmd/type/contract_test.go`：五个 Bind 函数名、`startTyping` 的四个参数与类型、
   `Status`/`Cancel` 的签名，并读 `frontend/src/ipc.ts` 核对前端那份镜像。
 
 文案断言刻意写成**字面量**而不是引用常量（看着像自我复读，但那正是它的用途：
 别处断言用的是同名常量，改了常量测试照样绿）。新增文案请一并登记进下面两张清单与表。
 
-- webview Bind 函数名：`startTyping` / `cancelTyping` / `toggleTopmost` / `getTypingStatus`
+- webview Bind 函数名：`startTyping` / `cancelTyping` / `toggleTopmost` / `getTopmost` / `getTypingStatus`
   （`startTyping` 参数：text, delay, forceSendInput, textDirect）
 - `TypingStatus` JSON 字段与 phase 枚举值（`frontend/src/types.ts` 是其镜像）
 - 状态机用户可见文案逐字符保持，它们是发布语言的一部分
@@ -193,6 +214,12 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   `输入中断：目标窗口已切换，粘贴结果无法确认`（粘贴已发出后才发现切换）；
   `输入完成，但剪贴板未恢复，原内容可能已丢失`同理：注入已送达而剪贴板没换回来，
   是两个都成立的事实，既不能退化成 `输入完成`，也不能退化成 `输入失败`
+- **无内容可输入的文本在后端就被拒**（v1.5.7）：`Start` 对「剔除 `\r` 后为空」的文本返回
+  `无内容可输入`（复用上面那条既有文案，不新增），不写倒计时、不占任务槽；前端 `start()`
+  里也有一道同样的校验，文案是前端自己的 `请输入要模拟键入的文本`（只在真正空串时出现，
+  一并登记在此）。**判据必须在后端**：界面能改、能被绕过，而「批准一个什么都不做的任务」
+  会让用户白等一个倒计时再看到报错。只含空格/换行/制表符的文本是**合法**输入内容，
+  别再拿 `trim()` 当成空文本拦掉（前端 ⑧⑨ 两条用例钉着）
 - 启动提示框的标题与两条正文同属发布语言，逐字固定：`Type 无法启动` /
   `缺少 Microsoft Edge WebView2 运行时，Type 的界面需要它才能显示。…`（运行时缺失）/
   `WebView2 初始化失败，Type 的界面无法创建。…`（运行时查得到但起不来）。
@@ -293,6 +320,11 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
 - **用超时那条终态写入必须带 `gen` 守卫**，别写成 `s.taskGen.Load()`：那是拿自己
   和自己比、恒真，退位的任务会把"启动失败：上一任务未能及时退出"盖到在途的新任务
   头上，前端在终止态停轮询，用户看到假失败而文本其实已经送进目标窗口
+- **`Cancel` 不覆盖已经有结局的状态**（success / error，2026-10 修）：任务写完终态到
+  腾空任务槽之间也在这个窗口里，所以判据取**状态**而不是任务槽。硬覆盖的话那句"已取消"
+  是假话 —— 内容可能已经全部送达，用户以为没打完、再点一次启动就把同一段文本打了两遍。
+  前端配套：`cancel()` 先给即时反馈，再回读一次真实状态，只有读到 success/error 才改口
+  （`typingTask.test.ts` ⑩ 钉着；后端用例 `TestCancelDoesNotOverwriteFinishedTask`）
 - 回归用例在 `typing_test.go`：`TestConcurrentStartNeverStacks`、
   `TestCancelDuringStartLeavesNoStuckCountdown`（断言终态必须是 cancel 且零注入，
   只断言 isTerminal 会被"吞掉取消后的假成功"满足）、
@@ -347,6 +379,10 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   已记在 README 已知限制里
 - Win32 怪癖的注释保留在 internal/win32 的实现内（全角标点 WM_CHAR 绕行、GDI 句柄型
   格式跳过、图标句柄所有权约定），它们是本代码库最有价值的文档，重构时勿删
+- **发布构建一律带 `-trimpath`**（build.ps1 / ci.yml / release.yml 三处）：少了它，产物里
+  嵌着构建机的绝对路径（实测 exe 里能搜到 `D:/Projects/Type/...`），既漏一点环境信息，
+  也让"同样源码编出同样文件"做不到。加了之后源码位置以 `internal/typing/typing.go`
+  这种相对路径记录，pecheck 与图标/版本/manifest 都不受影响
 - 注入失败必须可见：`TextInjector` 五个方法都返回 bool（SendInput 被 UIPI 拦截时
   整体返回 0；WM_CHAR 直投的 SendMessageTimeout 超时/失败返回 0）。不要把返回值
   改成 void，那正是"静默失败被报成输入完成"的来源
@@ -376,6 +412,12 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   这两种输出用户一个都看不见，症状就只剩"双击之后什么都没有"
 - 剪贴板恢复守卫用 `Clipboard.HoldsText`（按原始字节比对）而不是 `GetText` 的
   字符串比较：CF_UNICODETEXT 内嵌 NUL 时字符串会在 NUL 处截断而误判
+- **`HoldsText` 返回 `(holds, known)` 两个值，不许压回一个 bool**（v1.5.7 修）：
+  「读不到剪贴板」（打开失败、GlobalLock 失败、GlobalSize 为 0）与「剪贴板已被用户改动」
+  是两件处置**相反**的事，前者必须按「没恢复」上报（注入前的内容早已被覆盖，原内容可能
+  已经丢了），后者跳过恢复才对（剪贴板归用户所有）。旧签名只有一个 bool，歧义被解到了
+  掩盖失败的那一边：用户原内容丢了，收到的却是「输入完成」。回归用例
+  `TestUnreadableClipboardIsReported`、`TestServiceClipboardGuard`
 - **剪贴板恢复失败必须可见**：`RestoreSnapshotRaw` / `writeClipboardFormats` 都返回
   是否真的写回成功，`restoreClipboardSnapshot` 把它折算成"剪贴板是否仍保有注入前的
   内容"，终态据此在成功路径改用 `输入完成，但剪贴板未恢复，原内容可能已丢失`。

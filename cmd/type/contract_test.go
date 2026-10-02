@@ -21,8 +21,8 @@ import (
 	"github.com/LeuJasYoh/type/internal/typing"
 )
 
-// contractBindNames 四个绑定名, 前端 window 上必须是同名的这四个
-var contractBindNames = []string{"startTyping", "cancelTyping", "toggleTopmost", "getTypingStatus"}
+// contractBindNames 五个绑定名, 前端 window 上必须是同名的这五个
+var contractBindNames = []string{"startTyping", "cancelTyping", "toggleTopmost", "getTopmost", "getTypingStatus"}
 
 var (
 	bindCallRE  = regexp.MustCompile(`w\.Bind\("([A-Za-z]+)"`)
@@ -39,7 +39,7 @@ func mainSource(t *testing.T) string {
 	return string(data)
 }
 
-// 装配层绑定的名字必须正好是约定的四个: 少一个前端会拿到 undefined,
+// 装配层绑定的名字必须正好是约定的五个: 少一个前端会拿到 undefined,
 // 多一个说明后端加了能力而前端镜像与文档都没跟上
 func TestBindNamesMatchContract(t *testing.T) {
 	src := mainSource(t)
@@ -80,7 +80,8 @@ func TestStartSignatureFrozen(t *testing.T) {
 	t.Log("startTyping(text string, delay int, forceSendInput bool, textDirect bool)")
 }
 
-// 另外三个绑定的签名: cancelTyping() / getTypingStatus() *TypingStatus
+// 另外几个绑定的签名: cancelTyping() / toggleTopmost() bool / getTopmost() bool /
+// getTypingStatus() *TypingStatus
 func TestOtherSignaturesFrozen(t *testing.T) {
 	typeOf := reflect.TypeOf(typing.NewTypingService(nil, nil, nil))
 
@@ -147,7 +148,7 @@ func TestFrontendMirrorsBindNames(t *testing.T) {
 			t.Errorf("ipc.ts 的 startTyping 参数个数 = %d, want 4 (%q)", len(parts), args)
 		}
 	}
-	for _, name := range []string{"cancelTyping", "toggleTopmost", "getTypingStatus"} {
+	for _, name := range []string{"cancelTyping", "toggleTopmost", "getTopmost", "getTypingStatus"} {
 		if args, ok := exported[name]; ok && strings.TrimSpace(args) != "" {
 			t.Errorf("ipc.ts 的 %s 应当无参, 实际 (%s)", name, args)
 		}

@@ -15,7 +15,7 @@ import (
 	"github.com/jchv/go-webview2"
 )
 
-var version = "1.5.7"
+var version = "1.5.8"
 
 var topmostFlag atomic.Bool // 窗口置顶开关(与输入任务无关, 归装配层)
 
@@ -73,6 +73,11 @@ func main() {
 		}
 		return on, nil
 	})
+
+	// 读回当前置顶状态。窗口的置顶不随页面重载复位, 而按钮每次都从"未置顶"起:
+	// 不读回来的话, 重载后(Ctrl+R、渲染进程崩溃后自动重载)按钮显示"置顶"而窗口
+	// 仍钉在最上层, 用户点一下反而是把置顶取消, 按钮与窗口正好相反
+	w.Bind("getTopmost", func() (bool, error) { return topmostFlag.Load(), nil })
 
 	// 前端轮询读取当前输入状态
 	w.Bind("getTypingStatus", svc.Status)

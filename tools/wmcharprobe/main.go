@@ -282,8 +282,14 @@ func activate(hwnd uintptr) bool {
 	return fg2 == hwnd
 }
 
-// focusedTarget 镜像产品的 focusedHWND(): 取前台线程的焦点窗口,
-// 无焦点窗口时退回前台顶层窗口。返回目标与说明(供诊断输出)
+// focusedTarget 镜像产品的 focusedHWND(): 取前台线程的焦点子窗口,
+// 拿不到时返回 0 并说明原因。
+//
+// **不退回顶层窗口**: 产品自 v1.5.6 起在这种情况下退化为 SendInput 按键注入
+// (顶层容器窗口会把 WM_CHAR 丢掉, 而 SendMessageTimeout 照样返回成功, 于是
+// "一个字都没进去"会被报成注入成功)。本探针只测 WM_CHAR 这条通道, 没有落点
+// 就如实说没有 —— 拿顶层窗口顶替, 会在"产品其实走了按键注入"的场景里给出一份
+// 不属于产品的结论, 而 AGENTS.md 恰恰让人拿这个工具的输当下判断的依据
 func focusedTarget() (uintptr, string) {
 	fg, _, _ := procGetForegroundWindow.Call()
 	if fg == 0 {
@@ -297,7 +303,7 @@ func focusedTarget() (uintptr, string) {
 			return gti.hwndFocus, "前台线程焦点窗口"
 		}
 	}
-	return fg, "前台顶层窗口(无焦点子窗口)"
+	return 0, "无焦点子窗口(产品会退化为按键注入, WM_CHAR 这条通道没有落点可测)"
 }
 
 func main() {
@@ -342,7 +348,7 @@ func main() {
 				}
 				dst, how := focusedTarget()
 				if dst == 0 {
-					fmt.Println("  无可用焦点窗口, 放弃投递")
+					fmt.Printf("  %s, 放弃 WM_CHAR 投递\n", how)
 					continue
 				}
 				root, _, _ := procGetAncestor.Call(dst, GA_ROOT)
@@ -364,7 +370,7 @@ func main() {
 				}
 				dst, how := focusedTarget()
 				if dst == 0 {
-					fmt.Println("  无可用焦点窗口, 放弃投递")
+					fmt.Printf("  %s, 放弃 WM_CHAR 投递\n", how)
 					continue
 				}
 				root, _, _ := procGetAncestor.Call(dst, GA_ROOT)

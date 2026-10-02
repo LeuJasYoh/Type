@@ -79,8 +79,11 @@ type fakeClipboard struct {
 	restoreFail bool // 恢复失败: 模拟剪贴板被别的程序占着, 原内容就此丢失
 	snapFail    bool // 剪贴板打开失败: 原状态未知
 	incomplete  bool // 有的格式没能照抄下来: 快照不完整, 不该拿去覆盖剪贴板
-	snap        []ClipboardFormat
-	events      []string
+	// holdsUnreadable: 比对时读不到剪贴板(打开失败/GlobalLock 失败)。它与
+	// "内容被用户改过"是两回事, 处置相反: 前者必须报"没恢复", 后者跳过恢复
+	holdsUnreadable bool
+	snap            []ClipboardFormat
+	events          []string
 }
 
 // cfUnicodeText 假剪贴板里充当文本条目的格式号, 与 Win32 的 CF_UNICODETEXT
@@ -105,10 +108,15 @@ func (f *fakeClipboard) GetText() string {
 	return f.text
 }
 
-func (f *fakeClipboard) HoldsText(text string) bool {
+// HoldsText 第二个返回值模拟"这次比对有没有得出结论": holdsUnreadable 置位时
+// 是读不到剪贴板(known=false), 而不是"内容被用户改过"
+func (f *fakeClipboard) HoldsText(text string) (bool, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.held == text
+	if f.holdsUnreadable {
+		return false, false
+	}
+	return f.held == text, true
 }
 
 func (f *fakeClipboard) Snapshot() ClipboardSnapshot {
@@ -359,6 +367,23 @@ func TestServiceClipboardGuard(t *testing.T) {
 	if len(cb.ops()) != opsBefore {
 		t.Errorf("nil 快照不应产生剪贴板操作, 操作数 %d → %d", opsBefore, len(cb.ops()))
 	}
+
+	// 读不到剪贴板: 这不是"用户改过", 而是"原内容还在不在无从判断"。
+	// 必须按"没恢复"上报(旧签名把两者并成一个 false, 于是静默跳过恢复、
+	// 用户原内容丢了还收到"输入完成"); 同时不许覆盖剪贴板 —— 那可能盖掉
+	// 用户刚复制的东西
+	cb.holdsUnreadable = true
+	opsBefore = len(cb.ops())
+	if svc.restoreClipboardSnapshot(snap, "用户新复制的内容") {
+		t.Error("读不到剪贴板时应按未恢复上报(false), 不能当成用户已改动")
+	}
+	if got := cb.GetText(); got != "用户新复制的内容" {
+		t.Errorf("读不到剪贴板时不应改动内容, got %q", got)
+	}
+	if len(cb.ops()) != opsBefore {
+		t.Errorf("读不到剪贴板时不应产生剪贴板操作, 操作数 %d → %d", opsBefore, len(cb.ops()))
+	}
+	cb.holdsUnreadable = false
 }
 
 // 并发 Start 只能有一个拿到任务槽: 另一路必须被拒, 而不是把同一段文本注入两遍。
@@ -420,6 +445,58 @@ func TestConcurrentStartNeverStacks(t *testing.T) {
 	}
 	if dupRounds > 0 {
 		t.Errorf("%d/%d 轮出现重复注入", dupRounds, rounds)
+	}
+}
+
+// 八路同时启动: 仍然只能有一路拿到任务槽, 其余七路必须当场被拒。
+// 判据是临界区里的"prevTask 非空且没人取消", 与并发路数无关 —— 这条用例存在的
+// 意义是把"以后有人把判定挪出临界区、或改成先读标志再认领"这类改动钉红
+func TestConcurrentStartEightWay(t *testing.T) {
+	const (
+		ways   = 8
+		rounds = 30
+	)
+	for i := 0; i < rounds; i++ {
+		inj := newFakeInjector()
+		svc := newTestService(inj, &fakeClipboard{}, noSleep)
+		// 第一路钉在运行中: 后七路入场时它必须还占着任务槽
+		releaseTask := make(chan struct{})
+		svc.sleep = func(time.Duration) {
+			select {
+			case <-releaseTask:
+			case <-time.After(500 * time.Millisecond): // 兜底: 测试自身出问题时别挂住
+			}
+		}
+
+		gate := make(chan struct{})
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		accepted := 0
+		for j := 0; j < ways; j++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-gate
+				if _, err := svc.Start("AB", 1, false, false); err == nil {
+					mu.Lock()
+					accepted++
+					mu.Unlock()
+				}
+			}()
+		}
+		close(gate)
+		wg.Wait()
+		close(releaseTask)
+
+		if st := waitTerminal(t, svc); st.Phase != PhaseSuccess {
+			t.Fatalf("第 %d 轮终态 = %s/%q, want success", i, st.Phase, st.Message)
+		}
+		if got := len(inj.calls()); got != 2 {
+			t.Fatalf("第 %d 轮注入 %d 次, want 2 (只许一路启动): %v", i, got, inj.calls())
+		}
+		if accepted != 1 {
+			t.Fatalf("第 %d 轮接受了 %d 路, want 1", i, accepted)
+		}
 	}
 }
 
@@ -596,6 +673,78 @@ func TestCancelDuringCountdown(t *testing.T) {
 	if calls := inj.calls(); len(calls) != 0 {
 		t.Errorf("取消后不应有任何注入, got %v", calls)
 	}
+}
+
+// 任务已经跑完(结局已写)之后再点取消: "已取消"是句假话 —— 内容早已全部送达。
+// 必须保留原来的结局, 否则用户以为没打完, 再点一次启动就把同一段文本打了两遍
+func TestCancelDoesNotOverwriteFinishedTask(t *testing.T) {
+	inj := newFakeInjector()
+	svc := newTestService(inj, &fakeClipboard{}, noSleep)
+
+	if _, err := svc.Start("AB", 1, false, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	done := waitTerminal(t, svc)
+	if done.Phase != PhaseSuccess || done.Message != msgDone {
+		t.Fatalf("前置条件不成立: 终态 = %s/%q, want success/%q", done.Phase, done.Message, msgDone)
+	}
+	// 写完结局到腾空任务槽之间也算"已经跑完", 判据取状态而不是任务槽
+	waitIdle(t, svc)
+
+	if _, err := svc.Cancel(); err != nil {
+		t.Fatalf("Cancel 失败: %v", err)
+	}
+	if st := svc.Status(); *st != done {
+		t.Errorf("已完成的结局被取消盖掉了: %s/%q → %s/%q", done.Phase, done.Message, st.Phase, st.Message)
+	}
+	if calls := inj.calls(); len(calls) != 2 {
+		t.Errorf("取消不该再产生注入, got %v", calls)
+	}
+}
+
+// 失败结局同理: 具体原因不许被一句"已取消"抹掉
+func TestCancelKeepsFailureReason(t *testing.T) {
+	inj := newFakeInjector()
+	inj.failAfter = 0 // 第一次注入就被拒
+	svc := newTestService(inj, &fakeClipboard{}, noSleep)
+
+	if _, err := svc.Start("AB", 1, false, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	done := waitTerminal(t, svc)
+	if done.Phase != PhaseError {
+		t.Fatalf("前置条件不成立: 终态 = %s/%q, want error", done.Phase, done.Message)
+	}
+	waitIdle(t, svc)
+
+	if _, err := svc.Cancel(); err != nil {
+		t.Fatalf("Cancel 失败: %v", err)
+	}
+	if st := svc.Status(); *st != done {
+		t.Errorf("失败原因被取消盖掉了: %s/%q → %s/%q", done.Phase, done.Message, st.Phase, st.Message)
+	}
+}
+
+// 上面两条是例外, 别顺手把正常路径也"优化"掉: 取消一个真正在跑的任务,
+// 仍然要覆盖倒计时并播报"已取消"
+func TestCancelStillOverwritesRunningTask(t *testing.T) {
+	inj := newFakeInjector()
+	release := make(chan struct{})
+	svc := newTestService(inj, &fakeClipboard{}, blockSleep(release))
+
+	if _, err := svc.Start("AB", 5, false, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	waitRunning(t, svc)
+
+	if _, err := svc.Cancel(); err != nil {
+		t.Fatalf("Cancel 失败: %v", err)
+	}
+	if st := svc.Status(); st.Phase != PhaseCancel || st.Message != msgCancelled {
+		t.Errorf("在途任务被取消后状态 = %s/%q, want cancel/%q", st.Phase, st.Message, msgCancelled)
+	}
+	close(release)
+	waitIdle(t, svc)
 }
 
 // ASCII 逐字符路径: \r 剔除、\n 转回车、进度报数、成功收尾
@@ -865,6 +1014,29 @@ func TestClipboardNotRestoredIsReported(t *testing.T) {
 	}
 }
 
+// 比对时读不到剪贴板: 原内容还在不在无从判断, 必须按"没恢复"上报。
+// 旧签名把"读不到"并进"用户已改动"里静默跳过恢复, 于是用户原本复制的东西
+// 已经丢了, 收到的却是"输入完成"
+func TestUnreadableClipboardIsReported(t *testing.T) {
+	inj := newFakeInjector()
+	cb := &fakeClipboard{text: "用户原文本", holdsUnreadable: true}
+	svc := newTestService(inj, cb, noSleep)
+
+	if _, err := svc.Start("你好", 1, false, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	st := waitTerminal(t, svc)
+	if st.Phase != PhaseSuccess {
+		t.Fatalf("终态 phase = %s, want success (粘贴已经送达)", st.Phase)
+	}
+	if st.Message != msgClipboardNotRestored {
+		t.Errorf("终态文案 = %q, want %q", st.Message, msgClipboardNotRestored)
+	}
+	if got, want := inj.calls(), []string{"V"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("注入序列 = %v, want %v", got, want)
+	}
+}
+
 // 上一任务迟迟不让位: 重启在 yieldDeadline 后认输, 播报终态, 且不得注入任何
 // 内容。旧任务停在它的第一个等待点上, 所以它既不释放任务槽, 也来不及看到取消
 func TestStartDeadlineWhenPreviousTaskStuck(t *testing.T) {
@@ -1025,19 +1197,42 @@ func TestRestoreGuardUsesHoldsText(t *testing.T) {
 	}
 }
 
-// 空文本: 不注入也不报"输入完成"
-func TestEmptyTextDoesNotReportSuccess(t *testing.T) {
+// 无内容可输入的文本(空串、只有 \r)在后端当场被拒: 不写倒计时、不占任务槽、
+// 不注入。前端也有一道同样的校验, 但那道只是省一次往返 —— 界面能改、能被绕过,
+// 判据必须在后端; 否则用户看到的是一个白等的倒计时, 等来的却是报错
+func TestEmptyTextRejectedByStart(t *testing.T) {
+	for _, text := range []string{"", "\r", "\r\r"} {
+		inj := newFakeInjector()
+		svc := newTestService(inj, &fakeClipboard{}, noSleep)
+		if _, err := svc.Start(text, 1, false, false); err == nil {
+			t.Fatalf("Start(%q) 应被拒绝", text)
+		} else if err.Error() != msgNothingToType {
+			t.Errorf("Start(%q) 的错误文案 = %q, want %q", text, err.Error(), msgNothingToType)
+		}
+		// 拒绝必须发生在写状态之前: 状态仍是构造时的 idle, 界面不会出现倒计时
+		if st := svc.Status(); st.Phase != PhaseIdle || st.Message != "" {
+			t.Errorf("Start(%q) 被拒后状态 = %s/%q, 不该写倒计时", text, st.Phase, st.Message)
+		}
+		if calls := inj.calls(); len(calls) != 0 {
+			t.Errorf("Start(%q) 被拒后不应注入, got %v", text, calls)
+		}
+	}
+}
+
+// 只含空白(空格/Tab/换行)的文本是合法的输入内容: 空格真的敲得出去, 一个换行
+// 就是一次回车。前端曾用 text.trim() 把它连同空文本一起拦掉, 两层结论不一致
+func TestWhitespaceOnlyTextIsTyped(t *testing.T) {
 	inj := newFakeInjector()
 	svc := newTestService(inj, &fakeClipboard{}, noSleep)
-	if _, err := svc.Start("", 1, false, false); err != nil {
+	if _, err := svc.Start(" \t\n ", 1, false, false); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
 	st := waitTerminal(t, svc)
-	if st.Message == "输入完成" {
-		t.Errorf("空文本不得报输入完成: %+v", st)
+	if st.Phase != PhaseSuccess || st.Message != msgDone {
+		t.Fatalf("终态 = %s/%q, want success/%q", st.Phase, st.Message, msgDone)
 	}
-	if calls := inj.calls(); len(calls) != 0 {
-		t.Errorf("空文本不应注入, got %v", calls)
+	if got, want := inj.calls(), []string{"r: ", "r:\t", "E", "r: "}; !reflect.DeepEqual(got, want) {
+		t.Errorf("注入序列 = %v, want %v", got, want)
 	}
 }
 
@@ -1150,21 +1345,21 @@ func TestCountdownTicksAndSecondBoundaries(t *testing.T) {
 		mu.Unlock()
 	}
 
-	// 空文本: 仍走逐字符路径, 但一次注入都没有, 不会给采样计数添乱
-	if _, err := svc.Start("", 3, false, false); err != nil {
+	// 单字符文本: 注入一次、多一次漂移守卫采样与一次字符间隔, 账要跟着算
+	if _, err := svc.Start("A", 3, false, false); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
 	if st := waitTerminal(t, svc); st.Phase != PhaseSuccess {
 		t.Fatalf("终态 phase = %s, want success", st.Phase)
 	}
 
-	// 30 拍倒计时 + 锁定前那一次 150ms 稳定等待(空文本没有字符间隔)
-	if sleeps != 31 {
-		t.Errorf("等待次数 = %d, want 31 (30 拍倒计时 + 1 次稳定等待)", sleeps)
+	// 30 拍倒计时 + 锁定前那一次 150ms 稳定等待 + 一个字符的间隔
+	if sleeps != 32 {
+		t.Errorf("等待次数 = %d, want 32 (30 拍倒计时 + 1 次稳定等待 + 1 次字符间隔)", sleeps)
 	}
-	// 采样: Start 初态 1 次 + 倒计时每拍 1 次 ×30 + 锁定 1 次
-	if got := fg.count(); got != 32 {
-		t.Errorf("采样次数 = %d, want 32 (初态 1 + 每拍 1×30 + 锁定 1)", got)
+	// 采样: Start 初态 1 次 + 倒计时每拍 1 次 ×30 + 锁定 1 次 + 逐字符的漂移守卫 1 次
+	if got := fg.count(); got != 33 {
+		t.Errorf("采样次数 = %d, want 33 (初态 1 + 每拍 1×30 + 锁定 1 + 漂移守卫 1)", got)
 	}
 
 	mu.Lock()
@@ -1203,7 +1398,7 @@ func TestCountdownPreviewFollowsSwitchWithinOneTick(t *testing.T) {
 		mu.Unlock()
 	}
 
-	if _, err := svc.Start("", 3, false, false); err != nil {
+	if _, err := svc.Start("A", 3, false, false); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
 	if st := waitTerminal(t, svc); st.Phase != PhaseSuccess {

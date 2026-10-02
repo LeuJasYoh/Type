@@ -144,11 +144,11 @@ func TestClipboardHoldsTextNul(t *testing.T) {
 	if !cb.SetText(text) {
 		t.Fatal("SetText 失败")
 	}
-	if !cb.HoldsText(text) {
-		t.Errorf("HoldsText(%q) = false, 内嵌 NUL 被误判为用户改动", text)
+	if holds, known := cb.HoldsText(text); !known || !holds {
+		t.Errorf("HoldsText(%q) = (holds=%v, known=%v), 内嵌 NUL 被误判为用户改动", text, holds, known)
 	}
-	if cb.HoldsText("A") {
-		t.Error(`HoldsText("A") = true: 截断后的比较不应通过`)
+	if holds, _ := cb.HoldsText("A"); holds {
+		t.Error(`HoldsText("A") 的 holds = true: 截断后的比较不应通过`)
 	}
 }
 

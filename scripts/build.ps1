@@ -15,9 +15,15 @@ Set-Location $root
 # 版本可带预发布后缀(如 1.5.0-rc.1): 资源里的数字字段只允许数字, 取后缀前的
 # 数字部分; 完整字符串进 ProductVersion 与 package.json(semver 兼容)。
 # 数字形式在此独立算一遍, 供末尾读回 exe 比对(与被校验的工具不是同一份实现)
-$m = Select-String -Path "cmd\type\main.go" -Pattern 'version\s*=\s*"([\d.]+(?:-[0-9A-Za-z.]+)?)"'
-if (-not $m) { throw "cmd/type/main.go 中未找到 version 变量" }
-$ver = $m.Matches[0].Groups[1].Value
+# 模式必须锚定行首的 `var version =` 且大小写敏感: version 是个常见词, 无锚点的
+# 子串匹配会命中注释里的 `// version = "1.5.8"`, 或将来某个 `minXxxVersion = "…"`,
+# 取到的就是文件里第一个碰巧长得像的值。下游(标签闸门/资源/包名/package.json)
+# 全用这个提取值, 而没有任何环节比对"提取值 == 程序真正用的 version" —— 取错值
+# 会一路错到底。同款模式共四处: 本文件 / verify.yml / ci.yml / release.yml
+$m = @(Select-String -Path "cmd\type\main.go" -CaseSensitive `
+    -Pattern '(?m)^\s*var\s+version\s*=\s*"([\d.]+(?:-[0-9A-Za-z.]+)?)"')
+if ($m.Count -ne 1) { throw "cmd\type\main.go 里应恰好有一处 var version = ""x.y.z"" (实际 $($m.Count) 处)" }
+$ver = $m[0].Matches[0].Groups[1].Value
 
 $base = $ver -replace '-.*$', ''
 $parts = @($base -split '\.')
@@ -46,26 +52,41 @@ if (-not (Test-Path "internal\web\dist\index.html")) { throw "未找到 internal
 
 # ── 4. 编译资源与可执行文件 ───────────────────────────
 Write-Host "构建 Type v$ver ..."
-# tools/mkres 生成 cmd/type/version_<arch>.syso (图标 + 版本信息), go build 按
-# 目标架构自动链接; 纯 Go 实现, 取代 windres + version.rc, 不再需要 MinGW
-go run ./tools/mkres -version $ver -icon assets/icon.ico -out cmd/type/version
-if ($LASTEXITCODE -ne 0) { throw "资源生成失败 (exit $LASTEXITCODE)" }
-go build -ldflags="-H windowsgui -s -w" -o Type.exe ./cmd/type
-if ($LASTEXITCODE -ne 0) { throw "go build 失败 (exit $LASTEXITCODE)" }
+# 目标架构与构建标签在这里钉死: 调用者环境里遗留的 GOARCH/GOFLAGS 会把构建带歪,
+# 而且症状都指向别处 —— GOARCH=arm64 时 `go run ./tools/mkres` 会先交叉编译再执行,
+# 报 "This version of %1 is not compatible with the version of Windows you're running",
+# 看着像资源生成坏了; GOFLAGS=-tags=dev 会静默产出带 DevTools 与右键菜单的开发版
+# exe, 而 pecheck 只看资源、查不出来。结束时还原, 免得污染调用者会话
+# (在交互式会话里执行 .\scripts\build.ps1 是与调用者同一个进程)
+$prevGOARCH, $prevGOFLAGS = $env:GOARCH, $env:GOFLAGS
+$env:GOARCH = "amd64"
+$env:GOFLAGS = ""
+try {
+    # tools/mkres 生成 cmd/type/version_<arch>.syso (图标 + 版本信息), go build 按
+    # 目标架构自动链接; 纯 Go 实现, 取代 windres + version.rc, 不再需要 MinGW
+    go run ./tools/mkres -version $ver -icon assets/icon.ico -out cmd/type/version
+    if ($LASTEXITCODE -ne 0) { throw "资源生成失败 (exit $LASTEXITCODE)" }
+    # -trimpath 抹掉源码绝对路径: 少了它, 产物里嵌着构建机的目录结构
+    go build -trimpath -ldflags="-H windowsgui -s -w" -o Type.exe ./cmd/type
+    if ($LASTEXITCODE -ne 0) { throw "go build 失败 (exit $LASTEXITCODE)" }
 
-$f = Get-Item "Type.exe"
-$v = $f.VersionInfo
-Write-Host "构建完成: Type.exe ($([math]::Round($f.Length / 1KB, 1)) KB)"
-Write-Host "  FileVersion:    $($v.FileVersion)"
-Write-Host "  ProductVersion: $($v.ProductVersion)"
+    $f = Get-Item "Type.exe"
+    $v = $f.VersionInfo
+    Write-Host "构建完成: Type.exe ($([math]::Round($f.Length / 1KB, 1)) KB)"
+    Write-Host "  FileVersion:    $($v.FileVersion)"
+    Write-Host "  ProductVersion: $($v.ProductVersion)"
 
-# ── 5. 校验资源真的链进了 exe ─────────────────────────
-# version_<arch>.syso 缺失时 go build 依然成功, 但产物没有版本信息与图标;
-# 读回 exe 核对, 让这种静默失败在构建期就暴露。
-# 上面那条用独立算出的数字比对(与被校验的工具不是同一份实现), 再用
-# tools/pecheck 过一遍 CI 的同一套判据: 架构 + 版本 + DPI manifest + 图标
-if ($v.FileVersion -ne $v4Dot) {
-    throw "exe 版本资源异常: FileVersion = '$($v.FileVersion)', want '$v4Dot' (tools/mkres 是否生效?)"
+    # ── 5. 校验资源真的链进了 exe ─────────────────────────
+    # version_<arch>.syso 缺失时 go build 依然成功, 但产物没有版本信息与图标;
+    # 读回 exe 核对, 让这种静默失败在构建期就暴露。
+    # 上面那条用独立算出的数字比对(与被校验的工具不是同一份实现), 再用
+    # tools/pecheck 过一遍 CI 的同一套判据: 架构 + 版本 + DPI manifest + 图标
+    if ($v.FileVersion -ne $v4Dot) {
+        throw "exe 版本资源异常: FileVersion = '$($v.FileVersion)', want '$v4Dot' (tools/mkres 是否生效?)"
+    }
+    go run ./tools/pecheck -exe Type.exe -version $ver -arch amd64
+    if ($LASTEXITCODE -ne 0) { throw "产物读回校验失败 (exit $LASTEXITCODE)" }
+} finally {
+    $env:GOARCH = $prevGOARCH
+    $env:GOFLAGS = $prevGOFLAGS
 }
-go run ./tools/pecheck -exe Type.exe -version $ver -arch amd64
-if ($LASTEXITCODE -ne 0) { throw "产物读回校验失败 (exit $LASTEXITCODE)" }

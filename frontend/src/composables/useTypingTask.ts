@@ -73,7 +73,10 @@ export function useTypingTask() {
   async function start(text: string, delay: number, forceRaw: boolean, textDirect: boolean): Promise<void> {
     if (isRunning.value) return;
 
-    if (!text.trim()) {
+    // 只拦真正的空文本。空格与换行是合法的输入内容(打一次回车就是按一下回车),
+    // 用 trim() 会把它们连同空文本一起拦掉, 而后端本来就能注入 —— 两层对同一段
+    // 输入给出不同结论。后端也有一道同样的校验, 判据在那里, 这里只是省一次往返
+    if (text.length === 0) {
       status.value = statusOf({ phase: 'error', message: '请输入要模拟键入的文本', progress: -1 });
       return;
     }
@@ -101,10 +104,25 @@ export function useTypingTask() {
   }
 
   function cancel(): void {
-    void cancelTyping();
     stopPolling();
     isRunning.value = false;
     status.value = statusOf({ phase: 'cancel', message: '已取消', progress: -1 });
+
+    // 后端可能在我们写"已取消"之前就已经跑完了(任务刚结束、界面还没刷到那一拍)。
+    // 那种时候"已取消"是句假话: 内容其实已经全部送达, 用户以为没打完、再点一次
+    // 启动就把同一段文本打了两遍。所以点完取消再回看一眼真实状态, 后端保留的
+    // "输入完成"或失败原因要如实显示出来(后端也做了同一件事: Cancel 不覆盖已成的结局)
+    const my = chain; // 本代的令牌: 期间又有人启动/取消时不插嘴
+    void (async () => {
+      try {
+        await cancelTyping();
+        const s = await getTypingStatus();
+        if (my !== chain) return;
+        if (s.phase === 'success' || s.phase === 'error') status.value = s;
+      } catch {
+        // 绑定不可用(如用普通浏览器打开 dev server)时保持本地的"已取消"
+      }
+    })();
   }
 
   // WebView2 在窗口退到后台时会挂起页面定时器: 恢复可见/焦点时, 只要任务

@@ -11,6 +11,8 @@ declare global {
     cancelTyping(): Promise<string>;
     /** 切换窗口置顶, 返回新状态 */
     toggleTopmost(): Promise<boolean>;
+    /** 读回当前置顶状态(界面重载后同步按钮用) */
+    getTopmost(): Promise<boolean>;
     /** 轮询读取当前输入状态 */
     getTypingStatus(): Promise<TypingStatus>;
   }
@@ -29,5 +31,7 @@ export const startTyping = (text: string, delay: number, forceRaw: boolean, text
 export const cancelTyping = () => window.cancelTyping();
 
 export const toggleTopmost = () => window.toggleTopmost();
+
+export const getTopmost = () => window.getTopmost();
 
 export const getTypingStatus = () => window.getTypingStatus();

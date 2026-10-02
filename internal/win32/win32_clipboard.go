@@ -142,31 +142,42 @@ func (Clipboard) GetText() string {
 	return string(utf16.Decode(buf[:n]))
 }
 
-// HoldsText 判断剪贴板当前文本是否就是 text。
-// 按原始字节比对而非 GetText 的字符串: CF_UNICODETEXT 内嵌 NUL 时 GetText 会截断,
-// 字符串比较将误判为"用户已改动"而跳过恢复
-func (Clipboard) HoldsText(text string) bool {
+// HoldsText 判断剪贴板当前文本是否就是 text, 并回报这次比对有没有得出结论。
+// 按原始字节比对而非 GetText 的字符串: CF_UNICODETEXT 内嵌 NUL 时 GetText 会在
+// NUL 处截断, 字符串比较将误判为"用户已改动"而跳过恢复。
+//
+// 三个落点各是一种不同的事实, 不许压成一个 bool(旧签名就是那样, 结果"读不到"
+// 被并进"用户已改动", 于是原内容已经丢了还报"输入完成"):
+//   - 打开剪贴板失败、GlobalLock 失败、GlobalSize 返回 0: 读不到 —— known=false,
+//     调用方必须按"没恢复"上报;
+//   - 打开成功但没有 CF_UNICODETEXT: 我们写进去的那份已经不在了(剪贴板被别的
+//     程序或用户重新写过), holds=false、known=true —— 跳过恢复正合期望;
+//   - 读到数据: 按原始字节给出 holds。
+func (Clipboard) HoldsText(text string) (holds bool, known bool) {
 	if !openClipboardWithRetry() {
-		return false
+		return false, false
 	}
 	defer procCloseClipboard.Call()
 	hMem, _, _ := procGetClipboardData.Call(CF_UNICODETEXT)
 	if hMem == 0 {
-		return false
+		// 我们自己 SetClipboardData 过 CF_UNICODETEXT, 取不到即说明剪贴板已被重写
+		return false, true
 	}
 	size, _, _ := procGlobalSize.Call(hMem)
 	if size == 0 {
-		return false
+		// 分不清"这是别人的空块"与"GlobalSize 本身失败", 按读不到处理:
+		// 判成"已改动"会静默跳过恢复, 那正是这条守卫要堵的窟窿
+		return false, false
 	}
 	ptr, _, _ := procGlobalLock.Call(hMem)
 	if ptr == 0 {
-		return false
+		return false, false
 	}
 	buf := make([]byte, int(size))
 	// 拷贝长度不超过缓冲区容量, 防止 GlobalSize 返回奇数时越界
 	procRtlMoveMemory.Call(uintptr(unsafe.Pointer(unsafe.SliceData(buf))), ptr, uintptr(len(buf)))
 	procGlobalUnlock.Call(hMem)
-	return bytes.Equal(buf, encodedText(text))
+	return bytes.Equal(buf, encodedText(text)), true
 }
 
 // clipboardClear 清空剪贴板内容

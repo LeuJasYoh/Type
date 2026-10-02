@@ -67,8 +67,13 @@ func gitGoFiles(rev string) ([]string, error) {
 	return files, nil
 }
 
-// extract 解析源码并返回 {函数名: 函数体文本}。
-// 函数体不含签名, 方法化(仅 receiver 变化)不会产生差异
+// extract 解析源码并返回 {函数键: 函数体文本}。
+// 函数体不含签名, 方法化(仅 receiver 变化)不会产生差异。
+//
+// 边界(别把它当"零行为变化"的唯一证据): 只比对函数体的 token 序列 —— 签名、
+// 参数顺序与返回值、包级常量与变量、结构体字段与 tag 全在视野之外。把时序常量区
+// 里某个值改掉, 函数体一字不动, 本工具照样报"逐字节一致"; 那类改动要靠字面量
+// 断言(如 internal/typing/contract_test.go)去守
 func extract(src string) (map[string]string, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "src.go", src, parser.SkipObjectResolution)
@@ -87,9 +92,40 @@ func extract(src string) (map[string]string, error) {
 		if start < 0 || end > len(src) || end <= start {
 			continue
 		}
-		funcs[fd.Name.Name] = src[start:end]
+		funcs[funcKey(fd)] = src[start:end]
 	}
 	return funcs, nil
+}
+
+// funcKey 函数在比对表里的键: 带 receiver 的方法用 "Receiver.名字"。
+// 只用裸函数名时, 不同结构体的同名方法会互相覆盖, 被覆盖的那个永远不参与比对
+// (旧实现只保留最后一个)。同名但构建标签互斥的文件(devserver_dev.go 与
+// devserver_prod.go)仍会判重名, 由末尾的"新侧重名函数"一行提示出来
+func funcKey(fd *ast.FuncDecl) string {
+	name := fd.Name.Name
+	if fd.Recv == nil || len(fd.Recv.List) == 0 {
+		return name
+	}
+	// receiver 可能是 *T / T / T[P] / *T[P]: 剥掉指针与类型参数, 取类型名
+	t := fd.Recv.List[0].Type
+	for {
+		switch x := t.(type) {
+		case *ast.StarExpr:
+			t = x.X
+			continue
+		case *ast.IndexExpr:
+			t = x.X
+			continue
+		case *ast.IndexListExpr:
+			t = x.X
+			continue
+		}
+		break
+	}
+	if id, ok := t.(*ast.Ident); ok {
+		return id.Name + "." + name
+	}
+	return name // 认不出的 receiver 形状: 退回裸名, 不硬凑一个会走散的键
 }
 
 // normalize 把函数体化成 token 序列, 作为比对的基准。
@@ -311,8 +347,13 @@ func defaultRenamesPath() string {
 	return filepath.Join(filepath.Dir(file), "renames.json")
 }
 
-// bodyLine 返回函数声明所在行(用于差异定位), 找不到时返回 0
-func bodyLine(src, name string) int {
+// bodyLine 返回函数声明所在行(用于差异定位), 找不到时返回 0。
+// 键可能带 "Receiver." 前缀, 比对行首的函数名时只取最后一段
+func bodyLine(src, key string) int {
+	name := key
+	if i := strings.LastIndex(key, "."); i >= 0 {
+		name = key[i+1:]
+	}
 	for i, line := range strings.Split(src, "\n") {
 		if m := funcRe.FindStringSubmatch(line); m != nil && m[1] == name {
 			return i + 1
