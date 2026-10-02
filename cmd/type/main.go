@@ -15,7 +15,7 @@ import (
 	"github.com/jchv/go-webview2"
 )
 
-var version = "1.5.8"
+var version = "1.6.0"
 
 var topmostFlag atomic.Bool // 窗口置顶开关(与输入任务无关, 归装配层)
 
@@ -47,11 +47,32 @@ func main() {
 	defer w.Destroy()
 	w.SetTitle("Type " + version)
 
-	// 先取窗口句柄: 尺寸要按该窗口所在显示器的 DPI 换算成物理像素
+	// 先取窗口句柄: 尺寸要按该窗口所在显示器的 DPI 与工作区换算
 	// (manifest 声明了 PerMonitorV2, 见 internal/win32 的 ScaledForDPI)
 	hw := uintptr(w.Window())
-	cw, ch := win32.ScaledForDPI(hw, 540, 450)
-	w.SetSize(cw, ch, webview2.HintFixed)
+
+	// 尺寸与位置只在启动时算一次, 之后固定:
+	//   ① 按窗口所在显示器的工作区定尺寸(内置 540×480 ~ 720×600 的上下限,
+	//      见 win32.InitialWindowSize), 4K 上不会缩成一张邮票;
+	//   ② 位置在该工作区内居中。
+	// 刻意不做的两件事, 别顺手加回来:
+	//   - 不响应 WM_DPICHANGED(把窗口拖到缩放比例不同的显示器上重新适配)。
+	//     用户明确不要这个; 而且窗口侧改尺寸与内容侧 Chromium 改缩放若不同步,
+	//     就会变成"渲染缩放 ≠ 显示器缩放", 那才是真正的位图拉伸发虚;
+	//   - 不放宽窗口样式。HintFixed 会去掉 WS_THICKFRAME|WS_MAXIMIZEBOX,
+	//     窗口尺寸固定、右下角拖不动(internal/win32 的 TestWindowSizeIsFixed
+	//     读回样式位与命中测试钉着这条)。HintFixed 省不掉, 那是"不可缩放"的
+	//     唯一来源 —— 只调 SetWindowClientRect 的话窗口仍是可拖大的
+	if cw, ch, wx, wy, ok := win32.WindowSizeForDisplay(hw); ok {
+		// 尺寸与位置一次到位(AdjustWindowRect 反推窗口矩形), 之后 SetSize
+		// 会用同一个尺寸再摆一次位置不动: 实测客户区仍等于请求值
+		win32.SetWindowClientRect(hw, wx, wy, cw, ch)
+		w.SetSize(cw, ch, webview2.HintFixed)
+	} else {
+		// 取不到显示器信息: 退回默认尺寸, 位置交给系统
+		cw, ch := win32.ScaledForDPI(hw, win32.MinWindowW, win32.MinWindowH)
+		w.SetSize(cw, ch, webview2.HintFixed)
+	}
 
 	// 设置窗口图标（首次 + 延迟重试）
 	win32.RetrySetIcon(hw)

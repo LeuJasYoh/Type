@@ -254,13 +254,14 @@ func TestSkippableFormat(t *testing.T) {
 // ─── 窗口类图标索引(仅测试用到的 Win32 入口) ──────────
 
 var (
-	procRegisterClassExW = user32.NewProc("RegisterClassExW")
-	procCreateWindowExW  = user32.NewProc("CreateWindowExW")
-	procDefWindowProcW   = user32.NewProc("DefWindowProcW")
-	procGetClassLongPtrW = user32.NewProc("GetClassLongPtrW")
-	procLoadIconW        = user32.NewProc("LoadIconW")
-	procDestroyWindow    = user32.NewProc("DestroyWindow")
-	procUnregisterClassW = user32.NewProc("UnregisterClassW")
+	procRegisterClassExW  = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW   = user32.NewProc("CreateWindowExW")
+	procDefWindowProcW    = user32.NewProc("DefWindowProcW")
+	procGetClassLongPtrW  = user32.NewProc("GetClassLongPtrW")
+	procSetWindowLongPtrW = user32.NewProc("SetWindowLongPtrW")
+	procLoadIconW         = user32.NewProc("LoadIconW")
+	procDestroyWindow     = user32.NewProc("DestroyWindow")
+	procUnregisterClassW  = user32.NewProc("UnregisterClassW")
 )
 
 // WNDCLASSEXW 仅测试用: 注册一个窗口类, 作为类图标索引的写入对象
@@ -360,5 +361,178 @@ func TestApplyWindowIconClassIndex(t *testing.T) {
 			t.Errorf("%s 未被接受: 读回 0x%X, want 0x%X —— 索引值写错了?",
 				c.name, got, icon)
 		}
+	}
+}
+
+// TestScaledByDPIRoundsToNearest 逻辑尺寸 → 物理像素的换算必须四舍五入。
+//
+// 曾经的实现是 `w * dpi / 96`(整数除法, 向下截断): 在 125% 这类非整数倍缩放
+// 下会稳定地少一个物理像素(1024 @ 120dpi → 1023)。客户区尺寸同时决定
+// WebView2 的渲染表面大小, 表面比客户区小 1 像素就要重采样, 表现为文字发虚。
+// 这里把 125%/150% 两档的"截断会给错值"钉死, 换回截断即刻变红
+func TestScaledByDPIRoundsToNearest(t *testing.T) {
+	cases := []struct {
+		name      string
+		w, h, dpi int
+		wantW     int
+		wantH     int
+		note      string
+	}{
+		{"100%", 540, 480, 96, 540, 480, ""},
+		{"125% 整除档", 1024, 640, 120, 1280, 800, ""},
+		{"125% 半像素进位", 1000, 601, 120, 1250, 751, "601*120/96 = 751.25; 截断会给 750"},
+		{"150%", 540, 480, 144, 810, 720, ""},
+		{"175%", 540, 480, 168, 945, 840, ""},
+		{"200%", 614, 512, 192, 1228, 1024, ""},
+		{"畸形 DPI(低于 96)按 96 处理", 540, 480, 0, 540, 480, ""},
+	}
+	for _, c := range cases {
+		w, h := scaledByDPI(c.w, c.h, c.dpi)
+		if w != c.wantW || h != c.wantH {
+			t.Errorf("%s: scaledByDPI(%d,%d,%d) = (%d,%d), want (%d,%d) %s",
+				c.name, c.w, c.h, c.dpi, w, h, c.wantW, c.wantH, c.note)
+		}
+	}
+
+	// 单独钉一条"截断与四舍五入会得到不同结果"的输入: 599 @120dpi = 748.75,
+	// 四舍五入得 749, 截断得 748。这条保证将来有人换回截断时必然变红
+	// (不能只靠上面那张表 —— 表里全是能整除或进位方向一致的样例)
+	if got, _ := scaledByDPI(599, 1, 120); got != 749 {
+		t.Errorf("599 @120dpi = %d, want 749 (截断会给 748)", got)
+	}
+}
+
+// TestInitialWindowSize 尺寸策略: 以高度为主(上限 540 是刻意的, 见常量注释),
+// 宽度按 6:5 推出, 小屏/workH 偏矮时按工作区收窄
+func TestInitialWindowSize(t *testing.T) {
+	cases := []struct {
+		name  string
+		workW int
+		workH int
+		wantW int
+		wantH int
+	}{
+		// 1920×1040 工作区(1080p 减任务栏): 49% = 509, 宽 509*6/5 = 610
+		{"1080p 100%", 1920, 1040, 610, 509},
+		// 1520×912 工作区(本机实测: 125% 缩放下的逻辑工作区 1536×912):
+		// 49% = 446 → 抬到下限 480, 宽按 480 推 = 576
+		{"1536×912 工作区", 1536, 912, 576, 480},
+		// 高工作区: 49% 超过上限, 压到 540 → 宽 648
+		{"高工作区压上限", 1920, 1174, 648, 540},
+		// 超宽屏不会因为宽而变高(只与工作区高度有关)
+		{"21:9 超宽", 3440, 1400, 648, 540},
+		// 小屏: 49% = 294 → 抬到下限 480, 宽 480*6/5 = 576
+		{"1024×600 小屏", 1024, 600, 576, 480},
+		// 工作区比下限还矮: 高度被工作区压到 440, 宽度按收窄后的高度推得 528,
+		// 再被 MinWindowW(540)抬回来 —— 屏幕矮不代表可以把窗口弄得更窄
+		{"工作区偏矮", 1024, 440, 540, 440},
+	}
+	for _, c := range cases {
+		w, h := InitialWindowSize(c.workW, c.workH)
+		if w != c.wantW || h != c.wantH {
+			t.Errorf("%s: InitialWindowSize(%d,%d) = (%d,%d), want (%d,%d)",
+				c.name, c.workW, c.workH, w, h, c.wantW, c.wantH)
+		}
+		if w < MinWindowW || w > MaxWindowW {
+			t.Errorf("%s: 宽度 %d 越界 [%d,%d]", c.name, w, MinWindowW, MaxWindowW)
+		}
+		if h > MaxWindowH {
+			t.Errorf("%s: 高度 %d 超过上限 %d", c.name, h, MaxWindowH)
+		}
+		if c.workH > MinWindowH && h > c.workH {
+			t.Errorf("%s: 高度 %d 超过工作区 %d", c.name, h, c.workH)
+		}
+	}
+}
+
+// TestMonitorWorkArea 真建一个窗口读它的显示器工作区与目标尺寸:
+// 这条同时验证 MonitorFromWindow / GetMonitorInfoW / GetDpiForWindow /
+// AdjustWindowRect 几个入口真的可用 —— DLL 清单页里名字写错时, syscall 只在
+// 首次调用时报错, 不调就永远不知道
+func TestMonitorWorkArea(t *testing.T) {
+	hwnd := newTestWindow(t, "WorkArea").create(t, "TypeWorkAreaTest")
+	work, ok := MonitorWorkArea(hwnd)
+	if !ok {
+		t.Skip("当前环境拿不到显示器工作区(无头会话?), 跳过")
+	}
+	if work.Right <= work.Left || work.Bottom <= work.Top {
+		t.Fatalf("工作区矩形非法: %+v", work)
+	}
+
+	cw, ch, x, y, haveSize := WindowSizeForDisplay(hwnd)
+	if !haveSize {
+		t.Fatal("工作区读到了, 尺寸计算却报告失败")
+	}
+	if cw <= 0 || ch <= 0 {
+		t.Fatalf("窗口尺寸非法: %dx%d", cw, ch)
+	}
+	// 位置必须在工作区内, 且整窗不越界
+	if x < int(work.Left) || y < int(work.Top) {
+		t.Errorf("窗口位置 (%d,%d) 落在工作区 %+v 之外", x, y, work)
+	}
+	if x+cw > int(work.Right) || y+ch > int(work.Bottom) {
+		t.Errorf("窗口 (%d,%d)+%dx%d 越出工作区 %+v", x, y, cw, ch, work)
+	}
+
+	// 目标客户区尺寸必须能折回上下限之内: 这是"请求的尺寸落在策略区间里"的
+	// 判据, 也是 ClearType 清晰度链条上"表面 == 客户区"的前提
+	dpi, _, _ := procGetDpiForWindow.Call(hwnd)
+	if dpi < 96 {
+		dpi = 96
+	}
+	lw, lh := int(cw)*96/int(dpi), int(ch)*96/int(dpi)
+	if lw < MinWindowW-1 || lw > MaxWindowW+1 || lh < MinWindowH-1 {
+		t.Errorf("客户区折回逻辑尺寸 = %dx%d, 越出 [%d,%d]x[%d,∞)",
+			lw, lh, MinWindowW, MaxWindowW, MinWindowH)
+	}
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// TestWindowSizeIsFixed 窗口尺寸必须真的固定: 这是用户明确定下的行为
+// ("启动时按显示器定一次, 之后不可手动缩放")。
+//
+// 不能只信源码: 库的 SetSize(HintFixed) 里那两行 `style &^= WS_THICKFRAME|
+// WS_MAXIMIZEBOX` 看着就够, 但实测才是判据。这里建一个真窗口, 走一遍
+// SetWindowClientRect + 同样的样式处理, 然后做两件事:
+//
+//	① 读回样式位: WS_THICKFRAME 与 WS_MAXIMIZEBOX 必须都已清掉;
+//	② 在窗口右下角做一次 WM_NCHITTEST: 必须是 HTCLIENT(1), 出现
+//	   HTBOTTOMRIGHT(17) 就说明那里是个可拖拽的边框 —— 用户一拖就变尺寸
+//
+// 客户区尺寸同时核对: 请求多少就该是多少(表面与客户区一致的前提)
+func TestWindowSizeIsFixed(t *testing.T) {
+	hwnd := newTestWindow(t, "Fixed").create(t, "TypeFixedSizeTest")
+
+	const wantW, wantH = 600, 400
+	SetWindowClientRect(hwnd, 100, 100, wantW, wantH)
+
+	// 复刻库 SetSize(HintFixed) 的样式处理(不引 webview2 依赖)
+	style, _, _ := procGetWindowLongPtrW.Call(hwnd, ^uintptr(15)) // GWL_STYLE = -16
+	style &^= 0x00040000 | 0x00010000                             // WS_THICKFRAME | WS_MAXIMIZEBOX
+	procSetWindowLongPtrW.Call(hwnd, ^uintptr(15), style)
+
+	got := WindowStyle(hwnd)
+	if got&0x00040000 != 0 {
+		t.Error("WS_THICKFRAME 仍在: 窗口右下角可拖拽, 尺寸不固定")
+	}
+	if got&0x00010000 != 0 {
+		t.Error("WS_MAXIMIZEBOX 仍在: 最大化键可用, 尺寸不固定")
+	}
+
+	if hit := HitTestBottomRight(hwnd); hit != 1 {
+		t.Errorf("右下角 WM_NCHITTEST = %d, want 1(HTCLIENT) —— 17(HTBOTTOMRIGHT) 表示可拖拽缩放", hit)
+	}
+
+	// 客户区必须等于请求值: SetWindowClientRect 的反推若把标题栏算漏,
+	// 这里会少一截 —— 界面底部被切、但表面与客户区仍一致, 不会发虚, 更难发现
+	if w, h, ok := ClientPhysicalSize(hwnd); !ok || w != wantW || h != wantH {
+		t.Errorf("客户区 = %dx%d (ok=%v), want %dx%d: AdjustWindowRect 的反推不对?",
+			w, h, ok, wantW, wantH)
 	}
 }

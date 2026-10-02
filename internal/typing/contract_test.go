@@ -122,14 +122,20 @@ func TestPhaseValuesFrozen(t *testing.T) {
 	}
 }
 
-// 初始状态是前端第一次轮询读到的: idle + 全零值, 那时不该有任何进度或目标窗口
+// 初始状态是前端第一次轮询读到的: idle, 消息与目标窗口为空, 而 progress 必须是 -1。
+//
+// progress 不是 0 而是 -1 是有讲究的: 0 的含义是"进度 0%", 前端按 progress >= 0
+// 决定显不显示进度条。写成 0 会让空闲态的界面在**启动时**长出一条高度 10px 的空
+// 进度轨道(把上方 UI 顶上去), 而跑过一次任务之后状态被写成 -1、那条轨道又消失 ——
+// 表现为"只有第一次启动才看得见"的怪现象。字面量断言在这里尤其重要: 这条 bug
+// 正是"结构体零值恰好等于一个合法取值"造成的, 靠引用常量断言是看不出来的
 func TestInitialStatusIsIdleZeroValue(t *testing.T) {
 	svc := NewTypingService(newFakeInjector(), &fakeClipboard{}, fakeForeground{title: "记事本"})
 	raw, err := json.Marshal(svc.Status())
 	if err != nil {
 		t.Fatalf("序列化初始状态失败: %v", err)
 	}
-	want := `{"phase":"idle","message":"","progress":0,"secondsLeft":0,"targetWindow":""}`
+	want := `{"phase":"idle","message":"","progress":-1,"secondsLeft":0,"targetWindow":""}`
 	if string(raw) != want {
 		t.Errorf("初始状态 JSON 已漂移:\n  实际: %s\n  期望: %s", raw, want)
 	}

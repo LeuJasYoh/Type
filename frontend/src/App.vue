@@ -3,10 +3,22 @@ import { computed, onMounted, ref } from 'vue';
 import StatusBar from './components/StatusBar.vue';
 import { useTheme } from './composables/useTheme';
 import { useTypingTask } from './composables/useTypingTask';
+import { useUiScale } from './composables/useUiScale';
 import { getTopmost, toggleTopmost } from './ipc';
 
 // ─── 主题 ───
 const { theme, toggle: toggleTheme } = useTheme();
+
+// ─── 观感缩放 ───
+// CSS 里的细节尺寸直接吃 --ui-scale; 图标边长是 SVG 属性、CSS 变量够不着,
+// 所以在这里按同一个系数算。viewBox 与 stroke-width 是图形自身的比例, 不参与
+const { scale } = useUiScale();
+
+function iconSize(base: number): number {
+  // 取两位小数: 576 宽这种非整数倍下 15 * 1.0666… 会算出 16.000000000000004,
+  // 直接写进属性很难看, 而两位小数的差异远在渲染精度之下
+  return Math.round(base * scale.value * 100) / 100;
+}
 
 // ─── 表单状态 ───
 const text = ref('');
@@ -57,12 +69,12 @@ onMounted(async () => {
         @click="toggleTheme"
       >
         <!-- 太阳：暗色时显示，点击回浅色 -->
-        <svg v-if="theme === 'dark'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden>
+        <svg v-if="theme === 'dark'" :width="iconSize(15)" :height="iconSize(15)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden>
           <circle cx="12" cy="12" r="4" />
           <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
         </svg>
         <!-- 月亮：浅色时显示，点击进暗色 -->
-        <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden>
+        <svg v-else :width="iconSize(15)" :height="iconSize(15)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden>
           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
         </svg>
       </button>
@@ -123,11 +135,11 @@ onMounted(async () => {
 
     <div class="actions-row">
       <button class="btn btn-primary" :disabled="isRunning" @click="onStart">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden><polygon points="5 3 19 12 5 21 5 3" /></svg>
+        <svg :width="iconSize(16)" :height="iconSize(16)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden><polygon points="5 3 19 12 5 21 5 3" /></svg>
         启动
       </button>
       <button class="btn btn-secondary" :disabled="!isRunning" @click="onCancel">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+        <svg :width="iconSize(16)" :height="iconSize(16)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
         取消
       </button>
     </div>

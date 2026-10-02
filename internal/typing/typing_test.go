@@ -306,15 +306,20 @@ func isTerminal(p TypingPhase) bool {
 
 // ─── 用例 ─────────────────────────────────────────────
 
-// 初始状态契约: 服务构造后即为 idle 零值状态, 前端首次轮询读到的是它
+// 初始状态契约: 服务构造后即为 idle 状态, 前端首次轮询读到的是它。
+// progress 必须是 -1 而不是零值 0: 0 的含义是"进度 0%", 前端据此会显示进度条,
+// 于是空闲态的界面在启动时长出一条 10px 的空轨道(跑过一次任务后又消失)
 func TestServiceInitialState(t *testing.T) {
 	svc := newTestService(newFakeInjector(), &fakeClipboard{}, noSleep)
 	st := svc.Status()
 	if st.Phase != PhaseIdle {
 		t.Fatalf("初始 phase = %s, want idle", st.Phase)
 	}
-	if st.Message != "" || st.Progress != 0 || st.SecondsLeft != 0 || st.TargetWindow != "" {
-		t.Errorf("初始状态字段应为零值, got %+v", *st)
+	if st.Message != "" || st.SecondsLeft != 0 || st.TargetWindow != "" {
+		t.Errorf("初始状态的消息/秒数/目标窗口应为零值, got %+v", *st)
+	}
+	if st.Progress != -1 {
+		t.Errorf("初始 progress = %d, want -1(隐藏); 0 会让前端画出空进度轨道", st.Progress)
 	}
 }
 

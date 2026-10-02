@@ -82,6 +82,15 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 版本号规则：**由人决定这次涨多少**，新功能进次版本号（1.5→1.6），修缺陷进补丁号（1.5.3→1.5.4），
 可带预发布后缀（如 `1.6.0-rc.1`）。写入位置只有 `cmd/type/main.go` 一处。
 
+判断口径（2026-10 补，此前每次发版都要重新讨论一遍）：**用户能自己看出来"多了一样东西"就进
+次版本号** —— 新增开关、新增注入通道、窗口/布局这类看得见的行为变化都算；内部重构、文案
+微调、CI 与工具链改动、纯缺陷修复一律进补丁号。1.5.3 曾把"焦点漂移防护"（用户可见的新能力）
+放进补丁号，那是偏差不是先例，别再照它办。
+
+**文档必须先于发版落地**（用户明确要求）：README / AGENTS / 发布说明要在**打标签之前**已经
+提交到远端，否则 Release 页面与仓库文档对不上，而 Release 正文是用户唯一会读的那份说明。
+顺序固定为：改代码 → 同步文档与发布说明 → 构建产物 → 提交推送 → 打标签。
+
 ## 布局与单一来源
 
 - 分三层三包，依赖方向单向：平台层 → 业务层，装配层 → 两者
@@ -103,19 +112,44 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
   因为 src 的导入是按打包器写的）。tsconfig 只含 `src/**`，测试不进类型检查与打包
 - `assets/`：图标源图与产物（screenshot-light.png / screenshot-dark.png 为 README
   配图，README 用 `<picture>` + `prefers-color-scheme` 引用，GitHub 会自行按访问者主题切换）
-- **README 配图的复现方式**（1080×900，2 倍像素密度）：
+- **README 配图的复现方式**（1152×960，即逻辑 576×480 / 2 倍像素密度，与尺寸下限档一致）：
   ① 临时页 = `internal/web/dist/index.html` 开头插一段打桩脚本（定义 `startTyping` /
-  `getTypingStatus` 等四个绑定并自动摆出运行态），再补一段停用 transition/animation 的样式
-  （否则进度条的入场动画在无头下停在 0 高度）；用本地 HTTP 服务提供，`file://` 下
-  localStorage 不可用，主题没法显式指定；
+  `getTypingStatus` 等四个绑定，并按运行态摆出目标窗口条与进度条），再补一段停用
+  transition/animation 的样式（否则进度条的入场动画在无头下停在 0 高度）；用本地 HTTP 服务
+  提供，`file://` 下 localStorage 不可用，主题没法显式指定；
   ② 用系统已装的 Edge 无头截图：`msedge --headless=new --force-device-scale-factor=2
-  --window-size=540,450 --virtual-time-budget=8000 --user-data-dir=<临时目录>
-  --screenshot=<out.png> <URL>`，不弹窗口、不碰用户桌面。
+  --window-size=576,480 --virtual-time-budget=6000 --user-data-dir=<临时目录>
+  --screenshot=<out.png> "<URL>?theme=<light|dark>"`，不弹窗口、不碰用户桌面。
+  **两张图必须同一次生成**（同一份产物、同一档尺寸），否则浅色与深色会对不上。
+  改窗口尺寸下限（`MinWindow*`）时记得一起重截，图里的界面尺寸就是那一档。
   两个已验证死路，别再走：内置浏览器截图通道在非 1:1 像素密度下会把画面平铺成多份；
   截真实窗口（改窗口尺寸/截屏）会干扰用户桌面。`<picture>` 是 GitHub 明确支持的特性
   （渲染时会被包一层自家的 `themed-picture`），配图用 `<p align="center">` 居中。
   **`<img>` 不要写死 `width`**：留空时按 GitHub 的 `max-width:100%` 铺满正文列
   （与旧 markdown 配图观感一致），写死会明显变小
+- **界面几何测量：`frontend/tools/layout-probe.mjs`**（改版式、定尺寸、怀疑"文案会不会
+  被裁"时先用它，别靠读 CSS 估）：
+
+  ```
+  node frontend/tools/layout-probe.mjs --sizes 576x480,610x509,648x540 --shot
+  ```
+
+  它把 `internal/web/dist/index.html`（构建产物，**先跑 `npm run build` 让它是最新的**）
+  复制到临时目录，注入打桩的五个绑定与收集脚本，用无头 Edge 逐档量真实几何：`scrollHeight`
+  vs `clientHeight`（裁不裁）、`scrollWidth` vs `clientWidth`（横向溢出）、`.input-wrap`
+  与 `.status-bar` 实测高、状态块是否贴底、文案折几行。`--scenario full` 加目标条与进度条
+  （元素最全的一档），`--shot` 另存截图，`--out <临时目录>` 换工作目录。
+  三个踩过的坑：① 起 Edge 必须用异步 `spawn`，`spawnSync` 会锁住同进程里的 HTTP 服务、
+  Edge 永远拿不到页面；② `--dump-dom` 下 `--window-size` 是**含窗口框**的外框（本机
+  大 26×93）且系统有最小窗口宽度（视口到不了 496 以下），`--screenshot` 下则**等于视口** ——
+  截图直接用目标尺寸，不要用校准后的外框尺寸；③ 每档必须用独立的 `--user-data-dir`，
+  撞车时 Edge 静默退出码 21。收集脚本自身的隐藏元素要用 `position:fixed`，`left:-9999px`
+  那不换行的元素会把 `documentElement.scrollWidth` 顶大，报出页面并不存在的横向溢出
+- **文案宽度只信实测**：最长的那条终态文案 `未切换到目标窗口：…`（37 字）在 540 宽下实测
+  `textW = 446px`、状态栏可用 470px，**折 1 行**；两行要到 ≤496 宽才出现。2026-10 之前
+  文档里的"折 2 行/3 行"是按"汉字 26px 宽"估出来的（错了一倍：13px 字号下 CJK 回退字体
+  一个汉字就是 13px），据此定出的"450 高会被裁"结论不成立 —— 拿不准就用上面那个探针量，
+  别用字符数乘宽度的估算
 - `release-notes/`：各版本的发布说明（`v<版本>.md`），发布时原样作为 Release 正文
 - `testdata/`：手工测试页（paste-guard.html / completion-guard.html），无任何自动引用；用法写在文件头注释里
 - `tools/`：构建与验证期工具，都不进产品链路
@@ -368,15 +402,87 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   预期对比、title 遥测）；勿带 `?allow-paste=1` 做 Type 实测，那是停用
   粘贴拦截、供自动化注入的诊断模式
 
+### 排障方法(血的教训)
+
+- **先沿数据流找源头, 再怀疑表现层**（2026-10，一个空进度轨道花了很久才定位）：现象在界面上
+  （"启动时空闲态多出一条空进度轨道"），但根因在后端初始状态发错了值（`progress: 0` 而不是
+  `-1`），而**仓库里早就写着答案**：`internal/typing/contract_test.go` 的冻结初始状态
+  `{"phase":"idle",...,"progress":0,...}` 一字不差地摆着那个错误取值。排障顺序应当是
+  **① 端点的真实取值 → ② 消费方怎么解释它 → ③ 才轮到样式/渲染**；反过来从 CSS 倒推，
+  会得到"透明度不可靠""合成层有问题"这类看似有理、实际全错的结论（本仓库真栽过：两次归因
+  都指向渲染，而 CSS 从来不是原因）。
+- **界面上"某个元素不该在"时，先问"它是被哪个值拉活/撑开的"**：`.progress-wrap` 的高度来自
+  `.active` 类，`.active` 来自 `progress >= 0`，`progress` 来自后端状态 —— 顺着这条链读三处
+  代码就能定位，不必抓图。**读一遍产生该状态的那几行代码，比对着截图量十次像素更省事。**
+- **冻结契约文件不只是"改代码时要同步"的清单，它本身就是现状说明书**：`contract_test.go`
+  的字面量 JSON、`cmd/type/contract_test.go` 里的签名表，都是"程序当下真实契约"的权威记录。
+  现象与它们对不上时，先怀疑实现对不上契约，再怀疑契约本身该不该改。
+- 取证工具本身也会骗人：抓真窗口前确认没有残留进程（单实例守卫会让新进程静默退出，你抓到的
+  是旧窗口）；像素判据要能区分相邻元素（本轮两次"以为 CSS 没生效"，一次是旧进程、一次是
+  把边界线当成了轨道）。**结论要落到"哪个值/哪一行代码产生它"，而不是"图上看起来像"。**
+
 ### 其它不变量
 
+- **窗口尺寸只在启动时算一次，之后固定**（`internal/win32` 的 `InitialWindowSize` +
+  `GetMonitorInfoW.rcWork`）：占工作区高度 49%，夹在 540×480 ~ 648×540（逻辑像素），
+  宽度由高度按 6:5 推出，位置在工作区内居中。下限是**保守取值**：实测最长的那条终态
+  文案在 540 宽下只占一行（446px < 可用 470px），状态栏恒为单行 37.5px，两行要到 496 宽
+  才出现（已在官方尺寸之外），所以别按"刚好放下"的更紧数字往下调。
+  三条不许顺手加回来的东西：
+  ① 不响应 `WM_DPICHANGED`、不做跨显示器跟随（用户明确不要；窗口侧改尺寸与内容侧
+  Chromium 改缩放一旦不同步，就是"渲染缩放 ≠ 显示器缩放"的位图拉伸，正是发虚的来源）；
+  ② 不放宽窗口样式 —— `SetSize(HintFixed)` 去掉 `WS_THICKFRAME|WS_MAXIMIZEBOX` 是
+  "不可拖大"的唯一来源，`TestWindowSizeIsFixed` 读回样式位并用 `WM_NCHITTEST` 命中测试
+  钉着（只调 `SetWindowClientRect` 的话窗口仍可拖大，A/B 实测过）；
+  ③ 不在运行时调 `SetProcessDpiAwarenessContext`。
+  `SetWindowClientRect` 用 `AdjustWindowRect` 把客户区尺寸反推成窗口矩形 —— 少了这一步
+  客户区会比目标矮一个标题栏（界面底部被切，而表面与客户区仍一致，不会发虚、更难发现）。
+  实测留档（125% / 120 DPI 机器）：请求 864×719 物理 → `GetClientRect` 读回 864×719，
+  折回逻辑 720×600 逐像素相等，说明 WebView2 渲染表面与客户区同源、无重采样
+  （那次实测时的上限是 720×600，后来上限收到 648×540，机制不变）
+- **`ScaledForDPI` 的取整必须四舍五入**（`roundDiv`，两个方向共用）：整数除法的截断在
+  非整数倍缩放下会稳定少一个物理像素（125% 下 1024 → 1023），而客户区尺寸同时决定
+  WebView2 的渲染表面大小，差一像素就要重采样。本机实测 DPI 为 120（非 96 整数倍），
+  这类机器正是误差最容易露头的地方，`TestScaledByDPIRoundsToNearest` 钉着
+- 前端的 `--ui-scale`（`frontend/src/composables/useUiScale.ts` 注入）只许缩放**数值型
+  细节**：内边距、间距、圆角、控件高度、图标边长。`border-width` 与 `font-size` 永不参与
+  —— 小数像素边框会渲染成深浅不一的虚边，而字号是布局的输入，跟着缩放会把输入区高度、
+  状态栏高度、字数徽标全变成联动量。默认值与 540 宽档恒为 1，保证默认档渲染逐像素不变
+- **空闲态不许有进度条：初始 `progress` 必须是 -1**（2026-10 修，症状是"只有第一次启动
+  才看得见一条空进度轨道"）：`progress` 的语义是 **0~100 表示进度，-1 表示隐藏**，前端按
+  `progress >= 0` 决定显不显示进度条（`StatusBar.vue` 的 `progressActive`）。而
+  `TypingStatus.Progress` 是 int，**零值恰好等于一个合法取值 0**：`NewTypingService` 里
+  只写 `&TypingStatus{Phase: PhaseIdle}` 就会把 `progress: 0` 发给前端，于是空闲态的界面在
+  启动时长出一条高度 10px 的空轨道、把上方 UI 顶上去；跑过一次任务后所有状态路径都写 -1，
+  那条轨道又消失 —— 看起来像"第一次启动的幻觉"。**给结构体写字面量时，凡是"有几个合法取值、
+  其中一个是零值"的字段都要显式赋值**，`TestServiceInitialState` 与
+  `TestInitialStatusIsIdleZeroValue` 用字面量 JSON 钉着 -1。
+  配套的 CSS 保险（不是根因，但保留）：`.progress-wrap` 显隐同时改 `height`（0 ↔ 10px，
+  这是"上方 UI 被挤上去"的动效来源，用户要的就是它）、`opacity`、`visibility`，并且
+  `.progress-track` 空闲时 `background: transparent`（只在 `.active` 下给轨道色）——
+  让某样东西看不见时，除了不透明度，最好让它自己也没有可画的东西
+- **状态栏高度写死为一行**：`.status-bar` 的 `height: calc(13px * 1.5 + 16px + 2px)` = 37.5px
+  （`line-height` 是无单位 1.5、跟着字号解析，写高度时必须跟着写 1.5），文案 `nowrap` +
+  省略号截断，避免文案折行顶动输入框。边界：省略号只在文案超出一行时出现，而实测官方尺寸
+  （540~648 宽）下最长的那条终态文案占一行、宽 446px、可用 470px，正常路径看不到省略号。
+  **判断文案有没有被截断不能只看 `scrollWidth > clientWidth`**：两个值都取整，差 1~2px 时
+  会假报"被截"（540 档实测 `scrollWidth 446 / clientWidth 444`，而截图里文案完整无省略号）——
+  以截图为准
+- **抓真窗口取证的三个坑**（2026-10，用 GDI `PrintWindow` + `PW_RENDERFULLCONTENT` 抓
+  `Type.exe` 客户区时踩到）：① 抓之前**必须先确认没有 Type 进程在跑** —— 单实例守卫会让
+  新进程静默退出，接着你抓到的是**旧进程的窗口**，于是"改了没生效"的结论完全是假的
+  （本仓库踩过一次：据此以为 CSS 没生效，其实是量到了上一个构建的窗口）；
+  ② 宿主脚本要先声明 DPI 感知（`SetProcessDpiAwarenessContext(-4)` 或 `SetProcessDPIAware()`），
+  否则 `GetClientRect` 返回的是虚拟化后的逻辑坐标，抓出来是"左上角被裁掉一块"的图；
+  ③ PowerShell 宿主脚本用**纯 ASCII**（或带 UTF-8 BOM），无 BOM 的中文脚本会被 5.1 按 GBK
+  解码吞掉引号，报成"字符串缺少终止符"（与 `build.ps1` 的 BOM 那条同源）
 - **DPI 感知不能丢**（v1.5.1 换 webview 绑定时踩过）：进程 DPI 感知由 `tools/mkres`
   生成的 manifest 声明（PerMonitorV2）。旧库是在运行时调 `SetProcessDpiAwarenessContext`，
   纯 Go 绑定没有这层，少了 manifest 就会在缩放非 100% 的显示器上被系统做位图拉伸、
   整窗发虚。声明之后窗口坐标**一律按物理像素解释**，逻辑尺寸必须经 internal/win32 的
   `ScaledForDPI` 换算，否则固定尺寸窗口会比预期小两成（旧库在内部做过同一件事）。
-  跨不同缩放显示器拖动时的重新适配（WM_DPICHANGED）需要子类化窗口过程，当前未做，
-  已记在 README 已知限制里
+  跨不同缩放显示器拖动时**不重新适配**是刻意决定（用户明确不要多显示器跟随），
+  理由与守卫见本章首条，已记在 README 已知限制里
 - Win32 怪癖的注释保留在 internal/win32 的实现内（全角标点 WM_CHAR 绕行、GDI 句柄型
   格式跳过、图标句柄所有权约定），它们是本代码库最有价值的文档，重构时勿删
 - **发布构建一律带 `-trimpath`**（build.ps1 / ci.yml / release.yml 三处）：少了它，产物里

@@ -242,7 +242,15 @@ func NewTypingService(inj TextInjector, cb Clipboard, fg Foreground) *TypingServ
 		foreground: fg,
 		sleep:      time.Sleep,
 	}
-	s.typingStatus.Store(&TypingStatus{Phase: PhaseIdle})
+	s.typingStatus.Store(&TypingStatus{
+		Phase: PhaseIdle,
+		// 必须有: Progress 的零值是 0, 而 0 的含义是"进度 0%"——前端按
+		// progress >= 0 决定显不显示进度条, 漏掉这一项会让空闲态的界面在
+		// 启动时凭空长出一条高度 10px 的空进度轨道, 把上方 UI 顶上去;
+		// 跑过一次任务后状态被写成 -1, 那条空轨道才消失("只有第一次启动
+		// 才看得见"的怪象就是这么来的)。-1 才是"隐藏"
+		Progress: -1,
+	})
 	return s
 }
 
