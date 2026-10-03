@@ -6,6 +6,7 @@
 package main
 
 import (
+	"sync"
 	"sync/atomic"
 
 	"github.com/LeuJasYoh/type/internal/typing"
@@ -15,7 +16,12 @@ import (
 	"github.com/jchv/go-webview2"
 )
 
-var version = "1.6.0"
+var version = "1.6.1"
+
+// maxViewportFixes 内容缩放最多校正几次。正常只有一次(页面报回来的第一个比值),
+// 留第二次是给"创建初期读到一个错的比值、随后自行修正"的兜底; 再往上就不跟了,
+// 免得某个一直在变的读数把窗口摆来摆去
+const maxViewportFixes = 2
 
 var topmostFlag atomic.Bool // 窗口置顶开关(与输入任务无关, 归装配层)
 
@@ -52,7 +58,7 @@ func main() {
 	hw := uintptr(w.Window())
 
 	// 尺寸与位置只在启动时算一次, 之后固定:
-	//   ① 按窗口所在显示器的工作区定尺寸(内置 540×480 ~ 720×600 的上下限,
+	//   ① 按窗口所在显示器的工作区定尺寸(内置 540×480 ~ 648×540 的上下限,
 	//      见 win32.InitialWindowSize), 4K 上不会缩成一张邮票;
 	//   ② 位置在该工作区内居中。
 	// 刻意不做的两件事, 别顺手加回来:
@@ -63,14 +69,21 @@ func main() {
 	//     窗口尺寸固定、右下角拖不动(internal/win32 的 TestWindowSizeIsFixed
 	//     读回样式位与命中测试钉着这条)。HintFixed 省不掉, 那是"不可缩放"的
 	//     唯一来源 —— 只调 SetWindowClientRect 的话窗口仍是可拖大的
-	if cw, ch, wx, wy, ok := win32.WindowSizeForDisplay(hw); ok {
-		// 尺寸与位置一次到位(AdjustWindowRect 反推窗口矩形), 之后 SetSize
-		// 会用同一个尺寸再摆一次位置不动: 实测客户区仍等于请求值
-		win32.SetWindowClientRect(hw, wx, wy, cw, ch)
-		w.SetSize(cw, ch, webview2.HintFixed)
+	//
+	// 顺序也是刻意的: 先让库 SetSize 拿到 HintFixed(不可拖大)并设一次 bounds,
+	// 再用 SetWindowClientRect 把客户区精确摆到目标。反过来的话, 库会用非 DPI 版
+	// 的边框推算再摆一次, 把客户区带回偏差(见 internal/win32 的 windowRectForClient)
+	//
+	// lw/lh 是**设计逻辑尺寸**(内容缩放为 1 时的基准), 留着给下面的内容缩放校正:
+	// 客户区 = 设计逻辑尺寸 × 真实内容缩放, CSS 视口才等于设计尺寸
+	lw, lh := win32.MinWindowW, win32.MinWindowH
+	if plan, ok := win32.PlanForDisplay(hw); ok {
+		lw, lh = plan.LogicalW, plan.LogicalH
+		w.SetSize(plan.ClientW, plan.ClientH, webview2.HintFixed)
+		win32.SetWindowClientRect(hw, plan.X, plan.Y, plan.ClientW, plan.ClientH)
 	} else {
 		// 取不到显示器信息: 退回默认尺寸, 位置交给系统
-		cw, ch := win32.ScaledForDPI(hw, win32.MinWindowW, win32.MinWindowH)
+		cw, ch := win32.ScaledForDPI(hw, lw, lh)
 		w.SetSize(cw, ch, webview2.HintFixed)
 	}
 
@@ -102,6 +115,40 @@ func main() {
 
 	// 前端轮询读取当前输入状态
 	w.Bind("getTypingStatus", svc.Status)
+
+	// 内容缩放校正: CSS 视口 = 客户区物理像素 / 内容缩放, 而内容缩放由 WebView2
+	// 自己定(官方口径是"显示器缩放 × 用户文本大小", 还叠着页面缩放), 并不等于窗口
+	// DPI 缩放。两者不等时视口就不再是设计尺寸: 实测某用户机上窗口按 125% 建成
+	// 720×600 物理像素, 内容却按 1.75 倍渲染, 视口缩到 411×343, 输入框(下限 195px)
+	// 直接压住了选项行 —— 用户看到的是"选项行不见了"。
+	// 这里把页面报回来的真实比值(devicePixelRatio)接住, 反过来让窗口去适配内容缩放;
+	// 比值非法、或按它算出的窗口装不进工作区时保持原尺寸, 由前端的滚动兜底
+	// (见 frontend/src/style.css 的 .section 下限与 .options-row 的 flex-shrink)
+	var (
+		vpMu      sync.Mutex
+		vpSeen    float64
+		vpApplied int
+	)
+	w.Bind("reportViewport", func(dpr float64) error {
+		vpMu.Lock()
+		defer vpMu.Unlock()
+		// 同一个比值只处理一次; 值变了(创建初期可能先报一个错的)允许再校正一次
+		if vpApplied >= maxViewportFixes || dpr == vpSeen {
+			return nil
+		}
+		cw, ch, x, y, ok := win32.WindowClientForScale(hw, lw, lh, dpr)
+		if !ok {
+			// 比值非法, 或按它算出的窗口装不进工作区: 保持原尺寸, 由前端滚动兜底。
+			// 这里刻意不记账(不写 vpSeen): 同一个值以后可能就装得下了(工作区变了),
+			// 记账会把那次机会吃掉
+			return nil
+		}
+		vpSeen = dpr
+		vpApplied++
+		w.SetSize(cw, ch, webview2.HintFixed)
+		win32.SetWindowClientRect(hw, x, y, cw, ch)
+		return nil
+	})
 
 	// 加载界面: 开发构建(-tags dev)指向 Vite dev server 支持 HMR,
 	// 正式构建不含这段代码, 恒加载嵌入的自包含页面

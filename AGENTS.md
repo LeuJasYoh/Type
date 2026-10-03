@@ -227,14 +227,17 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
 
 - `internal/typing/contract_test.go`：冻结文案逐字表 + `TypingStatus` 的 JSON 键集合
   与六个 phase 取值 + 初始状态的整体 JSON；
-- `cmd/type/contract_test.go`：五个 Bind 函数名、`startTyping` 的四个参数与类型、
-  `Status`/`Cancel` 的签名，并读 `frontend/src/ipc.ts` 核对前端那份镜像。
+- `cmd/type/contract_test.go`：六个 Bind 函数名、`startTyping` 的四个参数与类型、
+  `reportViewport` 的一个参数与类型、`Status`/`Cancel` 的签名，并读 `frontend/src/ipc.ts`
+  核对前端那份镜像。
 
 文案断言刻意写成**字面量**而不是引用常量（看着像自我复读，但那正是它的用途：
 别处断言用的是同名常量，改了常量测试照样绿）。新增文案请一并登记进下面两张清单与表。
 
-- webview Bind 函数名：`startTyping` / `cancelTyping` / `toggleTopmost` / `getTopmost` / `getTypingStatus`
-  （`startTyping` 参数：text, delay, forceSendInput, textDirect）
+- webview Bind 函数名：`startTyping` / `cancelTyping` / `toggleTopmost` / `getTopmost` /
+  `getTypingStatus` / `reportViewport`
+  （`startTyping` 参数：text, delay, forceSendInput, textDirect；`reportViewport` 参数：dpr，
+  前端启动时报上来的真实内容缩放，宿主据此让窗口适配内容，见「其它不变量」的内容缩放一条）
 - `TypingStatus` JSON 字段与 phase 枚举值（`frontend/src/types.ts` 是其镜像）
 - 状态机用户可见文案逐字符保持，它们是发布语言的一部分
 - 已冻结文案清单：`剩余 N 秒 — 请聚焦目标窗口...` / `检测到中文，正在操作剪贴板...` /
@@ -344,7 +347,19 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   反复栽了四次）
 - **标志一律不在 `Start` 里清**：清了会同时踩两个坑 —— 抹掉采样窗口里刚到达的
   取消，以及让"取消后立即重启"的第二次启动被重入判定拒掉。给 `runTypingTask`
-  在等到上一任务停手之后再清
+  在等到上一任务停手之后再清。
+  **这一步与 `Start` 之间有一个亚毫秒级的窗口**（2026-10 独立复核 + 实测定位）：
+  `Start` 是在起 goroutine **之前**就占了任务槽的，而任务的 goroutine 要跑到
+  `runTypingTask` 顶部才清标志；用户若在"启动返回"与"任务开工"之间点取消，那次取消
+  会被这行清掉（`Start` 的重入判定随即看到 `prev != nil && !cancelFlag`，于是"取消后
+  立即重启"被拒成 `已有输入任务在运行中`）。GUI 点不出这个时序，产品侧判定为可接受；
+  **但别试图用"看代数再清"来堵**（2026-10 试过，实测无效）：判据读一次代数、再
+  `Store(false)`，两步之间照样能被 `Cancel` 插进去，窗口只是变窄没有消失。
+  真正被修的是**用例的前置条件**：`TestRestartAfterCancelSupersedesOldTask` 以前
+  只等 `waitRunning`（= 槽被占），那不等于任务已开工，于是 30 次独立进程里红 10 次
+  （全量跑时前面的用例预热了调度，反而看不出来），CI 会随机红。现在它等"第一次
+  sleep 被调用"，即任务真的走进倒计时，用例因此确定性通过（40 次独立进程 0 红）。
+  `waitRunning` 的注释也一并改成"只说明任务已被受理"
 - **被判"出发前就取消"的任务必须自己把终态说出来**。它接着 `return` 而不写状态的话，
   界面就停在 `Start` 写下的倒计时上，而倒计时不是终态、前端会一直轮询，
   用户看到永远不动的"剩余 N 秒"。写的时候带 `gen` 守卫，已被新一代接管时不插嘴
@@ -435,11 +450,51 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   "不可拖大"的唯一来源，`TestWindowSizeIsFixed` 读回样式位并用 `WM_NCHITTEST` 命中测试
   钉着（只调 `SetWindowClientRect` 的话窗口仍可拖大，A/B 实测过）；
   ③ 不在运行时调 `SetProcessDpiAwarenessContext`。
-  `SetWindowClientRect` 用 `AdjustWindowRect` 把客户区尺寸反推成窗口矩形 —— 少了这一步
-  客户区会比目标矮一个标题栏（界面底部被切，而表面与客户区仍一致，不会发虚、更难发现）。
+  `SetWindowClientRect` 把客户区尺寸反推成窗口矩形 —— 少了这一步客户区会比目标矮一个
+  标题栏（界面底部被切，而表面与客户区仍一致，不会发虚、更难发现）。2026-10 起这条
+  反推有两处加固：走 `AdjustWindowRectExForDpi`（非 DPI 版在"系统 DPI ≠ 显示器 DPI"的
+  机器上按错的那个算边框，客户区差十几个物理像素），并**读回复核**、差 1 像素以上按差额
+  再摆一次。`AdjustWindowRectExForDpi` 的参数是 5 个 `(lpRect, dwStyle, bMenu, dwExStyle, dpi)`：
+  只传 4 个的话 dpi 取到寄存器残留值，一次实测把 600×400 的请求摆成了 1540×941 的客户区。
   实测留档（125% / 120 DPI 机器）：请求 864×719 物理 → `GetClientRect` 读回 864×719，
   折回逻辑 720×600 逐像素相等，说明 WebView2 渲染表面与客户区同源、无重采样
   （那次实测时的上限是 720×600，后来上限收到 648×540，机制不变）
+- **内容缩放（WebView2 的 rasterization scale）≠ 窗口 DPI 缩放时，界面必然挤爆**（2026-10 修，
+  用户报告"界面挤成一团、选项行整行不见"）：尺寸等式只有一条，
+  **CSS 视口 = 客户区物理像素 ÷ 内容缩放**。窗口尺寸用的是显示器 DPI，内容缩放却由 WebView2
+  自己定（官方口径是"显示器缩放 × 用户文本大小"，还叠着页面缩放），两者不等时视口就不是
+  设计尺寸。实测那台机器（1920×1200、推荐 175%、实际 125%）：窗口按 125% 建成 720×600 物理
+  像素（是对的），内容却按约 1.75 倍渲染，视口缩到 411×343，高 195px 的输入框（`position:
+  relative` + 不透明底，画在静态兄弟行之上）直接盖住了选项行 —— 用户看到的是"少了一整行"，
+  而 DOM 里它一直都在。**判据是量出来的比值，不是猜的**：照片里 36px 的启动按钮是 64 物理
+  像素，64/36 ≈ 1.78。
+  处置（三层，改动前后都别只做一半）：
+  ① 前端启动时把 `devicePixelRatio` 经 `reportViewport` 报给宿主（立刻一拍 + 400ms 一拍，
+  覆盖创建初期读数不稳），宿主用 `WindowClientForScale` 按"设计逻辑尺寸 × 该比值"重设客户区
+  并在工作区内重新居中，最多校正 2 次（同一个比值只处理一次，防来回摆）；
+  ② 按该比值算出的窗口装不进工作区时不校正，由前端兜底：`.section` 的下限 217px
+  （标签 16 + gap 6 + 输入框下限 195，三个数都不参与 `--ui-scale`）与
+  `.options-row/.actions-row/.status-block` 的 `flex-shrink: 0`，让"放不下"表现成滚动条，
+  而不是控件被上一行盖住；
+  ③ 跨显示器拖动仍**不**跟随（既有决定不变），此时界面退化为可滚动。
+  复现配方（不改一行代码）：`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--force-device-scale-factor=1.75`
+  + dev 构建，视口立刻缩到 412×343，症状与用户截图逐项一致；量产品进程里的真实值用 CDP
+  （同一环境变量里再加 `--remote-debugging-port=<port>`，`/json/list` 拿 webSocketDebuggerUrl，
+  `Runtime.evaluate` 读 `devicePixelRatio` 与 `documentElement.clientWidth`）。
+  `go-webview2` 既不设也不暴露 `RasterizationScale`（连 Controller3 的 vtable 都没有），
+  所以"钉死缩放"要动依赖，"量回来再适配"是当前能做且已做的那条路。
+  两处实测补充（独立复核留下）：① 内容缩放 1.75 时 CSS 视口实测是 576×481（设计 480），
+  而客户区物理像素仍是精确的 1008×840 —— 7 个数据点都符合"CSS = ceil(物理 × float32(1/缩放))"，
+  是 1/1.75 的 float32 倒数偏大 1px 所致（机制未逐行验证），多的那 1px 被输入框吸收，无害；
+  ② 契约测试必须**连回调体与调用端一起钉**：只钉签名时，把 `reportViewport` 的回调体掏空成
+  `return nil`、或删掉页面里的上报调用，整套闸门都全绿而校正彻底失效（独立复核实测）。
+  现在的安排是：`cmd/type/contract_test.go` 要求回调体里真的调用 `WindowClientForScale`，
+  并要求 `main.ts` 里出现 `startViewportReporting()`；上报本身抽在
+  `frontend/src/viewportReport.ts`，节拍由 `frontend/test/viewportReport.test.ts` 在行为上钉住
+  （立刻一拍 + 400ms 一拍、报的是 `devicePixelRatio`、绑定不存在时不冒泡，另有一条**不打任何
+  注入、直接走生产默认值**的用例：默认参数被换成空函数时，只有它拦得住）。**只断言"某个
+  表达式在文件里出现过"是拦不住"调用点被删掉"的**，所以调用端必须钉调用点本身；
+  **默认参数也是接线**，钉了内层函数的默认值不等于钉了外层的
 - **`ScaledForDPI` 的取整必须四舍五入**（`roundDiv`，两个方向共用）：整数除法的截断在
   非整数倍缩放下会稳定少一个物理像素（125% 下 1024 → 1023），而客户区尺寸同时决定
   WebView2 的渲染表面大小，差一像素就要重采样。本机实测 DPI 为 120（非 96 整数倍），

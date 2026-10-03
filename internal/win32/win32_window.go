@@ -5,6 +5,7 @@
 package win32
 
 import (
+	"math"
 	"os"
 	"syscall"
 	"time"
@@ -164,36 +165,124 @@ func MonitorWorkArea(hwnd uintptr) (Rect, bool) {
 	return mi.rcWork, true
 }
 
-// WindowSizeForDisplay 算出窗口的目标客户区尺寸与位置(全部物理像素)。
-// ok 为 false 表示取不到显示器信息: 此时返回默认尺寸, 位置交给系统决定
+// WindowPlan 窗口的目标: 设计逻辑尺寸(内容缩放为 1 时的基准) + 客户区物理尺寸 + 位置
+type WindowPlan struct {
+	LogicalW, LogicalH int
+	ClientW, ClientH   int
+	X, Y               int
+}
+
+// PlanForDisplay 算出窗口的目标客户区尺寸与位置(全部物理像素), 并把**设计逻辑尺寸**
+// 一并带出来: 内容缩放与窗口 DPI 缩放不等时, 要拿它乘真实比值重算一次客户区
+// (见 WindowClientForScale)。
+// ok 为 false 表示取不到显示器信息: 调用方退回默认尺寸、位置交给系统决定
 // (调用方用 SetSize 即可), 不让"尺寸算不准"升级成"界面起不来"。
 // hwnd 需要已存在: DPI 与工作区都从它所在的显示器取
-func WindowSizeForDisplay(hwnd uintptr) (w, h, x, y int, ok bool) {
+func PlanForDisplay(hwnd uintptr) (WindowPlan, bool) {
 	work, haveWork := MonitorWorkArea(hwnd)
 	if !haveWork {
-		cw, ch := ScaledForDPI(hwnd, MinWindowW, MinWindowH)
-		return cw, ch, 0, 0, false
+		return WindowPlan{}, false
 	}
-	dpi, _, _ := procGetDpiForWindow.Call(hwnd)
-	if dpi < 96 {
-		dpi = 96
-	}
+	dpi := DPIForWindow(hwnd)
 	// 工作区是物理像素, 先折回逻辑像素再算尺寸, 最后统一换算回物理像素:
 	// 全程只经过一次四舍五入, 不会出现两次取整叠加的漂移
-	workW := int(work.Right-work.Left) * 96 / int(dpi)
-	workH := int(work.Bottom-work.Top) * 96 / int(dpi)
+	workW := int(work.Right-work.Left) * 96 / dpi
+	workH := int(work.Bottom-work.Top) * 96 / dpi
 	lw, lh := InitialWindowSize(workW, workH)
-	cw, ch := scaledByDPI(lw, lh, int(dpi))
+	cw, ch := scaledByDPI(lw, lh, dpi)
 
-	x = int(work.Left) + (int(work.Right-work.Left)-cw)/2
-	y = int(work.Top) + (int(work.Bottom-work.Top)-ch)/2
-	if x < int(work.Left) {
-		x = int(work.Left)
+	plan := WindowPlan{
+		LogicalW: lw, LogicalH: lh,
+		ClientW: cw, ClientH: ch,
+		X: int(work.Left) + (int(work.Right-work.Left)-cw)/2,
+		Y: int(work.Top) + (int(work.Bottom-work.Top)-ch)/2,
 	}
-	if y < int(work.Top) {
-		y = int(work.Top)
+	if plan.X < int(work.Left) {
+		plan.X = int(work.Left)
 	}
+	if plan.Y < int(work.Top) {
+		plan.Y = int(work.Top)
+	}
+	return plan, true
+}
+
+// ─── 内容缩放(WebView2 的 rasterization scale)校正 ───
+//
+// 界面的尺寸等式只有一条: **CSS 视口 = 客户区物理像素 / 内容缩放**。
+// 内容缩放由 WebView2 自己定(官方口径是"显示器缩放 × 用户文本大小", 还叠着页面
+// 缩放), 并不等于窗口 DPI 缩放: 实测某用户机上窗口按 125% 建成 720×600 物理像素,
+// 内容却按约 1.75 倍渲染, 视口被压到 411×343, 输入框(下限 195px、不透明底、
+// position:relative 画在兄弟行之上)直接盖住了选项行 —— 用户看到的是"选项行不见了"。
+// 所以启动后把页面报回来的真实比值接住, 反过来让窗口去适配内容缩放
+
+// maxContentScale 内容缩放的上界。Windows 的显示缩放最大 500%、"文本大小"最大 225%，
+// 两个都拉满也到不了 16 倍；而且那种量级下窗口本来就会因为装不进工作区被拒。
+// 这条上界存在的理由不是覆盖正常配置，而是不让天文数字走进 Win32 的 INT32 矩形：
+// 实测 scale=1e15 时窗口矩形的 int32 截断会让"装不进工作区"的判定读到垃圾值而放行
+const maxContentScale = 16
+
+// ScaledClientSize 设计逻辑尺寸 × 内容缩放 → 客户区物理像素(四舍五入)。
+// 比值非法(≤0 / NaN / ±Inf / 超过 maxContentScale)或算出的尺寸超出 INT32 时返回 (0,0),
+// 调用方按"不校正"处理 —— 这是个全函数, 不会把溢出值交给调用方
+func ScaledClientSize(lw, lh int, scale float64) (int, int) {
+	if math.IsNaN(scale) || math.IsInf(scale, 0) || scale <= 0 || scale > maxContentScale {
+		return 0, 0
+	}
+	fw := math.Round(float64(lw) * scale)
+	fh := math.Round(float64(lh) * scale)
+	// 判定放在 float 上, 不先转 int: 越界的 float→int 转换结果由实现决定
+	if fw < 1 || fh < 1 || fw > math.MaxInt32 || fh > math.MaxInt32 {
+		return 0, 0
+	}
+	return int(fw), int(fh)
+}
+
+// WindowClientForScale 按内容缩放算出窗口的目标客户区尺寸与居中位置(物理像素)。
+// ok=false 有三种情形: 比值非法、算出的尺寸非正、或按它放大的整窗(含边框)装不进
+// 工作区。此时调用方保持原尺寸 —— 宁可让界面滚动, 也不把窗口摆到屏幕外
+func WindowClientForScale(hwnd uintptr, lw, lh int, scale float64) (cw, ch, x, y int, ok bool) {
+	cw, ch = ScaledClientSize(lw, lh, scale)
+	if cw <= 0 || ch <= 0 {
+		return 0, 0, 0, 0, false
+	}
+	work, haveWork := MonitorWorkArea(hwnd)
+	if !haveWork {
+		return 0, 0, 0, 0, false
+	}
+	workW := int(work.Right - work.Left)
+	workH := int(work.Bottom - work.Top)
+	ww, wh := windowRectForClient(hwnd, cw, ch)
+	if ww > workW || wh > workH {
+		return 0, 0, 0, 0, false
+	}
+	x = int(work.Left) + (workW-cw)/2
+	y = int(work.Top) + (workH-ch)/2
 	return cw, ch, x, y, true
+}
+
+// windowRectForClient 把客户区尺寸(cw×ch, 物理像素)反推成窗口矩形的宽高。
+//
+// 为什么用 AdjustWindowRectExForDpi 而不是非 DPI 版: 后者在"系统 DPI 与显示器
+// DPI 不同"的机器上按错的那个 DPI 算边框(正是内容缩放出问题的那一类机器), 客户区
+// 会差十几个物理像素; 而客户区同时决定 WebView2 的渲染表面大小。拿不到该入口时
+// (极老的系统)退回非 DPI 版, 行为与改动前一致
+func windowRectForClient(hwnd uintptr, cw, ch int) (w, h int) {
+	r := Rect{Right: int32(cw), Bottom: int32(ch)}
+	ok := false
+	if err := procAdjustWindowRectExForDpi.Find(); err == nil {
+		// 参数顺序是 (lpRect, dwStyle, bMenu, dwExStyle, dpi) —— dpi 是第 5 个。
+		// 只传 4 个的话 dpi 会取到寄存器里的残留值, 边框被算成几百像素宽, 窗口
+		// 直接涨成两倍多(实测 600×400 的请求摆出 1540×941 的客户区)
+		ret, _, _ := procAdjustWindowRectExForDpi.Call(
+			uintptr(unsafe.Pointer(&r)), wsOverlappedWindow, 0, 0, uintptr(DPIForWindow(hwnd)))
+		ok = ret != 0
+	}
+	if !ok {
+		if ret, _, _ := procAdjustWindowRect.Call(uintptr(unsafe.Pointer(&r)), wsOverlappedWindow, 0); ret == 0 {
+			return cw, ch // 反推失败(理论上不会): 至少尺寸不错
+		}
+	}
+	return int(r.Right - r.Left), int(r.Bottom - r.Top)
 }
 
 // SetWindowClientRect 把窗口摆到 (x, y), 并让**客户区**尺寸正好是 cw×ch
@@ -203,19 +292,28 @@ func WindowSizeForDisplay(hwnd uintptr) (w, h, x, y int, ok bool) {
 // 边框), 而客户区才是 WebView2 渲染表面的大小。少了这一步换算, 客户区会比
 // 目标矮一个标题栏 —— 界面底部被切一条, 而表面与客户区仍然一致, 所以不会
 // 发虚, 只会静默少一截, 更不容易发现
+//
+// 2026-10 起两条加固(客户区与渲染表面差一像素就要重采样, 是发虚的来源之一):
+//   - 边框反推走 DPI 版(见 windowRectForClient);
+//   - 摆完读回客户区, 与目标差 1 像素以上就按差额再摆一次。边框推算与实际总会
+//     有出入(样式位、系统 DPI 与显示器 DPI 不一致都会影响), 读回才是判据
 func SetWindowClientRect(hwnd uintptr, x, y, cw, ch int) {
-	r := Rect{Right: int32(cw), Bottom: int32(ch)}
-	// AdjustWindowRect 按普通重叠窗口的框架把客户区尺寸反推成窗口尺寸
-	if ret, _, _ := procAdjustWindowRect.Call(uintptr(unsafe.Pointer(&r)), wsOverlappedWindow, 0); ret == 0 {
-		// 反推失败(理论上不会): 退回按客户区尺寸摆放, 至少尺寸不错
-		r = Rect{Right: int32(cw), Bottom: int32(ch)}
+	for attempt := 0; ; attempt++ {
+		ww, wh := windowRectForClient(hwnd, cw, ch)
+		procSetWindowPos.Call(
+			hwnd, 0,
+			toUint32(x), toUint32(y),
+			uintptr(uint32(ww)), uintptr(uint32(wh)),
+			SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED,
+		)
+		pw, ph, ok := ClientPhysicalSize(hwnd)
+		if !ok || (pw == cw && ph == ch) || attempt >= 1 {
+			return
+		}
+		// 按差额补一次(两轮封顶): 只有边框推算与实际不一致时才会走到这里
+		cw += cw - pw
+		ch += ch - ph
 	}
-	procSetWindowPos.Call(
-		hwnd, 0,
-		toUint32(x), toUint32(y),
-		uintptr(uint32(r.Right-r.Left)), uintptr(uint32(r.Bottom-r.Top)),
-		SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED,
-	)
 }
 
 // wsOverlappedWindow 是 WS_OVERLAPPEDWINDOW: 库建窗时用的正是这个样式组合

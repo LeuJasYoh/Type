@@ -15,6 +15,8 @@ declare global {
     getTopmost(): Promise<boolean>;
     /** 轮询读取当前输入状态 */
     getTypingStatus(): Promise<TypingStatus>;
+    /** 上报真实内容缩放: 客户区物理像素 ÷ CSS 像素(devicePixelRatio), 宿主据此让窗口适配内容 */
+    reportViewport(dpr: number): Promise<void>;
   }
 }
 
@@ -35,3 +37,5 @@ export const toggleTopmost = () => window.toggleTopmost();
 export const getTopmost = () => window.getTopmost();
 
 export const getTypingStatus = () => window.getTypingStatus();
+
+export const reportViewport = (dpr: number) => window.reportViewport(dpr);

@@ -21,12 +21,16 @@ import (
 	"github.com/LeuJasYoh/type/internal/typing"
 )
 
-// contractBindNames 五个绑定名, 前端 window 上必须是同名的这五个
-var contractBindNames = []string{"startTyping", "cancelTyping", "toggleTopmost", "getTopmost", "getTypingStatus"}
+// contractBindNames 六个绑定名, 前端 window 上必须是同名的这六个
+var contractBindNames = []string{"startTyping", "cancelTyping", "toggleTopmost", "getTopmost", "getTypingStatus", "reportViewport"}
 
 var (
 	bindCallRE  = regexp.MustCompile(`w\.Bind\("([A-Za-z]+)"`)
 	ipcExportRE = regexp.MustCompile(`(?m)^export const ([A-Za-z]+) = \(([^)]*)\)`)
+	// reportViewport 是匿名闭包, 反射够不着, 只能在源码上钉: 它只收一个 float64
+	// (devicePixelRatio), 参数个数或类型一变, 内容缩放校正就静默失效 ——
+	// 界面回到"输入框压住选项行"的样子, 而没有任何环节会报错
+	reportViewportRE = regexp.MustCompile(`w\.Bind\("reportViewport",\s*func\((\w+) float64\) error`)
 )
 
 // mainSource 读装配层源码: 绑定名与前端镜像都要对着它核
@@ -39,7 +43,7 @@ func mainSource(t *testing.T) string {
 	return string(data)
 }
 
-// 装配层绑定的名字必须正好是约定的五个: 少一个前端会拿到 undefined,
+// 装配层绑定的名字必须正好是约定的六个: 少一个前端会拿到 undefined,
 // 多一个说明后端加了能力而前端镜像与文档都没跟上
 func TestBindNamesMatchContract(t *testing.T) {
 	src := mainSource(t)
@@ -109,6 +113,67 @@ func TestOtherSignaturesFrozen(t *testing.T) {
 	}
 	if got := status.Type.Out(0); got != reflect.TypeOf(&typing.TypingStatus{}) {
 		t.Errorf("Status 返回 %v, want *TypingStatus (前端按字段名取值)", got)
+	}
+}
+
+// reportViewportBody 取 main.go 里 reportViewport 回调体的源码: 从绑定那行起, 到该行
+// 收尾的 "\n\t})" 为止。用它钉"回调真的去校正了", 光钉签名是不够的
+func reportViewportBody(src string) string {
+	i := strings.Index(src, `w.Bind("reportViewport"`)
+	if i < 0 {
+		return ""
+	}
+	rest := src[i:]
+	if j := strings.Index(rest, "\n\t})"); j >= 0 {
+		return rest[:j]
+	}
+	return rest
+}
+
+// reportViewport(dpr float64) 的签名、回调体与前端调用端。它是"真实内容缩放"唯一的
+// 传递通道: 参数从 float64 变成别的(如 int、如结构体), 校正就会算错或静默不生效,
+// 而界面只会"看起来挤", 不会有任何报错。
+//
+// 2026-10 补两条覆盖缺口(独立复核实测出来的): ① 把回调体掏空成 `return nil`、签名逐字
+// 不动时, 只钉签名的用例全绿; ② 把前端 main.ts 的两处上报删掉、ipc.ts 原样不动时,
+// 整套闸门也全绿。两种情况都让校正彻底失效而无人报警, 所以这里连"回调体里必须真的调用
+// WindowClientForScale/SetWindowClientRect"与"页面必须把 window.devicePixelRatio 报上来"一起钉住
+func TestReportViewportSignatureFrozen(t *testing.T) {
+	src := mainSource(t)
+	if n := len(reportViewportRE.FindAllStringSubmatch(src, -1)); n != 1 {
+		t.Fatalf("main.go 里 reportViewport 的绑定形式匹配到 %d 处, want 1: 需要 `w.Bind(\"reportViewport\", func(dpr float64) error`", n)
+	}
+	body := reportViewportBody(src)
+	for _, need := range []string{"win32.WindowClientForScale(", "win32.SetWindowClientRect("} {
+		if !strings.Contains(body, need) {
+			t.Errorf("reportViewport 的回调体里没有 %s: 校正被掏空了, 而界面只会重新变挤", need)
+		}
+	}
+
+	ipc := repoFile(t, "frontend", "src", "ipc.ts")
+	m := regexp.MustCompile(`(?m)^export const reportViewport = \(([^)]*)\)`).FindStringSubmatch(ipc)
+	if m == nil {
+		t.Fatal("ipc.ts 里找不到 `export const reportViewport = (...)`")
+	}
+	if args := strings.TrimSpace(m[1]); args != "dpr: number" {
+		t.Errorf("ipc.ts 的 reportViewport 参数 = %q, want %q", args, "dpr: number")
+	}
+	if !strings.Contains(ipc, "reportViewport(dpr: number): Promise<void>;") {
+		t.Error("ipc.ts 的 window 接口里 reportViewport 的声明不是 (dpr: number): Promise<void>")
+	}
+
+	// 调用端: 通道两端都在, 页面不调用等于没上报。上报被抽进 viewportReport.ts,
+	// 所以"有没有真的启动它"要看 main.ts 的调用点 —— 只断言"模块里出现过某个表达式"
+	// 拦不住"调用点被删掉而函数体还在"(独立复核实测: 那样断言照绿)
+	if ts := repoFile(t, "frontend", "src", "main.ts"); !strings.Contains(ts, "startViewportReporting()") {
+		t.Error("main.ts 没有启动内容缩放上报: 缺 startViewportReporting()")
+	}
+	// 默认参数才是真正的接线: 读 window.devicePixelRatio, 交给 ipc 的 reportViewport。
+	// 匹配的是**默认值本身**(`= reportViewport,`), 不是"文件里出现过 reportViewport" ——
+	// 后者在"import 留着、默认值换成空函数"时照样成立(独立复核的变异实测)
+	if vr := repoFile(t, "frontend", "src", "viewportReport.ts"); !strings.Contains(vr, "window.devicePixelRatio") ||
+		!strings.Contains(vr, "= reportViewport,") {
+		t.Error("viewportReport.ts 的默认参数没接上: 需要 window.devicePixelRatio 与 `= reportViewport,`")
 	}
 }
 

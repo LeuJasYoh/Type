@@ -268,7 +268,10 @@ func blockSleep(release <-chan struct{}) func(time.Duration) {
 	return func(time.Duration) { <-release }
 }
 
-// waitRunning 等待任务占据任务槽 (即已进入倒计时等待)
+// waitRunning 等待任务占据任务槽。
+// 注意它只说明"任务已被受理": Start 在起 goroutine 之前就把槽占了, 所以槽被占
+// 不等于任务的 goroutine 已经开跑(要后者得等它第一次 sleep, 见
+// TestRestartAfterCancelSupersedesOldTask 的前置条件)
 func waitRunning(t *testing.T, svc *TypingService) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -888,13 +891,31 @@ func TestChineseTypesViaClipboard(t *testing.T) {
 func TestRestartAfterCancelSupersedesOldTask(t *testing.T) {
 	inj := newFakeInjector()
 	release := make(chan struct{})
-	svc := newTestService(inj, &fakeClipboard{}, blockSleep(release))
+	// 等旧任务真的走进倒计时(第一次 sleep 被调用)再取消。
+	//
+	// 为什么不能只等 waitRunning: Start 是在起 goroutine **之前**就占了任务槽的,
+	// 所以"槽被占了"只说明任务已被受理, 不说明它的 goroutine 已经跑过开工时的几行
+	// (其中就有 runTypingTask 里清取消标志那一步)。不等的话, "Cancel 置标志"与
+	// "旧任务清标志"谁先谁后全看调度, 本用例会随机红: 2026-10 实测独立进程 30 次
+	// 红 10 次(全量套件里因为前面的用例预热过调度, 反而基本看不出来)。
+	// 这是**用例的前置条件写松了**, 不是产品缺陷: 产品侧同样存在这个窗口, 但它要求
+	// 用户在启动后的亚毫秒内完成"取消", 界面点不出来
+	entered := make(chan struct{})
+	var once sync.Once
+	svc := newTestService(inj, &fakeClipboard{}, func(time.Duration) {
+		once.Do(func() { close(entered) })
+		<-release
+	})
 
 	// 旧任务: 停在倒计时
 	if _, err := svc.Start("旧任务文本", 5, false, false); err != nil {
 		t.Fatalf("首次 Start 失败: %v", err)
 	}
-	waitRunning(t, svc)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("旧任务未进入倒计时")
+	}
 
 	if _, err := svc.Cancel(); err != nil {
 		t.Fatalf("Cancel 失败: %v", err)

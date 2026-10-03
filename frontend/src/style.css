@@ -247,12 +247,17 @@ body {
 }
 /* 输入区块: 与 .input-wrap 一起吃掉窗口多出来的高度 —— 父级不生长的话,
    子级的 flex:1 长不起来, 余量会全部落到状态块上方的空白里。
-   min-height:0 让它能被压缩, 真正兜底的是 .input-wrap 的 min-height ── */
+   下限 217px = 标签 16 + gap 6 + .input-wrap 下限 195, 三个数都不参与 --ui-scale
+   (标签高度由 12px 字号定、gap 与 195 写死), 所以它也是常量, 任何缩放档位都不必
+   跟着算。没这条下限时 flex 会把它压到 100 出头, 而里面的输入框有 195 的下限、
+   不会跟着缩, 于是溢出去盖住下面的选项行(实测 576×400 视口压住 5.5px, 越矮压得
+   越多); 溢出的部分又没超出 .app-container, 连滚动条都不出现, 用户只看到选项行
+   没了。兜住下限之后, 真放不下就轮到 .app-container 滚动 ── */
 .section {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 217px;
   gap: 6px;
 }
 .section-label {
@@ -542,6 +547,14 @@ body {
   display: flex;
   flex-direction: column;
   margin-top: auto;
+}
+/* 选项行、按钮行、状态块一律不参与压缩: 视口比设计矮时, 该让位的是滚动条而不是
+   控件 —— 被压扁的行会被上面溢出的输入框盖住(见 .section 的下限)。
+   官方尺寸(540~648 宽、480~540 高)下余量由输入框吃下, 这三条不触发 ── */
+.options-row,
+.actions-row,
+.status-block {
+  flex-shrink: 0;
 }
 /* ── 进度条：轨道在空闲时**自己就是透明的**，填充朱砂 ──
    显隐四道一起变: height(0↔10px, 保留"挤一下"的上下移动 + 让下方元素让位)、

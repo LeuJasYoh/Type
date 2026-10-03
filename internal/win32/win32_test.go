@@ -4,6 +4,7 @@ package win32
 
 import (
 	"bytes"
+	"math"
 	"os"
 	"strconv"
 	"syscall"
@@ -459,10 +460,11 @@ func TestMonitorWorkArea(t *testing.T) {
 		t.Fatalf("工作区矩形非法: %+v", work)
 	}
 
-	cw, ch, x, y, haveSize := WindowSizeForDisplay(hwnd)
+	plan, haveSize := PlanForDisplay(hwnd)
 	if !haveSize {
 		t.Fatal("工作区读到了, 尺寸计算却报告失败")
 	}
+	cw, ch, x, y := plan.ClientW, plan.ClientH, plan.X, plan.Y
 	if cw <= 0 || ch <= 0 {
 		t.Fatalf("窗口尺寸非法: %dx%d", cw, ch)
 	}
@@ -484,6 +486,88 @@ func TestMonitorWorkArea(t *testing.T) {
 	if lw < MinWindowW-1 || lw > MaxWindowW+1 || lh < MinWindowH-1 {
 		t.Errorf("客户区折回逻辑尺寸 = %dx%d, 越出 [%d,%d]x[%d,∞)",
 			lw, lh, MinWindowW, MaxWindowW, MinWindowH)
+	}
+	// 带出来的设计逻辑尺寸就是上面折回来的那个值: 内容缩放校正要拿它乘真实比值,
+	// 基准错了就会按错的尺寸重设窗口(而界面只是"看起来挤", 不会有任何报错)
+	if abs(plan.LogicalW-lw) > 1 || abs(plan.LogicalH-lh) > 1 {
+		t.Errorf("PlanForDisplay 的逻辑尺寸 = %dx%d, 客户区折回值 = %dx%d",
+			plan.LogicalW, plan.LogicalH, lw, lh)
+	}
+}
+
+// TestScaledClientSize 内容缩放折算的算术: 客户区物理像素 = 设计逻辑尺寸 × 内容缩放。
+// 这几个数是本次故障的核心(某用户机: 窗口 DPI 缩放 1.25, 内容缩放约 1.75), 改成
+// 截断、或把乘除与分子分母弄反, 这里必然变红
+func TestScaledClientSize(t *testing.T) {
+	cases := []struct {
+		name  string
+		scale float64
+		wantW int
+		wantH int
+	}{
+		{"本机 125%", 1.25, 720, 600},
+		{"用户机实测约 1.75", 1.75, 1008, 840},
+		{"100%", 1, 576, 480},
+		{"非整数倍四舍五入", 1.1, 634, 528}, // 576×1.1 = 633.6 → 634
+	}
+	for _, c := range cases {
+		gotW, gotH := ScaledClientSize(576, 480, c.scale)
+		if gotW != c.wantW || gotH != c.wantH {
+			t.Errorf("%s: ScaledClientSize(576,480,%.2f) = (%d,%d), want (%d,%d)",
+				c.name, c.scale, gotW, gotH, c.wantW, c.wantH)
+		}
+	}
+	// 非法比值一律 (0,0): 调用方据此"不校正", 不许把 NaN/Inf 变成尺寸
+	for _, bad := range []float64{0, -1, math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if w, h := ScaledClientSize(576, 480, bad); w != 0 || h != 0 {
+			t.Errorf("比值 %v 非法, 却算出了 (%d,%d)", bad, w, h)
+		}
+	}
+	// 上界: 实测 1e15 曾经一路走进窗口矩形的 int32 截断, 让"装不进工作区"的判定失真
+	// (returns ok=true 加一个天量客户区), 这条钉住它必须被当成"不校正"
+	for _, huge := range []float64{maxContentScale + 1, 1e15, 1e18, 1e300} {
+		if w, h := ScaledClientSize(576, 480, huge); w != 0 || h != 0 {
+			t.Errorf("比值 %v 超出上界, 却算出了 (%d,%d)", huge, w, h)
+		}
+	}
+	// 上界之内仍要照常工作(边界值不能被顺手挡掉)
+	if w, h := ScaledClientSize(576, 480, maxContentScale); w != 9216 || h != 7680 {
+		t.Errorf("上界值 maxContentScale 被挡掉了: (%d,%d), want (9216,7680)", w, h)
+	}
+}
+
+// TestWindowClientForScale 真建窗口验两条: ① 常规比值给出"设计逻辑尺寸 × 比值"的
+// 客户区, 摆上去后读回值逐像素相等; ② 大到装不进工作区的比值必须 ok=false ——
+// 调用方据此保持原尺寸、由前端滚动兜底, 不许把窗口摆到屏幕外
+func TestWindowClientForScale(t *testing.T) {
+	hwnd := newTestWindow(t, "ViewportScale").create(t, "TypeViewportScaleTest")
+	work, ok := MonitorWorkArea(hwnd)
+	if !ok {
+		t.Skip("当前环境拿不到显示器工作区(无头会话?), 跳过")
+	}
+	workH := int(work.Bottom - work.Top)
+
+	cw, ch, x, y, usable := WindowClientForScale(hwnd, 576, 480, 1.25)
+	if !usable {
+		t.Fatal("1.25 这个比值被判为不可用")
+	}
+	if cw != 720 || ch != 600 {
+		t.Errorf("客户区 = %dx%d, want 720x600", cw, ch)
+	}
+	SetWindowClientRect(hwnd, x, y, cw, ch)
+	if pw, ph, has := ClientPhysicalSize(hwnd); !has || pw != cw || ph != ch {
+		t.Errorf("读回客户区 = %dx%d (ok=%v), want %dx%d", pw, ph, has, cw, ch)
+	}
+
+	// 越界: 按工作区高度反推一个必然装不下的比值, 不写死数字
+	huge := float64(workH)/480 + 1
+	if _, _, _, _, usable := WindowClientForScale(hwnd, 576, 480, huge); usable {
+		t.Errorf("比值 %.2f 下窗口已高过工作区 %d, 却报告可用", huge, workH)
+	}
+	for _, bad := range []float64{0, -1, math.NaN(), math.Inf(1), 1e15} {
+		if _, _, _, _, usable := WindowClientForScale(hwnd, 576, 480, bad); usable {
+			t.Errorf("比值 %v 非法, 却报告可用", bad)
+		}
 	}
 }
 
