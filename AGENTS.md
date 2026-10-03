@@ -39,8 +39,11 @@ go build -tags dev -o Type-dev.exe ./cmd/type   # 终端 2
 # 打桩 window/document 与定时器, 不依赖 WebView2 与真实时间)
 cd frontend; npm test
 
-# 图标资产再生成 (uv, 字节级可复现, 仅在更换 assets/icon.jpg 时需要)
-uv run scripts/gen_icon.py
+# 图标资产再生成 (uv, 字节级可复现, 仅在更换 assets/icon.jpg 时需要。
+# tools/gen-icon 是自包含的 uv 项目: pyproject/uv.lock/.python-version 与 .venv 都在那里,
+# 所以在仓库根直接跑 `uv run tools/gen-icon/gen_icon.py` 找不到本项目, uv 会退回系统
+# Python 报 ModuleNotFoundError: PIL —— 那条报错看着像没装 Pillow, 不是路径错了)
+uv run --directory tools/gen-icon gen_icon.py
 
 # 重构等价性验证 (逐函数比对函数体, 结构调整后证明零行为变化)
 go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
@@ -163,6 +166,10 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
     不同结构体的同名方法不再互相覆盖）。**只比函数体**：签名、参数顺序、包级常量、
     结构体字段与 tag 都在视野之外，别拿它的输出当"零行为变化"的唯一证据
   - `less-ai-tone/`：对外文字的去 AI 味规则与检测脚本（写、改散文前读它，不进产品与 CI）
+  - `gen-icon/`：图标资产管线（**自包含的 uv 项目**：`gen_icon.py` + pyproject.toml /
+    uv.lock / .python-version，`.venv` 就地生成；命令 `uv run --directory tools/gen-icon gen_icon.py`）。
+    脚本靠**向上找 `go.mod`** 定位仓库根，别改回按层数数 `parents[N]`：它搬过一次家
+    （scripts/ → tools/gen-icon/），按层数会在搬家时指向 `tools/assets` —— 而源图在仓库根
 - `.github/workflows/`：
   - `verify.yml`：**检查项的唯一处**，`on: workflow_call`，被 ci.yml 与 release.yml 共用。
     内容：gofmt / vet / `-race` 测试 / 漏洞扫描 / build / 前端单测 / 前端产物漂移检查 / 版本同步检查 /
@@ -210,7 +217,7 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 | 构建编排 / 发布打包 | PowerShell（build.ps1、release.yml 的步骤） |
 | Windows 资源生成（图标/版本信息） | Go（tools/mkres，winres 库），取代 windres + .rc |
 | 构建产物校验（PE 架构 / 资源读回） | Go（tools/pecheck，winres 库，仅构建期使用） |
-| 图标/图像资产管线 | Python，仅经 uv（pyproject 锁定 pillow==12.3.0） |
+| 图标/图像资产管线 | Python，仅经 uv（自包含项目在 `tools/gen-icon/`，pyproject 锁定 pillow==12.3.0） |
 
 构建链**不含 C 编译器**：webview 绑定是纯 Go 的 go-webview2，资源由 tools/mkres 生成，
 `go build` / `go test` 都不再需要 cgo，新增依赖时别把 cgo 带回来（那会重新要求

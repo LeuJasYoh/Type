@@ -1,5 +1,8 @@
 # gen_icon.py — 图标资产生成管线
-# 用法: uv run scripts/gen_icon.py
+# 用法: uv run --directory tools/gen-icon gen_icon.py
+#       (本目录就是 uv 的项目根: pyproject.toml / uv.lock / .python-version 与 .venv
+#        都在这儿。在仓库根敲 uv run tools/gen-icon/gen_icon.py 找不到本项目, uv 会
+#        退回系统 Python, 报的是 ModuleNotFoundError: PIL —— 看着像没装 Pillow)
 #
 # assets/icon.jpg (322×322 源图) → assets/icon.ico 圆角多尺寸应用图标
 # (由 tools/mkres 连同版本信息与 DPI manifest 写进 version_<arch>.syso,
@@ -21,7 +24,20 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-ROOT = Path(__file__).resolve().parents[1]
+
+def repo_root() -> Path:
+    """向上找含 go.mod 的那层当仓库根。
+
+    刻意不写 parents[N]: 本脚本搬过一次家(scripts/ → tools/gen-icon/),
+    按层数数会在搬家时静默指向 tools/assets, 而源图在仓库根的 assets/
+    """
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "go.mod").is_file():
+            return parent
+    raise SystemExit("找不到仓库根(向上没有含 go.mod 的目录)")
+
+
+ROOT = repo_root()
 SRC = ROOT / "assets" / "icon.jpg"
 OUT = ROOT / "assets" / "icon.ico"
 SIZES = [16, 24, 32, 48, 64, 128, 256]

@@ -106,7 +106,7 @@
 | CI | GitHub Actions（windows-latest）：gofmt / go vet / `go test -race` / 依赖漏洞扫描（govulncheck）/ go build + 前端单测（`npm test`）+ 前端产物漂移检查 + 版本同步检查 + build.ps1 的 BOM 检查；另按 amd64/arm64 矩阵做发布构建，并用 `tools/pecheck` 读回校验图标、版本与 DPI 声明确实已链入产物。发版走的是同一套检查（`verify.yml`），不会比平时松 |
 | 发布 | 打 `v<版本>` 标签即由 GitHub Actions 自动发行：校验版本与发布说明一致 → 双架构构建 + 读回校验 → 打包 → 建 Release；说明文字取自入库的 `release-notes/v<版本>.md` |
 | Win32 API | SendInput（KEYEVENTF_UNICODE）+ WM_CHAR 文本直投（SendMessageTimeoutW 直投焦点窗口）+ 剪贴板（CF_UNICODETEXT、EnumClipboardFormats 全格式快照、RtlMoveMemory）+ 前台窗口检测（GetForegroundWindow）+ 单实例互斥体（CreateMutexW） |
-| 图标 | 圆角多尺寸 ICO（uv + Pillow 生成，`scripts/gen_icon.py` 字节级可复现） |
+| 图标 | 圆角多尺寸 ICO（uv + Pillow 生成，`tools/gen-icon/gen_icon.py` 字节级可复现） |
 | 资源 | `tools/mkres`（纯 Go，winres）生成图标 + 版本信息 + manifest（DPI 感知）→ `.syso` |
 
 ### 项目结构
@@ -162,10 +162,10 @@ Type/
 │   ├── screenshot-light.png ← README 配图（浅色，兜底图）
 │   └── screenshot-dark.png  ← README 配图（深色，随 GitHub 主题自动切换）
 ├── scripts/
-│   ├── build.ps1            ← 一键构建脚本（版本号单一来源）
-│   └── gen_icon.py          ← 图标资产生成 (uv run, Pillow)
+│   └── build.ps1            ← 一键构建脚本（版本号单一来源）
 ├── tools/
 │   ├── equivcheck/          ← 重构等价性验证 (go run ./tools/equivcheck, 逐函数比对函数体)
+│   ├── gen-icon/            ← 图标资产管线（自包含 uv 项目: gen_icon.py + pyproject.toml/uv.lock/.python-version, .venv 就地生成）
 │   ├── less-ai-tone/        ← 对外文字的去 AI 味规则与检测脚本 (写、改文档时用, 见 AGENTS.md)
 │   ├── mkres/               ← 资源生成: 图标 + 版本信息 + DPI 感知 manifest → version_<arch>.syso
 │   ├── pecheck/             ← 构建产物读回校验: PE 架构 + 图标/版本/manifest 是否真的链进 exe (发版与 CI 共用)
@@ -177,7 +177,6 @@ Type/
 │   ├── ci.yml               ← CI: 调用 verify.yml, 另按 amd64/arm64 矩阵做发布构建与资源读回
 │   └── release.yml          ← 发版: 打 v<版本> 标签触发, 先跑 verify.yml 再构建/校验/打包/建 Release (也可在 Actions 页面手动触发)
 ├── go.mod / go.sum          ← Go 模块定义
-├── pyproject.toml / uv.lock / .python-version ← Python 资产管线依赖 (uv 管理, 锁定 Pillow)
 ├── .node-version            ← 前端构建用的 Node 主版本 (CI 与本地同源)
 └── .gitignore               ← 忽略构建产物/依赖/工具元数据
 ```
@@ -217,7 +216,8 @@ go run ./tools/pecheck -exe Type.exe -version 1.5.7 -arch amd64
 $env:GOARCH = "arm64"; go build -trimpath -ldflags="-H windowsgui -s -w" -o Type-arm64.exe ./cmd/type
 
 # 图标资产再生成 (可选, 需 uv): 更换 assets/icon.jpg 后执行, 产物字节级可复现
-uv run scripts/gen_icon.py
+# tools/gen-icon 是自包含的 uv 项目 (pyproject/uv.lock 与 .venv 都在那里), 所以要带 --directory
+uv run --directory tools/gen-icon gen_icon.py
 
 # 代码校验 (与 CI 同款三件套)
 gofmt -l ./cmd ./internal ./tools   # 应输出为空
