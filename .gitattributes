@@ -11,3 +11,17 @@
 *.css text eol=lf
 frontend/index.html text eol=lf
 internal/web/dist/index.html text eol=lf
+
+# GitHub 的"语言构成"只统计产品代码: 测试与构建/工具链一律不计入 (2026-10 定)。
+# 判据是"这文件是不是产品的一部分", 不是"它重不重要" —— 测试与工具链都不进发布产物。
+# 用 Linguist 的官方开关 -linguist-detectable: 只影响统计与语言条, 不影响语法高亮,
+# 也不影响任何构建(文件照旧被构建读取)
+*_test.go         -linguist-detectable
+frontend/test/**  -linguist-detectable
+frontend/tools/** -linguist-detectable
+scripts/**        -linguist-detectable
+tools/**          -linguist-detectable
+# 起因: build.ps1 加了几十行注释后从 5.6KB 涨到 8.5KB, 在语言条上把 7.5KB 的 Vue
+# 挤进了 Other —— 中文注释一个字 3 字节, 注释越清楚这个数字涨得越快, 于是"按字节
+# 比大小"的条读起来完全不像这个项目。新增测试或工具目录时让上面的规则覆盖到,
+# 详见 docs/architecture.md 的「GitHub 的语言构成只统计产品代码」

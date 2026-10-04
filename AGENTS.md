@@ -80,7 +80,7 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 | 用户可见行为 / 功能 / 限制 | README.md：功能、使用步骤、已知限制 |
 | 新增或修改用户可见文案 | docs/behavior-contract.md 的文案清单 |
 | CI 步骤 / 检查项 / 发布方式 | README.md 技术栈与项目结构的 CI 行 + docs/architecture.md / docs/build-and-release.md |
-| 命令 / 构建流程 / 目录结构 | 本文件「常用命令」+ docs/architecture.md + README「自行编译」 |
+| 命令 / 构建流程 / 目录结构 | 本文件「常用命令」+ docs/architecture.md + README「自行编译」；新增测试或工具目录时，确认 `.gitattributes` 的语言构成排除规则覆盖到（语言条只统计产品代码） |
 | 非显而易见的新约定 / 踩坑结论 | docs/invariants.md 对应章节（如「焦点锁定与漂移防护」） |
 | 版本号 | 只改 cmd/type/main.go；package.json 与 package-lock.json 交给 build.ps1，资源版本由 tools/mkres 构建期生成 |
 | 发版 | docs/build-and-release.md + 新增/更新 `release-notes/v<版本>.md`（与代码同一次提交） |
