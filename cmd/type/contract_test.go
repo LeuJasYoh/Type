@@ -391,3 +391,28 @@ func TestThemeBootScriptKeepsKeyAndOrder(t *testing.T) {
 		t.Error("防闪烁脚本必须排在入口 module script 之前, 否则首帧会闪一下")
 	}
 }
+
+// ─── 前端镜像: --ui-scale 的基准宽度 ───────────────────
+
+// 前端 --ui-scale 的基准宽度必须等于宿主窗口的宽度下限。
+// 两处各是"内宽 540 时缩放为 1"这条承诺的一半: 宿主把窗口下限定在 540
+// (internal/win32 的 MinWindowW), 前端说到 540 为止不缩放。只改一处的话, 界面在
+// 大窗口里要么开始缩放、要么不再缩放, 而两边的编译与测试都不会失败 —— 这类
+// "跨端同一个数字"的漂移此前发生过一次(前端注释里写死过旧的 480/720, 而宿主
+// 实际是 540/648)
+func TestUiScaleBaseMatchesWindowFloor(t *testing.T) {
+	ts := repoFile(t, "frontend", "src", "composables", "useUiScale.ts")
+	m := regexp.MustCompile(`BASE_WIDTH\s*=\s*(\d+)`).FindStringSubmatch(ts)
+	if m == nil {
+		t.Fatal("useUiScale.ts 里找不到 BASE_WIDTH 的字面量")
+	}
+	goSrc := repoFile(t, "internal", "win32", "win32_window.go")
+	g := regexp.MustCompile(`MinWindowW\s*=\s*(\d+)`).FindStringSubmatch(goSrc)
+	if g == nil {
+		t.Fatal("win32_window.go 里找不到 MinWindowW 的字面量")
+	}
+	if m[1] != g[1] {
+		t.Errorf("前端缩放基准 BASE_WIDTH = %s, 宿主窗口宽度下限 MinWindowW = %s: 两者必须一致",
+			m[1], g[1])
+	}
+}

@@ -35,8 +35,8 @@ cd frontend; npm run dev            # 终端 1
 go build -tags dev -o Type-dev.exe ./cmd/type   # 终端 2
 .\Type-dev.exe                      # (-dev 参数或 TYPE_DEV_URL 指定端口)
 
-# 前端单测 (useTypingTask 的轮询状态机; 零新依赖: Node 自带测试跑器直接跑 TS,
-# 打桩 window/document 与定时器, 不依赖 WebView2 与真实时间)
+# 前端单测 (轮询状态机 / 内容缩放上报 / 状态栏取值 / 观感缩放; 零新依赖:
+# Node 自带测试跑器直接跑 TS, 打桩 window/document 与定时器, 不依赖 WebView2 与真实时间)
 cd frontend; npm test
 
 # 图标资产再生成 (uv, 字节级可复现, 仅在更换 assets/icon.jpg 时需要。
@@ -520,7 +520,11 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
 - 前端的 `--ui-scale`（`frontend/src/composables/useUiScale.ts` 注入）只许缩放**数值型
   细节**：内边距、间距、圆角、控件高度、图标边长。`border-width` 与 `font-size` 永不参与
   —— 小数像素边框会渲染成深浅不一的虚边，而字号是布局的输入，跟着缩放会把输入区高度、
-  状态栏高度、字数徽标全变成联动量。默认值与 540 宽档恒为 1，保证默认档渲染逐像素不变
+  状态栏高度、字数徽标全变成联动量。默认值与 540 宽档恒为 1，保证默认档渲染逐像素不变。
+  取值规则抽成纯函数 `uiScaleFor`（`frontend/test/uiScale.test.ts` 钉边界：540→1、
+  648→1.2、675→1.25 才够得着上限）；**基准宽度 540 必须等于宿主窗口下限 `MinWindowW`**，
+  这条跨端一致性由 `cmd/type/contract_test.go` 的 `TestUiScaleBaseMatchesWindowFloor` 核对
+  （两边只改一处时，两边的编译与测试都不会失败，界面却会开始缩放或不再缩放）
 - **空闲态不许有进度条：初始 `progress` 必须是 -1**（2026-10 修，症状是"只有第一次启动
   才看得见一条空进度轨道"）：`progress` 的语义是 **0~100 表示进度，-1 表示隐藏**，前端按
   `progress >= 0` 决定显不显示进度条（`StatusBar.vue` 的 `progressActive`）。而

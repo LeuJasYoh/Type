@@ -139,23 +139,31 @@ Type/
 ├── frontend/                ← Vue 前端 (自包含 Vite 项目)
 │   ├── package.json / package-lock.json ← npm 定义 (vue / vite / vue-tsc 等)
 │   ├── vite.config.ts       ← Vite 配置 (单文件打包, 产物输出 ../internal/web/dist)
-│   ├── index.html           ← Vite 入口
+│   ├── index.html           ← Vite 入口 (含首帧防闪烁的主题判定脚本)
 │   ├── tsconfig.json        ← TypeScript 配置 (vue-tsc)
 │   ├── test/                ← 前端单测 (Node 自带测试跑器 + 假时钟, 零新依赖)
-│   │   ├── typingTask.test.ts   ← useTypingTask 轮询状态机回归 (npm test)
-│   │   └── ts-resolve.mjs       ← 测试期模块解析钩子 (补省略的 .ts 扩展名)
+│   │   ├── typingTask.test.ts      ← useTypingTask 轮询状态机回归 (npm test)
+│   │   ├── viewportReport.test.ts  ← 内容缩放上报的节拍 (含"生产默认值"用例)
+│   │   ├── statusBarState.test.ts  ← 进度条显隐(-1 哨兵)/相位类名, 以及组件接线
+│   │   ├── uiScale.test.ts         ← --ui-scale 的取值边界
+│   │   └── ts-resolve.mjs          ← 测试期模块解析钩子 (补省略的 .ts 扩展名)
+│   ├── tools/
+│   │   └── layout-probe.mjs ← 版式几何探针 (无头 Edge 逐档量真实尺寸, 见 AGENTS.md)
 │   └── src/
-│       ├── main.ts          ← 应用入口 (createApp)
+│       ├── main.ts          ← 应用入口 (createApp + 启动内容缩放上报)
 │       ├── App.vue          ← 界面骨架
 │       ├── style.css        ← 界面样式（书卷纸感设计系统：纸色底、墨色字、朱砂强调，明暗双主题）
 │       ├── ipc.ts           ← webview Bind 全局绑定的类型化封装
 │       ├── types.ts         ← TypingStatus/TypingPhase (与 Go 端结构对应)
+│       ├── viewportReport.ts ← 内容缩放上报 (立刻一拍 + 400ms 一拍)
 │       ├── env.d.ts         ← Vite 环境类型声明
 │       ├── composables/
 │       │   ├── useTypingTask.ts ← 输入任务状态机 + 状态轮询
+│       │   ├── useUiScale.ts    ← --ui-scale 观感缩放 (基准宽度与宿主 MinWindowW 一致)
 │       │   └── useTheme.ts      ← 明暗主题切换
 │       └── components/
-│           └── StatusBar.vue    ← 状态栏 + 进度条
+│           ├── StatusBar.vue    ← 状态栏 + 进度条
+│           └── statusBarState.ts ← 进度条显隐/宽度与相位类名的纯函数
 ├── assets/                  ← 静态资源（图标源图与产物、README 配图）
 │   ├── icon.ico             ← 应用图标 (tools/mkres 编译进 exe)
 │   ├── icon.jpg             ← 图标源图

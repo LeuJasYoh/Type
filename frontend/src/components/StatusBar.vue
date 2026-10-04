@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { TypingPhase } from '../types';
+import { progressVisible, progressWidth, statusBarClass } from './statusBarState';
 
 const props = defineProps<{
   phase: TypingPhase;
@@ -9,10 +10,12 @@ const props = defineProps<{
   progress: number;
 }>();
 
-const barClass = computed(() => ['status-bar', props.phase !== 'idle' ? props.phase : '']);
+// 三条取值规则都在 statusBarState.ts, 由 test/statusBarState.test.ts 钉着 ——
+// 它们是"坏了也只看得出界面不对"的那一类
+const barClass = computed(() => statusBarClass(props.phase));
 
-const progressActive = computed(() => props.progress >= 0);
-const progressWidth = computed(() => (props.progress >= 0 ? Math.min(props.progress, 100) + '%' : '0%'));
+const progressActive = computed(() => progressVisible(props.progress));
+const barWidth = computed(() => progressWidth(props.progress));
 </script>
 
 <template>
@@ -25,7 +28,7 @@ const progressWidth = computed(() => (props.progress >= 0 ? Math.min(props.progr
     <!-- 进度条：运行时平滑长出 -->
     <div class="progress-wrap" :class="{ active: progressActive }">
       <div class="progress-track">
-        <div class="progress-fill" :style="{ width: progressWidth }"></div>
+        <div class="progress-fill" :style="{ width: barWidth }"></div>
       </div>
     </div>
   </div>
