@@ -206,12 +206,19 @@ func TestFrontendMirrorsBindNames(t *testing.T) {
 			t.Errorf("frontend/src/ipc.ts 未导出 %q", name)
 		}
 	}
-	// startTyping 是唯一带参数的: 四个, 顺序与 Go 侧一致
-	if args, ok := exported["startTyping"]; ok {
-		parts := strings.Split(args, ",")
-		if len(parts) != 4 {
-			t.Errorf("ipc.ts 的 startTyping 参数个数 = %d, want 4 (%q)", len(parts), args)
-		}
+	// startTyping 是唯一带参数的: 四个, 且**顺序**也要与 Go 侧一致。
+	// 只数个数是不够的 —— 两个 bool 互换位置时个数照样是 4, Go 编译通过、
+	// vue-tsc 也通过, 界面却把"绕过粘贴检测"当成"文本直投"; 这个文件存在的
+	// 理由正是防这种静默错位, 所以这里逐字钉参数表、转发调用与窗口接口声明
+	const wantStartArgs = "text: string, delay: number, forceRaw: boolean, textDirect: boolean"
+	if args, ok := exported["startTyping"]; ok && args != wantStartArgs {
+		t.Errorf("ipc.ts 的 startTyping 参数 = %q, want %q", args, wantStartArgs)
+	}
+	if want := "window.startTyping(text, delay, forceRaw, textDirect)"; !strings.Contains(src, want) {
+		t.Errorf("ipc.ts 没有按 %q 原样转发: 参数顺序错位会静默交换两个开关", want)
+	}
+	if want := "startTyping(text: string, delay: number, forceRaw: boolean, textDirect: boolean): Promise<string>;"; !strings.Contains(src, want) {
+		t.Errorf("ipc.ts 的 window 接口里 startTyping 的声明与约定不符, want %q", want)
 	}
 	for _, name := range []string{"cancelTyping", "toggleTopmost", "getTopmost", "getTypingStatus"} {
 		if args, ok := exported[name]; ok && strings.TrimSpace(args) != "" {
@@ -239,8 +246,11 @@ var (
 	tsPhaseBodyRE  = regexp.MustCompile(`(?s)export type TypingPhase =(.*?);`)
 	tsPhaseLitRE   = regexp.MustCompile(`'([a-z]+)'`)
 	goPhaseDeclRE  = regexp.MustCompile(`(?m)Phase[A-Za-z]+\s+TypingPhase\s*=\s*"([a-z]+)"`)
-	// 前端自己拼的倒计时文案(不为等第一次轮询): 秒数必须来自插值
-	tsCountdownRE = regexp.MustCompile(`剩余 \$\{[^}]+\} 秒`)
+	// 倒计时文案: 后端是 msgCountdownFormat 的字面量, 前端为了不等第一次轮询
+	// 自己拼了一份反引号模板串。把 ${...} 归一成 %d 之后, 两者必须逐字相同
+	goCountdownFormatRE = regexp.MustCompile(`(?m)^\s*msgCountdownFormat\s*=\s*"([^"]*)"`)
+	tsCountdownLitRE    = regexp.MustCompile("`([^`]*剩余[^`]*)`")
+	tsInterpRE          = regexp.MustCompile(`\$\{[^}]*\}`)
 )
 
 // TypingStatus 的 JSON 键以 Go 结构体的 tag 为准。前端少一个键, 运行时读到
@@ -272,6 +282,28 @@ func TestFrontendTypesStatusFields(t *testing.T) {
 	for name := range got {
 		if !want[name] {
 			t.Errorf("types.ts 的 TypingStatus 多出字段 %q (Go 端没有这个 JSON 键)", name)
+		}
+	}
+
+	// 字段的**类型**也要钉: 只钉键名的话 `progress: string` 一样能通过, 而
+	// 前端拿它做 `progress >= 0` 比较 —— 变字符串后进度条永远不显示, 而且
+	// vue-tsc 检查的是前端自己那一份, 后端发的还是数字, 只有运行时才露头
+	wantTypes := map[string]string{
+		"phase":        "TypingPhase",
+		"message":      "string",
+		"progress":     "number",
+		"secondsLeft":  "number",
+		"targetWindow": "string",
+	}
+	for name, ty := range wantTypes {
+		re := regexp.MustCompile(`(?m)^\s*` + name + `\??\s*:\s*([^;\n]+?)\s*;`)
+		m := re.FindStringSubmatch(body[1])
+		if m == nil {
+			t.Errorf("types.ts 的 TypingStatus 里读不出字段 %q 的类型", name)
+			continue
+		}
+		if fieldType := strings.TrimSpace(m[1]); fieldType != ty {
+			t.Errorf("types.ts 的 %s 类型 = %q, want %q", name, fieldType, ty)
 		}
 	}
 }
@@ -309,15 +341,22 @@ func TestFrontendTypesPhaseValues(t *testing.T) {
 
 // 倒计时那句在仓库里有三份: 后端 msgCountdownFormat、typing/contract_test.go
 // 的字面量、以及前端为了不等第一次轮询而自己拼的这份。前两份由 internal 的
-// 测试钉着, 这一份此前无人管 —— 它走散的症状是界面上的秒数文案与后端不一致,
-// 而没有任何环节会失败
+// 测试钉着, 这一份此前只有弱断言(要求出现 `剩余 ${...} 秒` 与子串
+// `— 请聚焦目标窗口...`)—— 把长破折号换成短横线、或删掉"秒"后的空格, 断言
+// 照样绿, 而界面上的文案与后端已经不是一个句子了。现在把插值归一成 %d 后
+// 与后端格式串逐字比较: 差一个字符都会红
 func TestFrontendCountdownMessageMirrorsGo(t *testing.T) {
 	src := repoFile(t, "frontend", "src", "composables", "useTypingTask.ts")
-	if !tsCountdownRE.MatchString(src) {
-		t.Error("useTypingTask.ts 的倒计时文案不再是 `剩余 ${...} 秒` 的插值形式")
+	lit := tsCountdownLitRE.FindStringSubmatch(src)
+	if lit == nil {
+		t.Fatal("useTypingTask.ts 里找不到含倒计时文案的反引号模板串")
 	}
-	if !strings.Contains(src, "— 请聚焦目标窗口...") {
-		t.Error("useTypingTask.ts 的倒计时文案尾部与后端 msgCountdownFormat 不一致")
+	want := goCountdownFormatRE.FindStringSubmatch(repoFile(t, "internal", "typing", "typing.go"))
+	if want == nil {
+		t.Fatal("internal/typing/typing.go 里找不到 msgCountdownFormat 的字面量")
+	}
+	if got := tsInterpRE.ReplaceAllString(lit[1], "%d"); got != want[1] {
+		t.Errorf("前端倒计时文案与后端不一致:\n  前端(插值归一后): %q\n  后端: %q", got, want[1])
 	}
 }
 

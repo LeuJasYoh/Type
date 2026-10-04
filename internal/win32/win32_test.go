@@ -310,12 +310,19 @@ func newTestWindow(t *testing.T, tag string) *testWindow {
 	return &testWindow{className: className, hInst: hInst}
 }
 
-// create 建出窗口并登记销毁, 返回句柄
+// create 建出窗口并登记销毁, 返回句柄(样式为 0: 窗口只有系统给的那点边框)
 func (w *testWindow) create(t *testing.T, title string) uintptr {
+	return w.createStyled(t, title, 0)
+}
+
+// createStyled 同上, 但指定窗口样式。"能不能拖大"这类性质必须在一个真的带缩放
+// 边框的窗口上才验得出来: dwStyle=0 的窗口本来就没有 WS_THICKFRAME, 拿它断言
+// "样式位已被清掉"是恒真的(见 TestWindowSizeIsFixed)
+func (w *testWindow) createStyled(t *testing.T, title string, style uintptr) uintptr {
 	t.Helper()
 	titlePtr, _ := syscall.UTF16PtrFromString(title)
 	hwnd, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(w.className)),
-		uintptr(unsafe.Pointer(titlePtr)), 0, 0, 0, 0, 0, 0, 0, w.hInst, 0)
+		uintptr(unsafe.Pointer(titlePtr)), style, 0, 0, 0, 0, 0, 0, w.hInst, 0)
 	if hwnd == 0 {
 		t.Fatalf("CreateWindowExW 失败: %v", err)
 	}
@@ -581,42 +588,58 @@ func abs(v int) int {
 // TestWindowSizeIsFixed 窗口尺寸必须真的固定: 这是用户明确定下的行为
 // ("启动时按显示器定一次, 之后不可手动缩放")。
 //
-// 不能只信源码: 库的 SetSize(HintFixed) 里那两行 `style &^= WS_THICKFRAME|
-// WS_MAXIMIZEBOX` 看着就够, 但实测才是判据。这里建一个真窗口, 走一遍
-// SetWindowClientRect + 同样的样式处理, 然后做两件事:
+// 判据不能只看源码, 也不能只写"去掉样式位之后不可拖大"这一半 —— 那样写出来的是
+// 恒真断言: dwStyle=0 建出的窗口本来就没有 WS_THICKFRAME, 而按**客户区**取点的
+// 命中测试对任何带边框的窗口都答 HTCLIENT(1)。2026-10 的独立探针正是这样证明
+// 旧版用例两条断言都不可能失败的。现在改成 A/B 两段, 缺一不可:
 //
-//	① 读回样式位: WS_THICKFRAME 与 WS_MAXIMIZEBOX 必须都已清掉;
-//	② 在窗口右下角做一次 WM_NCHITTEST: 必须是 HTCLIENT(1), 出现
-//	   HTBOTTOMRIGHT(17) 就说明那里是个可拖拽的边框 —— 用户一拖就变尺寸
+//	① 阳性对照: 用 WS_OVERLAPPEDWINDOW 建窗, 断言两个样式位都在、右下角命中
+//	   htBottomRight(17) —— 先证明这套取证手段认得出"可拖大";
+//	② 复刻库 SetSize(HintFixed) 的处理(清位 + SWP_FRAMECHANGED 让边框按新样式
+//	   刷新), 断言样式位没了、右下角也不再是 htBottomRight。
 //
-// 客户区尺寸同时核对: 请求多少就该是多少(表面与客户区一致的前提)
+// 缺 ① 则 ② 是自我安慰(怎么都会绿), 缺 ② 则 ① 什么都没证明。
+//
+// 客户区尺寸同时核对: 请求多少就该是多少(表面与客户区一致的前提)。这一步放在
+// 改样式之前 —— SetWindowClientRect 的反推按 WS_OVERLAPPEDWINDOW 算边框, 要在
+// 窗口就是那个样式时量才作数
 func TestWindowSizeIsFixed(t *testing.T) {
-	hwnd := newTestWindow(t, "Fixed").create(t, "TypeFixedSizeTest")
+	hwnd := newTestWindow(t, "Fixed").createStyled(t, "TypeFixedSizeTest", wsOverlappedWindow)
 
 	const wantW, wantH = 600, 400
 	SetWindowClientRect(hwnd, 100, 100, wantW, wantH)
-
-	// 复刻库 SetSize(HintFixed) 的样式处理(不引 webview2 依赖)
-	style, _, _ := procGetWindowLongPtrW.Call(hwnd, ^uintptr(15)) // GWL_STYLE = -16
-	style &^= 0x00040000 | 0x00010000                             // WS_THICKFRAME | WS_MAXIMIZEBOX
-	procSetWindowLongPtrW.Call(hwnd, ^uintptr(15), style)
-
-	got := WindowStyle(hwnd)
-	if got&0x00040000 != 0 {
-		t.Error("WS_THICKFRAME 仍在: 窗口右下角可拖拽, 尺寸不固定")
-	}
-	if got&0x00010000 != 0 {
-		t.Error("WS_MAXIMIZEBOX 仍在: 最大化键可用, 尺寸不固定")
-	}
-
-	if hit := HitTestBottomRight(hwnd); hit != 1 {
-		t.Errorf("右下角 WM_NCHITTEST = %d, want 1(HTCLIENT) —— 17(HTBOTTOMRIGHT) 表示可拖拽缩放", hit)
-	}
-
-	// 客户区必须等于请求值: SetWindowClientRect 的反推若把标题栏算漏,
-	// 这里会少一截 —— 界面底部被切、但表面与客户区仍一致, 不会发虚, 更难发现
+	// 客户区必须等于请求值: 反推若把标题栏算漏, 这里会少一截 —— 界面底部被切、
+	// 但表面与客户区仍一致, 不会发虚, 更难发现
 	if w, h, ok := ClientPhysicalSize(hwnd); !ok || w != wantW || h != wantH {
 		t.Errorf("客户区 = %dx%d (ok=%v), want %dx%d: AdjustWindowRect 的反推不对?",
 			w, h, ok, wantW, wantH)
+	}
+
+	// ① 阳性对照: 此刻窗口真的可拖大, 取证手段必须认得出
+	if got := WindowStyle(hwnd); got&wsThickFrame == 0 || got&wsMaximizeBox == 0 {
+		t.Fatalf("阳性对照不成立: WS_OVERLAPPEDWINDOW 建出的窗口缺少缩放样式位 (GWL_STYLE=0x%08X)", got)
+	}
+	if hit := HitTestBottomRight(hwnd); hit != htBottomRight {
+		t.Fatalf("阳性对照不成立: 可拖大的窗口右下角命中 = %d, want %d(HTBOTTOMRIGHT) —— 取证手段本身失效了",
+			hit, htBottomRight)
+	}
+
+	// ② 复刻库 SetSize(HintFixed): 清掉样式位, 并让边框立刻按新样式刷新。
+	// 少了 SWP_FRAMECHANGED, 系统可能仍按旧边框回答命中测试
+	style, _, _ := procGetWindowLongPtrW.Call(hwnd, ^uintptr(15)) // GWL_STYLE = -16
+	style &^= wsThickFrame | wsMaximizeBox
+	procSetWindowLongPtrW.Call(hwnd, ^uintptr(15), style)
+	procSetWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
+		SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED)
+
+	got := WindowStyle(hwnd)
+	if got&wsThickFrame != 0 {
+		t.Error("WS_THICKFRAME 仍在: 窗口右下角可拖拽, 尺寸不固定")
+	}
+	if got&wsMaximizeBox != 0 {
+		t.Error("WS_MAXIMIZEBOX 仍在: 最大化键可用, 尺寸不固定")
+	}
+	if hit := HitTestBottomRight(hwnd); hit == htBottomRight {
+		t.Errorf("右下角 WM_NCHITTEST = %d: 已清掉缩放样式位, 那里却仍报缩放边框", hit)
 	}
 }

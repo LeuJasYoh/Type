@@ -195,6 +195,13 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
   一起改）：`version` 是常见词，无锚点的子串匹配会命中注释里的 `// version = "1.5.8"`
   或将来某个 `minXxxVersion = "…"`，而下游（标签闸门、资源、包名）全用这个提取值 ——
   取错值会一路错到底，且没有任何环节比对"提取值 == 程序真正用的 version"（v1.5.7 修）
+- **"必须多处同款"的东西有本地闸门**（2026-10 补）：`cmd/type/build_contract_test.go` 在
+  `go test` 里钉着三件事 —— 四处版本号正则逐字相同且都带 `-CaseSensitive` 与"恰好一处"
+  断言、三处发布构建命令行都含 `-trimpath` 与 `-ldflags="-H windowsgui -s -w"` 且指向
+  `./cmd/type`、`build.ps1` 首三字节仍是 BOM。断言只看**非注释行**：否则把真命令里的
+  `-trimpath` 删掉、旁边补一条写着同款字面量的注释就能骗过它（独立验证的变异实测过）。
+  它是逐字比较，不吃"行为等价的改写"（拆行、反引号续行、`1 -ne $m.Count`）——四处一起
+  改写时要顺手改掉测试里的常量
 - **build.ps1 必须保留 UTF-8 BOM**（文件首三字节 EF BB BF）：Windows PowerShell 5.1
   对无 BOM 的 .ps1 按系统 ANSI（中文系统为 GBK）解码，中文注释的尾字节会吞掉换行，
   把下一行代码并进注释成为死代码，ProductVersion 同步曾因此静默失效。改脚本后若
@@ -455,7 +462,11 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   Chromium 改缩放一旦不同步，就是"渲染缩放 ≠ 显示器缩放"的位图拉伸，正是发虚的来源）；
   ② 不放宽窗口样式 —— `SetSize(HintFixed)` 去掉 `WS_THICKFRAME|WS_MAXIMIZEBOX` 是
   "不可拖大"的唯一来源，`TestWindowSizeIsFixed` 读回样式位并用 `WM_NCHITTEST` 命中测试
-  钉着（只调 `SetWindowClientRect` 的话窗口仍可拖大，A/B 实测过）；
+  钉着（只调 `SetWindowClientRect` 的话窗口仍可拖大，A/B 实测过）。**该用例是 A/B 形式**
+  （2026-10 加固）：先用 `WS_OVERLAPPEDWINDOW` 建窗、证明这套取证认得出可拖大（右下角命中
+  `HTBOTTOMRIGHT`=17），清位（+`SWP_FRAMECHANGED`）之后才断言认不出。此前它拿无边框样式
+  建窗（本来就没有 `WS_THICKFRAME`）、命中测试又按**客户区**取点（落在客户区里面，任何带
+  边框的窗口都回 `HTCLIENT`），两条断言恒真，等于没装 —— 修它是加固，不是放松；
   ③ 不在运行时调 `SetProcessDpiAwarenessContext`。
   `SetWindowClientRect` 把客户区尺寸反推成窗口矩形 —— 少了这一步客户区会比目标矮一个
   标题栏（界面底部被切，而表面与客户区仍一致，不会发虚、更难发现）。2026-10 起这条

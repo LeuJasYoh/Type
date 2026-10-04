@@ -320,6 +320,22 @@ func SetWindowClientRect(hwnd uintptr, x, y, cw, ch int) {
 // (webview.go 里以 0xCF0000 传给 CreateWindowExW), 反推窗口尺寸要与之一致
 const wsOverlappedWindow = 0x00CF0000
 
+// "窗口能不能拖大"由这两个样式位决定: WS_THICKFRAME 是可拖拽的边框,
+// WS_MAXIMIZEBOX 是最大化按钮(同样让尺寸可变)。
+// 库的 SetSize(HintFixed) 确实会清掉这两个位(go-webview2 的 webview.go:
+// `style &^= (WSThickFrame|WSMaximizeBox)` 之后再 SetWindowPos(SWP_FRAMECHANGED)),
+// 但"库会清"与"产物里真的不可拖大"是两件事 —— 样式位可能被别处改回去, 边框也
+// 可能没随样式刷新, 所以 TestWindowSizeIsFixed 读回样式位、并真的问系统一次
+// 命中测试
+const (
+	wsThickFrame  = 0x00040000
+	wsMaximizeBox = 0x00010000
+)
+
+// htBottomRight 是 WM_NCHITTEST 的 HTBOTTOMRIGHT: 只有它说明右下角是可拖拽的
+// 缩放边框(HTCLIENT=1 是客户区, HTBORDER=18 是不可缩放的细边框, 两者都不可拖大)
+const htBottomRight = 17
+
 // toUint32 把一个坐标/尺寸值按 32 位传给 Win32。
 // 直接 uintptr(v) 在 v 为负时会符号扩展成 0xFFFFFFFFxxxx (64 位下),
 // 系统按 int32 读取时结果虽同, 但按 uintptr 读取(如 SWP 的坐标参数在某些
@@ -346,27 +362,31 @@ func ClientLogicalSize(hwnd uintptr) (w, h int, ok bool) {
 // ─── 窗口置顶 ─────────────────────────────────────────
 
 // WindowStyle / HitTestBottomRight 是"窗口到底能不能拖大"的取证手段。
-// 库的 SetSize(HintFixed) 声称移除 WS_THICKFRAME|WS_MAXIMIZEBOX, 但实测样式位
-// 仍在(见 main.go 的注释): 于是判据不能只看源码, 得读回样式位并真的问一次
-// 命中测试 —— 只有 HTBOTTOMRIGHT 才说明右下角是个可拖拽的边框
+// 库的 SetSize(HintFixed) 会清掉 wsThickFrame|wsMaximizeBox(见上面的常量注释),
+// 但判据不能只看源码: 样式位要读回, 还要真的问系统一次命中测试。
+// 这两条取证在 TestWindowSizeIsFixed 里以 A/B 形式钉着 —— 先在一个真的可拖大的
+// 窗口上证明"认得出"(阳性对照), 再去掉样式位证明"认不出"; 只有阳性对照成立,
+// 后一半才不是自我安慰(此前这条用例两头都缺, 两条断言恒真)
 func WindowStyle(hwnd uintptr) uint32 {
 	style, _, _ := procGetWindowLongPtrW.Call(hwnd, ^uintptr(15)) // GWL_STYLE = -16
 	return uint32(style)
 }
 
-// HitTestBottomRight 在窗口右下角 2px 处做一次 WM_NCHITTEST, 返回命中码:
-// HTBOTTOMRIGHT(17) 表示那里是缩放边框, HTCLIENT(1) 表示是客户区(不可拖大)
+// HitTestBottomRight 在**窗口矩形**(含边框)右下角内侧 2px 处做一次
+// WM_NCHITTEST, 返回命中码: htBottomRight(17) 表示那里是缩放边框, 其余
+// (HTCLIENT=1 / HTBORDER=18)表示不可拖大。失败返回 -1。
+//
+// 采样点必须按窗口矩形算, 不能按客户区: 客户区右下角往内 2px 已经在客户区里面,
+// 任何带边框的窗口都只会回 HTCLIENT —— 于是"验证窗口不可拖大"的断言对**可拖大**
+// 的窗口同样成立, 是恒真的。2026-10 用独立探针实测确认过这一条: 同一个
+// WS_OVERLAPPEDWINDOW 窗口, 按客户区取点得 1, 按窗口矩形取点得 17
 func HitTestBottomRight(hwnd uintptr) int {
 	var r Rect
-	if ret, _, _ := procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ret == 0 {
+	if ret, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ret == 0 {
 		return -1
 	}
-	// 客户区右下角转成窗口坐标(含边框), 再往内收 2px 落在边框带上
-	var origin struct{ x, y int32 }
-	if ret, _, _ := procClientToScreen.Call(hwnd, uintptr(unsafe.Pointer(&origin))); ret == 0 {
-		return -1
-	}
-	lp := int32(origin.y+int32(r.Bottom)-2)<<16 | (origin.x + r.Right - 2)
+	// WM_NCHITTEST 的 lParam 是屏幕坐标打包成的 POINTS: 低 16 位 x, 高 16 位 y
+	lp := int32(r.Bottom-2)<<16 | (r.Right - 2)
 	ret, _, _ := procSendMessageW.Call(hwnd, WM_NCHITTEST, 0, uintptr(uint32(lp)))
 	return int(int32(uint32(ret)))
 }

@@ -887,6 +887,66 @@ func TestChineseTypesViaClipboard(t *testing.T) {
 	}
 }
 
+// 强制逐字符(forceSendInput=true): 含非 ASCII 也走 SendRune 按键层, 全程不碰剪贴板。
+// 它与"含非 ASCII 就走剪贴板"共用一个判据(useClipboard = containsNonASCII(text) &&
+// !forceSendInput), 只看终态是分不出来的 —— 剪贴板路径同样以"输入完成"收尾,
+// 所以判据取注入事件与剪贴板操作这两个序列
+func TestForceSendInputTypesChineseViaKeyLayer(t *testing.T) {
+	inj := newFakeInjector()
+	cb := &fakeClipboard{text: "用户原文本"}
+	svc := newTestService(inj, cb, noSleep)
+
+	if _, err := svc.Start("你好AB", 1, true, false); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	st := waitTerminal(t, svc)
+	if st.Phase != PhaseSuccess {
+		t.Fatalf("终态 phase = %s, want success", st.Phase)
+	}
+	if st.Message != msgDone {
+		t.Errorf("终态文案 = %q, want %q", st.Message, msgDone)
+	}
+	// 逐字符注入: 中文也不该被降级成粘贴(V), 字符一律走按键层(r:)
+	want := []string{"r:你", "r:好", "r:A", "r:B"}
+	if got := inj.calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("注入序列 = %q, want %q(强制逐字符应走 SendRune)", got, want)
+	}
+	// 剪贴板一次都没被碰过: snap/set/restore 出现任何一个都说明走了剪贴板那条路
+	if got := cb.ops(); len(got) != 0 {
+		t.Errorf("剪贴板操作序列 = %v, want 空(强制逐字符不该碰剪贴板)", got)
+	}
+	if got := cb.GetText(); got != "用户原文本" {
+		t.Errorf("剪贴板内容 = %q, want %q(用户原内容应原封不动)", got, "用户原文本")
+	}
+}
+
+// 强制逐字符 + 文本直投: 非 ASCII 同样不解到剪贴板, 字符经文本层(T:)注入。
+// "让中文也走文本层"要的就是这条组合(绕过粘贴检测与文本直投同时勾选)
+func TestForceSendInputTextDirectRoutesViaTextLayer(t *testing.T) {
+	inj := newFakeInjector()
+	cb := &fakeClipboard{text: "用户原文本"}
+	svc := newTestService(inj, cb, noSleep)
+
+	if _, err := svc.Start("你好", 1, true, true); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	st := waitTerminal(t, svc)
+	if st.Phase != PhaseSuccess {
+		t.Fatalf("终态 phase = %s, want success", st.Phase)
+	}
+	if st.Message != msgDone {
+		t.Errorf("终态文案 = %q, want %q", st.Message, msgDone)
+	}
+	// 字符走文本层: 不应出现按键层(r:)或粘贴(V)
+	want := []string{"T:你", "T:好"}
+	if got := inj.calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("注入序列 = %q, want %q(文本直投应走 SendText)", got, want)
+	}
+	if got := cb.ops(); len(got) != 0 {
+		t.Errorf("剪贴板操作序列 = %v, want 空(文本直投不该碰剪贴板)", got)
+	}
+}
+
 // 过代守卫: 取消后立即重启, 旧任务不注入、迟到的状态写入不覆盖新任务
 func TestRestartAfterCancelSupersedesOldTask(t *testing.T) {
 	inj := newFakeInjector()

@@ -44,12 +44,15 @@ var (
 	procMonitorFromWindow        = user32.NewProc("MonitorFromWindow")
 	procGetMonitorInfoW          = user32.NewProc("GetMonitorInfoW")
 	procGetClientRect            = user32.NewProc("GetClientRect")
-	procAdjustWindowRect         = user32.NewProc("AdjustWindowRect")
+	// GetWindowRect: 窗口矩形(含边框), "右下角是不是缩放边框"必须按它取点 ——
+	// 按客户区取点会落在客户区里面, 任何带边框的窗口都答 HTCLIENT(见
+	// HitTestBottomRight 的说明)
+	procGetWindowRect    = user32.NewProc("GetWindowRect")
+	procAdjustWindowRect = user32.NewProc("AdjustWindowRect")
 	// DPI 版本: 非 DPI 版在"系统 DPI 与显示器 DPI 不同"的机器上按错的那个算边框,
 	// 客户区会差十几个物理像素(客户区同时决定 WebView2 的渲染表面大小)
 	procAdjustWindowRectExForDpi = user32.NewProc("AdjustWindowRectExForDpi")
 	procGetWindowLongPtrW        = user32.NewProc("GetWindowLongPtrW")
-	procClientToScreen           = user32.NewProc("ClientToScreen")
 	procSendMessageW             = user32.NewProc("SendMessageW")
 	procGlobalFree               = kernel32.NewProc("GlobalFree")
 	procRegisterClipboardFormatW = user32.NewProc("RegisterClipboardFormatW")
