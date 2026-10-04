@@ -143,16 +143,10 @@ func (Clipboard) GetText() string {
 }
 
 // HoldsText 判断剪贴板当前文本是否就是 text, 并回报这次比对有没有得出结论。
-// 按原始字节比对而非 GetText 的字符串: CF_UNICODETEXT 内嵌 NUL 时 GetText 会在
-// NUL 处截断, 字符串比较将误判为"用户已改动"而跳过恢复。
-//
-// 三个落点各是一种不同的事实, 不许压成一个 bool(旧签名就是那样, 结果"读不到"
-// 被并进"用户已改动", 于是原内容已经丢了还报"输入完成"):
-//   - 打开剪贴板失败、GlobalLock 失败、GlobalSize 返回 0: 读不到 —— known=false,
-//     调用方必须按"没恢复"上报;
-//   - 打开成功但没有 CF_UNICODETEXT: 我们写进去的那份已经不在了(剪贴板被别的
-//     程序或用户重新写过), holds=false、known=true —— 跳过恢复正合期望;
-//   - 读到数据: 按原始字节给出 holds。
+// 按原始字节比对而非 GetText 的字符串: CF_UNICODETEXT 内嵌 NUL 时字符串比较会在
+// NUL 处截断, 误判成"用户已改动"而跳过恢复。
+// (holds, known) 两个返回值的分工、三个落点各是什么事实、旧签名把歧义解到了哪一边,
+// 见 docs/invariants.md「其它不变量」
 func (Clipboard) HoldsText(text string) (holds bool, known bool) {
 	if !openClipboardWithRetry() {
 		return false, false
@@ -198,14 +192,11 @@ var handleFormats = map[uint32]struct{}{
 	cfEnhMetafile: {},
 }
 
-// skippableFormat 该格式是否不适合按"一整块内存"快照。
-// 判据是"这块数据是不是普通内存块": 句柄型格式照抄下来, 恢复时写回的是失效
-// 句柄或垃圾字节, 受害的是系统里其它程序。三类被排除 ——
-// ① GetClipboardData 直接返回 GDI 句柄的格式;
-// ② CF_METAFILEPICT: 内存块里装着图形句柄, 恢复时那个句柄已随 EmptyClipboard 失效;
-// ③ 所有者绘制 / 私有显示 / GDI 对象格式族: 数据由持有方解释, 形状不保证是内存块。
-// CF_PRIVATEFIRST..LAST(0x0200-0x02FF, 程序私有格式)不在此列: 它们通常是内存块,
-// 跳过反而会丢内容, 照抄更划算
+// skippableFormat 该格式是否不适合按"一整块内存"快照: 判据是"这块数据是不是普通
+// 内存块", 不是"格式少见"。句柄型格式(GetClipboardData 直接返回 GDI 句柄)、
+// CF_METAFILEPICT(块里的图形句柄已随 EmptyClipboard 失效)、所有者绘制/私有显示/
+// GDI 对象格式族照抄下来恢复时会写回失效句柄或垃圾字节, 受害的是系统里其它程序。
+// CF_PRIVATEFIRST..LAST(0x0200-0x02FF)通常是内存块, 刻意不跳过
 func skippableFormat(fmt uint32) bool {
 	if _, skip := handleFormats[fmt]; skip {
 		return true
@@ -218,21 +209,10 @@ func skippableFormat(fmt uint32) bool {
 	return fmt >= cfGdiObjFirst && fmt <= cfGdiObjLast
 }
 
-// Snapshot 复制当前剪贴板的全部内存块型格式(文本/图片 CF_DIB/文件
-// CF_HDROP/HTML Format 等)。
-//
-// Complete 的含义只有一条: 这份快照能不能拿来恢复。读某个格式失败时如实报
-// false —— 恢复流程会先清空剪贴板, 拿残缺的快照去恢复等于把没抄到的那些格式
-// 永久销毁, 而用户看到的会是"输入完成"。调用方据此放弃剪贴板这条路(见
-// internal/typing 的 ClipboardSnapshot)。
-//
-// 两个容易误读的地方:
-//   - 打开失败与"一个格式都没读到"同样报 Complete=false。这两种情况分不清
-//     (枚举不到也可能只是剪贴板本来就空), 对调用方也没区别, 都按无从恢复处理;
-//   - skippableFormat 跳过的那些格式不计入 Complete。那是既定的取舍: 句柄型
-//     与含句柄的格式照抄下来恢复时会写回失效句柄或垃圾字节, 受害的是系统里
-//     别的程序, 宁可不恢复(见该函数的说明)。所以"带截图/位图的剪贴板"照样是
-//     完整快照, 不会因此把整条粘贴路径踢掉
+// Snapshot 复制当前剪贴板的全部内存块型格式(文本 / CF_DIB / CF_HDROP / HTML Format)。
+// Complete 的唯一含义是"这份快照能不能拿去恢复": 恢复会先清空剪贴板, 拿残缺快照
+// 去恢复等于把没抄到的格式永久销毁。跳过的格式不计入 Complete, 取舍见 skippableFormat;
+// 打开失败与"一个格式都没读到"为何同样算不完整, 见 docs/invariants.md「其它不变量」
 func (Clipboard) Snapshot() typing.ClipboardSnapshot {
 	if !openClipboardWithRetry() {
 		return typing.ClipboardSnapshot{} // 原状态未知, 无从恢复
@@ -313,9 +293,10 @@ func writeClipboardFormats(snap []typing.ClipboardFormat) bool {
 	return all
 }
 
-// RestoreSnapshotRaw 无条件写回快照(调用方需确认剪贴板未被用户改动),
-// 返回剪贴板是否真的回到了快照状态。恢复用比读写更耐心的重试档位:
-// 失败意味着用户原本的内容丢失, 值得多等一会儿
+// RestoreSnapshotRaw 无条件写回快照(调用方需确认剪贴板未被用户改动), 返回剪贴板
+// 是否真的回到了快照状态(nil 是"原状态未知": 不碰剪贴板并返回 false; 空切片是
+// "本来就空", 走 clipboardClear)。恢复用比读写更耐心的重试档位: 失败意味着用户
+// 原本的内容丢失, 值得多等一会儿
 func (Clipboard) RestoreSnapshotRaw(snap []typing.ClipboardFormat) bool {
 	if snap == nil {
 		return false // 快照失败, 原状态未知, 不动剪贴板(也没恢复成任何东西)

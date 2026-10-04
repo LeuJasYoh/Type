@@ -67,12 +67,10 @@ func (Injector) SendRune(r rune) bool {
 	return sendCharUnitsViaInput(r)
 }
 
-// SendText 文本直投: 逐 UTF-16 码元经 WM_CHAR 直达前台焦点窗口 —— 不产生
-// 按键事件, 目标编辑器挂在 keydown 层的补全弹窗劫持(空格/回车被当作
-// "接受候选")与括号自动配对均无从触发。实测(Edge/Chromium 网页编辑器,
-// tools/wmcharprobe + testdata/completion-guard.html): 普通字符与 Tab 逐字
-// 原样落盘、零 keydown、零配对; 但 \n/\r 控制字符会被 Chromium 过滤, 换行
-// 必须走真按键(见 internal/typing 的 sendEscaped)。与 SendRune 的按键层注入互为镜像
+// SendText 文本直投: 逐 UTF-16 码元经 WM_CHAR 直达前台焦点窗口, 不产生按键事件,
+// 挂在 keydown 层的补全弹窗劫持与括号自动配对均无从触发; \n/\r 属控制字符会被
+// Chromium 过滤, 换行必须走真按键(见 internal/typing 的 sendEscaped)。
+// 实测数据与通道边界见 docs/invariants.md「文本直投（v1.5.0，WM_CHAR 文本层注入）」
 func (Injector) SendText(r rune) bool { return sendCharUnitsViaWMChar(r) }
 
 // SendEscape 注入 Esc 真键: 关闭目标编辑器的补全弹窗(其键义劫持的唯一
@@ -133,19 +131,11 @@ func utf16Units(r rune) []uint16 {
 	return []uint16{0xD800 | uint16(r>>10)&0x3FF, 0xDC00 | uint16(r)&0x3FF}
 }
 
-// sendCharUnitsViaWMChar 通过 WM_CHAR 消息向前台焦点窗口注入一个 rune
-// (超出 BMP 时按代理对拆成两条消息)。两条用途共用: 全角标点绕行
-// (KEYEVENTF_UNICODE 系统级 bug)与文本直投 SendText
-//
-// 拿不到焦点子窗口(返回 0)时退化为 SendInput 按键注入, 与"没有前台窗口"
-// 同等对待: 顶层容器窗口会把 WM_CHAR 丢掉, 而 SendMessageTimeout 仍返回成功,
-// 于是"一个字都没进去"被报成注入成功。
-//
-// 已知盲区, 未实测: 全角标点(SendRune 的第一条分支)也走这里, 而 SendInput 对
-// U+FF00-FFEF 恰有那个系统级 bug(症状是标点重复、后续字符被吞)。退化为按键
-// 之后这类字符会怎样, 没有真机验证过 —— `sendChar16` 判的是 SendInput 的入队
-// 计数, 而那个 bug 发生在目标侧渲染, 入队照样成功, 所以很可能静默出错而不是
-// 报失败。要下结论得用 tools/wmcharprobe 在真窗口上逐字比对
+// sendCharUnitsViaWMChar 通过 WM_CHAR 向前台焦点窗口注入一个 rune(超出 BMP 时按
+// 代理对拆成两条消息); 全角标点绕行(KEYEVENTF_UNICODE 系统级 bug)与文本直投
+// SendText 共用这条通道。拿不到焦点子窗口时退化为 SendInput: 顶层容器会把
+// WM_CHAR 丢掉, 而 SendMessageTimeout 仍返回成功, "一个字都没进去"会被报成注入成功。
+// 退化后全角标点是否静默出错属已知盲区, 见 docs/invariants.md「文本直投（v1.5.0，WM_CHAR 文本层注入）」
 func sendCharUnitsViaWMChar(r rune) bool {
 	hwnd := focusedHWND()
 	if hwnd == 0 {

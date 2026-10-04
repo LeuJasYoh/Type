@@ -29,9 +29,8 @@ const monitorDefaultToPrimary = 1
 // ─── 窗口尺寸与 DPI ───────────────────────────────────
 
 // ScaledForDPI 把以 96 DPI 为基准的逻辑尺寸换算成窗口所在显示器的物理像素。
-// 进程的 DPI 感知由 tools/mkres 生成的 manifest 声明(PerMonitorV2), 声明之后
-// 窗口坐标一律按物理像素解释: 不换算的话, 在 125% 缩放的显示器上固定尺寸的
-// 窗口会比预期小两成(旧的 webview 库在内部替调用方做了同一件事)
+// 进程的 DPI 感知由 manifest 声明, 声明之后窗口坐标一律按物理像素解释: 不换算
+// 的话固定尺寸窗口在 125% 显示器上会小两成。见 docs/invariants.md「其它不变量」
 func ScaledForDPI(hwnd uintptr, w, h int) (int, int) {
 	dpi, _, _ := procGetDpiForWindow.Call(hwnd)
 	if dpi < 96 {
@@ -42,10 +41,9 @@ func ScaledForDPI(hwnd uintptr, w, h int) (int, int) {
 
 // scaledByDPI 逻辑尺寸 → 物理像素的纯换算(不碰窗口, 可单测)。
 //
-// 取整必须四舍五入, 不能用整数除法的截断: 截断在非整数倍缩放下会稳定地少
-// 一个物理像素(1024 在 125% 下算出 1023), 而客户区尺寸同时决定 WebView2 的
-// 渲染表面大小 —— 表面比客户区小 1 像素, Chromium 的输出就要被重采样,
-// 这正是"文字发虚"的来源之一。四舍五入把误差压到 ±0.5 物理像素
+// 取整必须四舍五入: 整数除法截断在非整数倍缩放下会稳定地少一个物理像素(1024 在
+// 125% 下算出 1023), 而客户区尺寸同时决定 WebView2 的渲染表面大小 —— 表面比
+// 客户区小 1 像素, Chromium 的输出就要被重采样, 正是"文字发虚"的来源之一
 func scaledByDPI(w, h, dpi int) (int, int) {
 	if dpi < 96 {
 		dpi = 96
@@ -54,10 +52,8 @@ func scaledByDPI(w, h, dpi int) (int, int) {
 }
 
 // roundDiv 四舍五入的整数除法: 逻辑尺寸 → 物理像素的换算要用它。
-// 截断(整数除法)会让误差单向累积 —— 实测 100 DPI 下 720 逻辑 → 750 物理, 再截断
-// 折回就变成 720, 看着对; 但 599 这类值会稳定地少 1。
-// 2026-10 收窄导出面时删掉了唯一的"物理 → 逻辑"调用点(clientLogicalSize), 现在
-// 生产里只有 scaledByDPI 在用; 折回方向与负值分支一并留着(换算规则本是双向的)
+// 截断会让误差单向累积(599 @120dpi: 舍入 749, 截断 748); 负值走对称分支 ——
+// 折回方向与负值分支一并留着, 换算规则本是双向的
 func roundDiv(v, div int) int {
 	if v < 0 {
 		return -((-v + div/2) / div)
@@ -66,8 +62,8 @@ func roundDiv(v, div int) int {
 }
 
 // dpiForWindow 读窗口当前所在显示器的 DPI(取不到时按 96)。
-// 注意它不一定是 96 的整数倍: Windows 允许 100、110、125 这类自定义缩放,
-// 本机实测就是 100 —— 非整数倍正是取整误差最容易露头的地方
+// 它不一定是 96 的整数倍: Windows 允许 100、110、125 这类自定义缩放,
+// 非整数倍正是取整误差最容易露头的地方
 func dpiForWindow(hwnd uintptr) int {
 	dpi, _, _ := procGetDpiForWindow.Call(hwnd)
 	if dpi < 96 {
@@ -88,18 +84,10 @@ func clientPhysicalSize(hwnd uintptr) (w, h int, ok bool) {
 // ─── 按显示器定窗口尺寸(启动时一次) ──────────────────
 
 // 窗口尺寸上下限(逻辑像素, 96 DPI 基准)。
-//
-// 为什么以**高度**为主而不是宽度: 本界面的纵向固定成本很高(标题栏 34 + 输入框
-// 195 + 选项行 26 + 按钮行 36 + 状态栏 32 + 目标条 26 + 若干 gap ≈ 420px),
-// 只有输入框能吸收余量。实测高到 600 时余量有 146px, 全给输入框会让它比按钮行
-// 高九倍、头重脚轻; 收到 540 后余量约 70px, 输入框长到约 300px 正好吃完, 界面
-// 不留空白也不失衡。宽度由高度按 6:5 推出来。
-//
-// 为什么有下限: 540 是文档化的默认宽度。高度下限 480 的来历见下──原先按"450 高
-// 时目标行 + 两行状态文案会被裁"定的, 而实测(2026-10, layout-probe 逐像素量)
-// 最长的那条终态文案在 540 宽下只占一行(实测 446px < 可用 470px), 状态栏恒为
-// 单行 37.5px; 两行文案要到 496 宽才出现(那已在官方尺寸范围之外)。所以 480 是
-// 留有余量的保守取值, 不是"刚好放下"的临界值, 别再按更紧的数字往下调
+// 以**高度**为主: 纵向固定成本约 420px(标题栏/输入框/选项行/按钮行/状态栏/目标条),
+// 只有输入框能吸收余量; 实测 600 高时余量 146px、全给输入框就头重脚轻, 540 高时
+// 余量约 70px、输入框约 300px 正好吃完, 宽度再由高度按 6:5 推出。
+// 下限 480 是保守取值、不是"刚好放下"的临界值, 别按更紧数字往下调: 见 docs/invariants.md「其它不变量」
 const (
 	MinWindowW = 540
 	MinWindowH = 480
@@ -108,7 +96,7 @@ const (
 )
 
 // initialWindowSize 按显示器可用工作区(逻辑像素)算窗口尺寸(逻辑像素)。
-// workH 用不上时忽略(恒返回下限), 只有工作区比下限还矮(小屏 / 横屏少见情形)
+// workW 刻意不用(宽度由高度推出); 只有工作区比下限还矮(小屏 / 横屏少见情形)
 // 才据它收窄, 不让窗口高过屏幕
 func initialWindowSize(workW, workH int) (w, h int) {
 	_ = workW // 宽度由高度推出; 保留参数是为了将来要按工作区宽度兜底时有处可加
@@ -177,9 +165,8 @@ type WindowPlan struct {
 // PlanForDisplay 算出窗口的目标客户区尺寸与位置(全部物理像素), 并把**设计逻辑尺寸**
 // 一并带出来: 内容缩放与窗口 DPI 缩放不等时, 要拿它乘真实比值重算一次客户区
 // (见 WindowClientForScale)。
-// ok 为 false 表示取不到显示器信息: 调用方退回默认尺寸、位置交给系统决定
-// (调用方用 SetSize 即可), 不让"尺寸算不准"升级成"界面起不来"。
-// hwnd 需要已存在: DPI 与工作区都从它所在的显示器取
+// ok=false 表示取不到显示器信息: 调用方退回默认尺寸, 不让"尺寸算不准"升级成
+// "界面起不来"; hwnd 需已存在(DPI 与工作区都从它所在的显示器取)
 func PlanForDisplay(hwnd uintptr) (WindowPlan, bool) {
 	work, haveWork := monitorWorkArea(hwnd)
 	if !haveWork {
@@ -209,13 +196,10 @@ func PlanForDisplay(hwnd uintptr) (WindowPlan, bool) {
 }
 
 // ─── 内容缩放(WebView2 的 rasterization scale)校正 ───
-//
-// 界面的尺寸等式只有一条: **CSS 视口 = 客户区物理像素 / 内容缩放**。
-// 内容缩放由 WebView2 自己定(官方口径是"显示器缩放 × 用户文本大小", 还叠着页面
-// 缩放), 并不等于窗口 DPI 缩放: 实测某用户机上窗口按 125% 建成 720×600 物理像素,
-// 内容却按约 1.75 倍渲染, 视口被压到 411×343, 输入框(下限 195px、不透明底、
-// position:relative 画在兄弟行之上)直接盖住了选项行 —— 用户看到的是"选项行不见了"。
-// 所以启动后把页面报回来的真实比值接住, 反过来让窗口去适配内容缩放
+// 尺寸等式只有一条: **CSS 视口 = 客户区物理像素 / 内容缩放**。内容缩放由 WebView2
+// 自己定(官方口径是"显示器缩放 × 用户文本大小", 还叠着页面缩放), 不等于窗口 DPI
+// 缩放; 两者不等时视口会被压小、控件互相覆盖, 实测症状与处置见
+// docs/invariants.md「其它不变量」, 所以启动后按页面报回的真实比值重设客户区
 
 // maxContentScale 内容缩放的上界。Windows 的显示缩放最大 500%、"文本大小"最大 225%，
 // 两个都拉满也到不了 16 倍；而且那种量级下窗口本来就会因为装不进工作区被拒。
@@ -263,11 +247,8 @@ func WindowClientForScale(hwnd uintptr, lw, lh int, scale float64) (cw, ch, x, y
 }
 
 // windowRectForClient 把客户区尺寸(cw×ch, 物理像素)反推成窗口矩形的宽高。
-//
-// 为什么用 AdjustWindowRectExForDpi 而不是非 DPI 版: 后者在"系统 DPI 与显示器
-// DPI 不同"的机器上按错的那个 DPI 算边框(正是内容缩放出问题的那一类机器), 客户区
-// 会差十几个物理像素; 而客户区同时决定 WebView2 的渲染表面大小。拿不到该入口时
-// (极老的系统)退回非 DPI 版, 行为与改动前一致
+// 必须用 AdjustWindowRectExForDpi: 非 DPI 版在"系统 DPI 与显示器 DPI 不同"的机器
+// 上按错的那个算边框(客户区差十几个物理像素); 拿不到该入口(极老系统)才退回非 DPI 版
 func windowRectForClient(hwnd uintptr, cw, ch int) (w, h int) {
 	r := rect{Right: int32(cw), Bottom: int32(ch)}
 	ok := false
@@ -287,18 +268,11 @@ func windowRectForClient(hwnd uintptr, cw, ch int) (w, h int) {
 	return int(r.Right - r.Left), int(r.Bottom - r.Top)
 }
 
-// SetWindowClientRect 把窗口摆到 (x, y), 并让**客户区**尺寸正好是 cw×ch
-// (全部物理像素)。
-//
-// 为什么不能直接把 cw/ch 交给 SetWindowPos: 它收的是窗口矩形(含标题栏与
-// 边框), 而客户区才是 WebView2 渲染表面的大小。少了这一步换算, 客户区会比
-// 目标矮一个标题栏 —— 界面底部被切一条, 而表面与客户区仍然一致, 所以不会
-// 发虚, 只会静默少一截, 更不容易发现
-//
-// 2026-10 起两条加固(客户区与渲染表面差一像素就要重采样, 是发虚的来源之一):
-//   - 边框反推走 DPI 版(见 windowRectForClient);
-//   - 摆完读回客户区, 与目标差 1 像素以上就按差额再摆一次。边框推算与实际总会
-//     有出入(样式位、系统 DPI 与显示器 DPI 不一致都会影响), 读回才是判据
+// SetWindowClientRect 把窗口摆到 (x, y), 并让**客户区**尺寸正好是 cw×ch(物理像素)。
+// 不能把 cw/ch 直接交给 SetWindowPos: 它收的是含标题栏与边框的窗口矩形, 而客户区才是
+// WebView2 渲染表面的大小; 少了换算客户区会矮一个标题栏 —— 底部被切, 表面仍与客户区
+// 一致, 所以不发虚、只会静默少一截。边框反推走 DPI 版并读回复核(差 1px 以上再摆一次),
+// 读回才是判据: 见 docs/invariants.md「其它不变量」
 func SetWindowClientRect(hwnd uintptr, x, y, cw, ch int) {
 	for attempt := 0; ; attempt++ {
 		ww, wh := windowRectForClient(hwnd, cw, ch)
@@ -322,13 +296,10 @@ func SetWindowClientRect(hwnd uintptr, x, y, cw, ch int) {
 // (webview.go 里以 0xCF0000 传给 CreateWindowExW), 反推窗口尺寸要与之一致
 const wsOverlappedWindow = 0x00CF0000
 
-// "窗口能不能拖大"由这两个样式位决定: WS_THICKFRAME 是可拖拽的边框,
-// WS_MAXIMIZEBOX 是最大化按钮(同样让尺寸可变)。
-// 库的 SetSize(HintFixed) 确实会清掉这两个位(go-webview2 的 webview.go:
-// `style &^= (WSThickFrame|WSMaximizeBox)` 之后再 SetWindowPos(SWP_FRAMECHANGED)),
-// 但"库会清"与"产物里真的不可拖大"是两件事 —— 样式位可能被别处改回去, 边框也
-// 可能没随样式刷新, 所以 TestWindowSizeIsFixed 读回样式位、并真的问系统一次
-// 命中测试
+// WS_THICKFRAME 是可拖拽的边框, WS_MAXIMIZEBOX 是最大化按钮(同样让尺寸可变)。
+// 库的 SetSize(HintFixed) 会清掉这两个位, 但"库会清"与"产物里真的不可拖大"是
+// 两件事(样式位可能被别处改回、边框可能没随样式刷新): 判据见
+// docs/invariants.md「其它不变量」
 const (
 	wsThickFrame  = 0x00040000
 	wsMaximizeBox = 0x00010000
@@ -348,25 +319,20 @@ func toUint32(v int) uintptr {
 
 // ─── 窗口置顶 ─────────────────────────────────────────
 
-// windowStyle / hitTestBottomRight 是"窗口到底能不能拖大"的取证手段。
-// 库的 SetSize(HintFixed) 会清掉 wsThickFrame|wsMaximizeBox(见上面的常量注释),
-// 但判据不能只看源码: 样式位要读回, 还要真的问系统一次命中测试。
-// 这两条取证在 TestWindowSizeIsFixed 里以 A/B 形式钉着 —— 先在一个真的可拖大的
-// 窗口上证明"认得出"(阳性对照), 再去掉样式位证明"认不出"; 只有阳性对照成立,
-// 后一半才不是自我安慰(此前这条用例两头都缺, 两条断言恒真)
+// windowStyle / hitTestBottomRight 是"窗口到底能不能拖大"的取证手段:
+// 判据不能只看源码, 样式位要读回, 还要真的问系统一次命中测试; 且用例必须 A/B 两段
+// (先证明取证手段认得出可拖大, 再清位证明认不出, 缺阳性对照则断言恒真) ——
+// 见 docs/invariants.md「其它不变量」
 func windowStyle(hwnd uintptr) uint32 {
 	style, _, _ := procGetWindowLongPtrW.Call(hwnd, ^uintptr(15)) // GWL_STYLE = -16
 	return uint32(style)
 }
 
-// hitTestBottomRight 在**窗口矩形**(含边框)右下角内侧 2px 处做一次
-// WM_NCHITTEST, 返回命中码: htBottomRight(17) 表示那里是缩放边框, 其余
-// (HTCLIENT=1 / HTBORDER=18)表示不可拖大。失败返回 -1。
-//
-// 采样点必须按窗口矩形算, 不能按客户区: 客户区右下角往内 2px 已经在客户区里面,
-// 任何带边框的窗口都只会回 HTCLIENT —— 于是"验证窗口不可拖大"的断言对**可拖大**
-// 的窗口同样成立, 是恒真的。2026-10 用独立探针实测确认过这一条: 同一个
-// WS_OVERLAPPEDWINDOW 窗口, 按客户区取点得 1, 按窗口矩形取点得 17
+// hitTestBottomRight 在**窗口矩形**(含边框)右下角内侧 2px 处做一次 WM_NCHITTEST,
+// 返回命中码: htBottomRight(17) 表示缩放边框, 其余(HTCLIENT=1 / HTBORDER=18)不可
+// 拖大, 失败返回 -1。采样点必须按窗口矩形算: 按客户区取点落在客户区里面, 任何带
+// 边框的窗口都只回 HTCLIENT, 断言于是对**可拖大**的窗口同样成立(2026-10 探针实测:
+// 客户区取点 1, 窗口矩形取点 17)
 func hitTestBottomRight(hwnd uintptr) int {
 	var r rect
 	if ret, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ret == 0 {
@@ -522,12 +488,10 @@ type guiThreadInfo struct {
 	rcCaret       winRect
 }
 
-// focusedHWND 返回当前实际持有键盘焦点的窗口;
-// 前台顶层窗口通常只是容器(如浏览器主窗口), 直接向其发消息会被丢弃。
-// 拿不到焦点子窗口(hwndFocus 为 0)时返回 0, 不拿容器窗口顶替 —— 这与"没有前台
-// 窗口"一样, 都意味着没有可安全投递 WM_CHAR 的落点: 顶层窗口(浏览器主窗口那类)
-// 会把 WM_CHAR 丢掉, 而 SendMessageTimeout 照样返回成功, 于是"一个字都没进去"
-// 被报成注入成功。调用方据此退化为按键注入(见 win32_keyboard.go)
+// focusedHWND 返回当前实际持有键盘焦点的窗口(前台顶层窗口通常只是容器, 直接向它
+// 发消息会被丢弃)。拿不到焦点子窗口时返回 0, 不拿容器窗口顶替: 顶层窗口会丢
+// WM_CHAR 而 SendMessageTimeout 照样返回成功, "一个字都没进去"会被报成注入成功,
+// 调用方据此退化为按键注入。见 docs/invariants.md「文本直投（v1.5.0，WM_CHAR 文本层注入）」
 func focusedHWND() uintptr {
 	hwnd, _, _ := procGetForegroundWindow.Call()
 	if hwnd == 0 {
@@ -550,11 +514,10 @@ func focusedHWND() uintptr {
 type Foreground struct{ HWND uintptr }
 
 // Sample 读取当前顶层前台窗口: 句柄 + 标题 + 是否为本程序自身。
-// 三要素取自同一次 GetForegroundWindow: 分多次读会在两次调用的间隙发生
-// 切换时得到互相矛盾的组合(展示的标题不是锁定下来的那个窗口; "非自身"
-// 判定与目标锁定之间切回 Type, 漂移守卫从第一步就失效)。
-// 跨进程顶层窗口的标题是 GetWindowTextW 直接取回的缓存文本, 不会因目标
-// 进程无响应而阻塞(系统如此设计), 因此每拍都读标题是安全的
+// 三要素取自同一次 GetForegroundWindow: 分多次读会在间隙发生切换时得到互相矛盾的
+// 组合(标题与锁定窗口不符、非自身判定失效); 标题走 GetWindowTextW 的缓存文本,
+// 系统保证不因目标进程无响应而阻塞, 所以每拍都读标题是安全的。
+// 见 docs/invariants.md「焦点锁定与漂移防护（v1.5.3）」
 func (f Foreground) Sample() typing.ForegroundSample {
 	hwnd, _, _ := procGetForegroundWindow.Call()
 	if hwnd == 0 {

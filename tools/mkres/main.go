@@ -1,24 +1,12 @@
-// mkres 生成 Windows 资源目标文件 (.syso): 应用图标 + 版本信息 + manifest。
-//
-// 取代此前的 windres + assets/version.rc —— 构建链因此不再需要 MinGW/binutils。
-// 资源构成与 .rc 时代保持一致:
-//   - 图标组沿用原名 "IDI_ICON1"(.rc 里该符号未被任何头文件定义, windres 按
-//     "名字"记录; 这里显式同名, 资源树与旧产物一致), 图标图像直通 .ico 原始
-//     字节(含 PNG 压缩的 256 尺寸), 不做解码重编码。图像条目语言为 neutral(0)、
-//     图标组为 0x0409——winres 的分配方式, Windows 按语言回退取用, 与旧产物等价
-//   - 版本资源 id=1, 语言 0x0409(en-US), FileOS/FileFlags/FILETYPE 由 winres 按
-//     VOS_NT_WINDOWS32 / 0x3f / VFT_APP 填充, 与旧 .rc 的取值一致
-//
-// 唯一新增的是 manifest(id=1, 语言 0x0409): 声明 DPI 感知(PerMonitorV2)。旧的
-// webview 库在运行时调 SetProcessDpiAwarenessContext, 换绑定后这层能力要由
-// manifest 补回, 否则缩放非 100% 的显示器上窗口会被位图拉伸而发虚
+// mkres 生成 Windows 资源目标文件 (.syso): 应用图标 + 版本信息 + DPI 感知 manifest。
+// 取代 windres + assets/version.rc, 构建链因此不含 C 编译器:
+// 见 docs/architecture.md「工具链分界（勿混用）」。
 //
 // 用法:
 //
 //	go run ./tools/mkres -version 1.5.1 -icon assets/icon.ico -out cmd/type/version
 //
-// 产出 <out>_amd64.syso 与 <out>_arm64.syso: go build 按目标架构各取所需,
-// 因此 arm64 构建能拿到同架构的资源对象(.syso 不入库, 见 .gitignore)。
+// 产出 <out>_amd64.syso 与 <out>_arm64.syso: go build 按目标架构各取所需(.syso 不入库)。
 package main
 
 import (
@@ -45,7 +33,8 @@ const (
 const (
 	// langID 对应旧 .rc 的 Translation 0x409, 1200
 	langID = 0x409
-	// iconName 旧 .rc 里的图标资源名(见文件头说明)
+	// iconName 沿用旧 .rc 的图标组名 "IDI_ICON1": 该符号未被任何头文件定义, 旧 windres
+	// 按"名字"记录, 显式同名才能让资源树与旧产物一致
 	iconName = "IDI_ICON1"
 )
 
@@ -100,6 +89,8 @@ func run(ver, iconPath, out string) error {
 }
 
 func buildResourceSet(ver, iconPath string) (*winres.ResourceSet, error) {
+	// 版本资源 id=1、语言 0x0409(en-US); FileOS/FileFlags/FILETYPE 由 winres 按
+	// VOS_NT_WINDOWS32 / 0x3f / VFT_APP 填充 —— 与旧 .rc 的取值一致
 	vi := version.Info{}
 	vi.Type = version.App
 	for _, kv := range [][2]string{
@@ -125,25 +116,27 @@ func buildResourceSet(ver, iconPath string) (*winres.ResourceSet, error) {
 		return nil, err
 	}
 	defer f.Close()
+	// LoadICO 直通 .ico 原始字节(含 PNG 压缩的 256 尺寸), 不做解码重编码
 	ico, err := winres.LoadICO(f)
 	if err != nil {
 		return nil, fmt.Errorf("读取图标 %s: %w", iconPath, err)
 	}
 
 	rs := &winres.ResourceSet{}
+	// 图标组语言取 langID, 图像条目由 winres 记为 neutral(0) —— Windows 按语言回退取用,
+	// 资源树与旧产物等价
 	if err := rs.SetIconTranslation(winres.Name(iconName), langID, ico); err != nil {
 		return nil, err
 	}
 	rs.SetVersionInfo(vi)
-	// DPI 感知声明: 缺了它, 缩放不是 100% 的显示器上整个窗口会被系统当成 96 DPI
-	// 画面做位图拉伸, 界面连带网页内容一起发虚。此前这一步由 webview 库在运行时
-	// 调 SetProcessDpiAwarenessContext 完成, 换成纯 Go 绑定后由 manifest 承担
-	// (manifest 在进程启动前生效, 也是微软推荐的做法)。
-	// permonitorv2 带 system 回退(系统读不懂前者的取值时退化为系统级感知);
-	// ExecutionLevel 必须是 asInvoker —— 本程序按设计以普通权限运行, 提权会改变
-	// UIPI 判定, 使"目标窗口拒绝了模拟按键"这条提示失真。
-	// 生成的 manifest 还会带 winres 默认的 supportedOS 声明(win7~win10),
-	// 本程序只用 Win10+ 才有的 API, 这些声明不影响实际可运行范围
+	// DPI 感知由 manifest 声明(id=1, 语言 0x0409, 而非运行时 API): manifest 在进程启动前
+	// 生效, 也是微软推荐的做法; 缺了它, 缩放非 100% 的显示器上整窗会被位图拉伸发虚 ——
+	// 见 docs/invariants.md「其它不变量」。
+	// permonitorv2 带 system 回退(系统读不懂前者的取值时退化为系统级感知); ExecutionLevel
+	// 必须是 asInvoker —— 本程序按设计以普通权限运行, 提权会改变 UIPI 判定, 使"目标窗口
+	// 拒绝了模拟按键"这条提示失真。
+	// 生成的 manifest 还会带 winres 默认的 supportedOS 声明(win7~win10); 本程序只用
+	// Win10+ 才有的 API, 这些声明不影响实际可运行范围
 	rs.SetManifest(winres.AppManifest{
 		ExecutionLevel: winres.AsInvoker,
 		DPIAwareness:   winres.DPIPerMonitorV2,

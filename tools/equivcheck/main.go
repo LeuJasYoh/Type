@@ -1,20 +1,11 @@
 // equivcheck — 重构等价性验证: 逐函数比对重构前后的函数体。
-// 用 go/parser 取顶层函数(旧实现用正则扫行 + 找行首 "}" 收尾, 遇到函数内的
-// 行首大括号就提前截断, 历史 rev 上只能抽出 2 个函数, 结论不可用),
-// 函数体按 token 序列比对(字面量保留原文, 只忽略 token 之间的空白):
-// 纯搬移的函数应完全一致,
-// 被机械变换(改名/方法化/接口调用替换)的函数会列入差异清单, 供人工逐条定位。
+// 纯搬移的函数应完全一致; 被机械变换(改名/方法化/接口调用替换)的函数会列入
+// 差异清单, 供人工逐条定位。
 //
-// 用法:
+// 用法: go run ./tools/equivcheck <旧rev> <新rev> [--old-file <路径>] [--renamed] [--renames <JSON>]
+// --old-file 默认 cmd/type/main.go; --renames 默认与本工具同目录的 renames.json
 //
-//	go run ./tools/equivcheck <旧rev> <新rev> [选项]
-//
-//	--old-file <路径>   旧侧源文件路径 (默认 main.go; 结构整理前的历史 rev 用根路径)
-//	--renames <路径>    改名映射 JSON ({"旧函数名": "新函数名"}), 默认与本工具同目录的 renames.json
-//	--renamed           启用改名映射比对接口化之后的提交
-//
-// 新侧文件清单不在工具里写死: 直接用 git ls-tree 取该 rev 的全部 .go 文件
-// (跳过 _test.go 与 tools/ 下的工具), 因此仓库布局变化后无需同步维护清单。
+// 边界(别拿"逐字节一致"当零行为变化的唯一证据)见 docs/invariants.md「其它不变量」
 package main
 
 import (
@@ -44,7 +35,7 @@ func gitShow(rev, path string) (string, error) {
 	return string(out), nil
 }
 
-// gitGoFiles 列出该 rev 中参与比对的 .go 文件
+// gitGoFiles 列出该 rev 中参与比对的 .go 文件。清单现取(不写死), 布局变化无需同步
 func gitGoFiles(rev string) ([]string, error) {
 	out, err := exec.Command("git", "ls-tree", "-r", "--name-only", rev).Output()
 	if err != nil {
@@ -67,13 +58,8 @@ func gitGoFiles(rev string) ([]string, error) {
 	return files, nil
 }
 
-// extract 解析源码并返回 {函数键: 函数体文本}。
-// 函数体不含签名, 方法化(仅 receiver 变化)不会产生差异。
-//
-// 边界(别把它当"零行为变化"的唯一证据): 只比对函数体的 token 序列 —— 签名、
-// 参数顺序与返回值、包级常量与变量、结构体字段与 tag 全在视野之外。把时序常量区
-// 里某个值改掉, 函数体一字不动, 本工具照样报"逐字节一致"; 那类改动要靠字面量
-// 断言(如 internal/typing/contract_test.go)去守
+// extract 解析源码并返回 {函数键: 函数体文本}。函数体不含签名, 方法化(仅 receiver
+// 变化)不会产生差异。视野边界(常量/签名/字段都看不见)见 docs/invariants.md「其它不变量」
 func extract(src string) (map[string]string, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "src.go", src, parser.SkipObjectResolution)
@@ -98,9 +84,9 @@ func extract(src string) (map[string]string, error) {
 }
 
 // funcKey 函数在比对表里的键: 带 receiver 的方法用 "Receiver.名字"。
-// 只用裸函数名时, 不同结构体的同名方法会互相覆盖, 被覆盖的那个永远不参与比对
-// (旧实现只保留最后一个)。同名但构建标签互斥的文件(devserver_dev.go 与
-// devserver_prod.go)仍会判重名, 由末尾的"新侧重名函数"一行提示出来
+// 只用裸函数名时, 不同结构体的同名方法会互相覆盖, 被覆盖的那个永远不参与比对。
+// 同名但构建标签互斥的文件(devserver_dev.go 与 devserver_prod.go)仍会判重名,
+// 由末尾的"新侧重名函数"一行提示出来
 func funcKey(fd *ast.FuncDecl) string {
 	name := fd.Name.Name
 	if fd.Recv == nil || len(fd.Recv.List) == 0 {
@@ -128,13 +114,10 @@ func funcKey(fd *ast.FuncDecl) string {
 	return name // 认不出的 receiver 形状: 退回裸名, 不硬凑一个会走散的键
 }
 
-// normalize 把函数体化成 token 序列, 作为比对的基准。
-//
-// 旧实现直接删掉函数体里的全部空白, 那会把字符串字面量内部的空格一并删掉,
-// 于是 "剩余 N 秒" 与 "剩余N秒" 被判成完全一致 —— 而界面文案恰恰是本仓库
-// 最不该悄悄变动的东西(冻结文案)。改为按 token 比对: 字符串/字符/数字字面量
-// 保留原文, 只有 token 之间的空白被丢弃。注释仍按旧规则去掉空白: 注释不影响
-// 行为, 而多行块注释的缩进会随 gofmt 变动, 不能算成差异。
+// normalize 把函数体化成 token 序列, 作为比对的基准: 字面量保留原文, 只有 token
+// 之间的空白被丢弃。别改回"删掉全部空白" —— 那会把字符串字面量内部的空格一并删掉,
+// 冻结文案会被误判成完全一致(理由见 docs/invariants.md「其它不变量」)。
+// 注释仍按旧规则忽略空白: 多行块注释的缩进会随 gofmt 变动, 不能算成差异
 func normalize(src string) (string, error) {
 	var firstErr error
 	var s scanner.Scanner

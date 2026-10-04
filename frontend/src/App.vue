@@ -47,9 +47,8 @@ async function onTogglePin(): Promise<void> {
   pinned.value = await toggleTopmost();
 }
 
-// 窗口的置顶不随页面重载复位, 而按钮每次都从"未置顶"起。重载(Ctrl+R、渲染进程
-// 崩溃后自动重载)之后不读回来的话, 按钮显示"置顶"而窗口仍钉在最上层, 用户点一下
-// 反而是把置顶取消掉, 按钮与窗口正好相反
+// 窗口的置顶不随页面重载复位, 而按钮每次都从"未置顶"起: 重载后不读回来的话, 按钮
+// 显示"置顶"而窗口仍钉在最上层, 用户点一下反而是取消, 按钮与窗口正好相反
 onMounted(async () => {
   try {
     pinned.value = await getTopmost();

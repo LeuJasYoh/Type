@@ -10,8 +10,6 @@ const props = defineProps<{
   progress: number;
 }>();
 
-// 三条取值规则都在 statusBarState.ts, 由 test/statusBarState.test.ts 钉着 ——
-// 它们是"坏了也只看得出界面不对"的那一类
 const barClass = computed(() => statusBarClass(props.phase));
 
 const progressActive = computed(() => progressVisible(props.progress));

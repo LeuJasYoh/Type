@@ -21,11 +21,8 @@ export function useTypingTask() {
   const isRunning = ref(false);
 
   let pollTimer: number | null = null;
-  // 链条身份: 每次开始或停止都换一代。旧代的响应即使晚回来也不作数 ——
-  // pollTimer 是共享的, 单靠它判断"链条还在不在"会被重启骗过去(v1.5.7 之前:
-  // 一拍在飞时切回窗口, healPolling 重启链条, 旧那拍回来看到非空 pollTimer
-  // 又给自己排一拍, 两条链同时轮询; 若用户此时点了取消, 旧那拍还会把
-  // "已取消"盖成倒计时, 而链条已停、界面再也不会自愈)
+  // 链条身份: 每次开始/停止都换一代, 旧代的响应即使晚回来也不作数; 为什么不能只靠
+  // pollTimer 是否为空判断, 见 docs/invariants.md「目标窗口与轮询」
   let chain = 0;
   let warmedUp = false; // 首次 tick 只渲染不终止，避免读到上一轮残留的终止态
 

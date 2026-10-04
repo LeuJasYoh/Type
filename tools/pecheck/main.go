@@ -1,24 +1,12 @@
-// pecheck — 构建产物读回校验(构建/CI 用, 不进产品链路)
+// pecheck — 构建产物读回校验(构建/CI 用, 不进产品链路): 架构 + 图标/版本/manifest
+// 是否真的链进 exe(发版与 CI 共用), 判据见 docs/architecture.md「布局与单一来源」。
 //
-// 图标、版本信息与 DPI manifest 由 tools/mkres 在构建期生成 .syso, 而 .syso
-// 不入库: go build 在它缺失或架构不匹配时不会失败, 产物只是悄悄少了图标、
-// 版本号与 manifest —— 直到用户看到空白图标、属性页版本号为空, 或在高分屏上
-// 整个窗口发虚才暴露。本工具直接读 exe 的 PE 头与资源节, 把"该在的东西在
-// 不在"变成一条会失败的检查; CI 的构建矩阵与本地发版验收共用同一份判据
-// (build.ps1 末尾的版本读回是它的 PowerShell 前身, 只查 FileVersion)。
-//
+// .syso 不入库, go build 在它缺失或架构不匹配时不失败: 产物悄悄少了图标/版本/manifest,
+// 直到用户看到空白图标、属性页版本号为空或高分屏整窗发虚才暴露(build.ps1 末尾的版本
+// 读回是它的 PowerShell 前身, 只查 FileVersion)。
 // 用法:
 //
 //	go run ./tools/pecheck -exe Type.exe -version 1.5.3 -arch amd64
-//
-// 校验项:
-//   - PE 机器类型与 -arch 一致(amd64 = 0x8664, arm64 = 0xAA64)
-//   - 版本资源: FileVersion 数字段 = 版本号数字部分(补足四位), 字符串表中的
-//     FileVersion / ProductVersion 与版本号一致
-//   - manifest 资源: dpiAwareness 为 permonitorv2,system(高分屏不糊)、
-//     requestedExecutionLevel 为 asInvoker(本程序按设计以普通权限运行)
-//   - 图标资源: RT_GROUP_ICON 存在且非空。不数图标帧数 —— 那是
-//     assets/icon.ico 的属性, 重新生成图标就会变, 与"资源有没有链进 exe"无关
 package main
 
 import (

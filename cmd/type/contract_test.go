@@ -1,12 +1,9 @@
 //go:build windows && (amd64 || arm64)
 
-// 跨端契约: webview Bind 的函数名与签名, 以及前端 ipc.ts 的镜像。
-//
-// 为什么值得单独一个测试文件: 这些名字与参数顺序是 Go 与 JS 之间唯一的事实
-// 来源, 而两边各自的编译器都管不到对方。改个名字、换一下两个 bool 的先后,
-// Go 编译通过, vue-tsc 也通过, 界面照常渲染 —— 只是功能悄悄错位(比如
-// "绕过粘贴检测"和"文本直投"两个开关互换了作用), 要等用户发现。前端重构
-// 时这个文件会一起变红, 这正是它存在的意义
+// 跨端契约: webview Bind 的函数名与签名, 以及前端 ipc.ts 的镜像。这些名字与参数顺序
+// 是 Go 与 JS 之间唯一的事实来源, 而两边各自的编译器都管不到对方 —— 改个名字、换一下
+// 两个 bool 的先后, 两边都编译通过、界面照常渲染, 只是功能悄悄错位, 要等用户发现。
+// 见 docs/behavior-contract.md「行为契约（冻结，改动需双端同步）」
 
 package main
 
@@ -57,8 +54,9 @@ func TestBindNamesMatchContract(t *testing.T) {
 	}
 }
 
-// startTyping 的四个参数按位置传递, 顺序或类型一变就是静默错位:
-// text/delay/forceSendInput/textDirect
+// startTyping 的四个参数按位置传递: text/delay/forceSendInput/textDirect。
+// 后两个同为 bool, 只数个数不够 —— 互换位置时个数照样是 4, 界面却把"绕过粘贴检测"
+// 当成"文本直投"。参数表见 docs/behavior-contract.md「行为契约（冻结，改动需双端同步）」
 func TestStartSignatureFrozen(t *testing.T) {
 	mt := reflect.TypeOf((*typing.TypingService)(nil).Start)
 	want := []reflect.Type{
@@ -130,14 +128,10 @@ func reportViewportBody(src string) string {
 	return rest
 }
 
-// reportViewport(dpr float64) 的签名、回调体与前端调用端。它是"真实内容缩放"唯一的
-// 传递通道: 参数从 float64 变成别的(如 int、如结构体), 校正就会算错或静默不生效,
-// 而界面只会"看起来挤", 不会有任何报错。
-//
-// 2026-10 补两条覆盖缺口(独立复核实测出来的): ① 把回调体掏空成 `return nil`、签名逐字
-// 不动时, 只钉签名的用例全绿; ② 把前端 main.ts 的两处上报删掉、ipc.ts 原样不动时,
-// 整套闸门也全绿。两种情况都让校正彻底失效而无人报警, 所以这里连"回调体里必须真的调用
-// WindowClientForScale/SetWindowClientRect"与"页面必须把 window.devicePixelRatio 报上来"一起钉住
+// reportViewport(dpr float64) 的签名、回调体与前端调用端都要钉: 它是"真实内容缩放"
+// 唯一的传递通道。**只钉签名是假绿** —— 回调体掏空成 `return nil`, 或删掉页面的上报
+// 调用, 整套闸门全绿而校正彻底失效; 所以连回调体与调用点一起钉。
+// 见 docs/invariants.md「其它不变量」
 func TestReportViewportSignatureFrozen(t *testing.T) {
 	src := mainSource(t)
 	if n := len(reportViewportRE.FindAllStringSubmatch(src, -1)); n != 1 {
@@ -206,10 +200,10 @@ func TestFrontendMirrorsBindNames(t *testing.T) {
 			t.Errorf("frontend/src/ipc.ts 未导出 %q", name)
 		}
 	}
-	// startTyping 是唯一带参数的: 四个, 且**顺序**也要与 Go 侧一致。
-	// 只数个数是不够的 —— 两个 bool 互换位置时个数照样是 4, Go 编译通过、
-	// vue-tsc 也通过, 界面却把"绕过粘贴检测"当成"文本直投"; 这个文件存在的
-	// 理由正是防这种静默错位, 所以这里逐字钉参数表、转发调用与窗口接口声明
+	// startTyping 是唯一带参数的: 四个, 且**顺序**也要与 Go 侧一致 —— 只数个数不够,
+	// 两个 bool 互换位置时个数照样是 4, 界面却把"绕过粘贴检测"当成"文本直投"。
+	// 所以这里逐字钉参数表、转发调用与窗口接口声明。
+	// 见 docs/behavior-contract.md「行为契约（冻结，改动需双端同步）」
 	const wantStartArgs = "text: string, delay: number, forceRaw: boolean, textDirect: boolean"
 	if args, ok := exported["startTyping"]; ok && args != wantStartArgs {
 		t.Errorf("ipc.ts 的 startTyping 参数 = %q, want %q", args, wantStartArgs)
@@ -285,9 +279,8 @@ func TestFrontendTypesStatusFields(t *testing.T) {
 		}
 	}
 
-	// 字段的**类型**也要钉: 只钉键名的话 `progress: string` 一样能通过, 而
-	// 前端拿它做 `progress >= 0` 比较 —— 变字符串后进度条永远不显示, 而且
-	// vue-tsc 检查的是前端自己那一份, 后端发的还是数字, 只有运行时才露头
+	// 字段的**类型**也要钉: 只钉键名的话 `progress: string` 一样能通过, 而前端拿它
+	// 做 `progress >= 0` 比较, 进度条永远不显示(vue-tsc 只管前端那份, 后端仍发数字)
 	wantTypes := map[string]string{
 		"phase":        "TypingPhase",
 		"message":      "string",
@@ -339,12 +332,10 @@ func TestFrontendTypesPhaseValues(t *testing.T) {
 	}
 }
 
-// 倒计时那句在仓库里有三份: 后端 msgCountdownFormat、typing/contract_test.go
-// 的字面量、以及前端为了不等第一次轮询而自己拼的这份。前两份由 internal 的
-// 测试钉着, 这一份此前只有弱断言(要求出现 `剩余 ${...} 秒` 与子串
-// `— 请聚焦目标窗口...`)—— 把长破折号换成短横线、或删掉"秒"后的空格, 断言
-// 照样绿, 而界面上的文案与后端已经不是一个句子了。现在把插值归一成 %d 后
-// 与后端格式串逐字比较: 差一个字符都会红
+// 倒计时那句在仓库里有三份(后端 msgCountdownFormat、typing/contract_test.go 的字面量、
+// 前端为了不等第一次轮询自己拼的这份); 前端这份此前只有弱断言, 长破折号换成短横线
+// 或删掉"秒"后的空格照样绿。现在插值归一成 %d 后与后端格式串逐字比较, 差一个字符就红。
+// 见 docs/behavior-contract.md「行为契约（冻结，改动需双端同步）」
 func TestFrontendCountdownMessageMirrorsGo(t *testing.T) {
 	src := repoFile(t, "frontend", "src", "composables", "useTypingTask.ts")
 	lit := tsCountdownLitRE.FindStringSubmatch(src)
@@ -360,11 +351,10 @@ func TestFrontendCountdownMessageMirrorsGo(t *testing.T) {
 	}
 }
 
-// 主题的存储键写在两处: 首帧内联脚本读它、useTheme 写它。走散的症状是
-// "切换过主题, 重启又变回系统主题", 且没有任何环节会失败。内联脚本还必须
-// 排在入口脚本之前, 挪到 Vue 里就等于首帧闪白(见 AGENTS.md)。
-// "该用哪套主题"的判定只许有一处: useTheme 自己再算一遍(读存储 + 跟随系统)
-// 就又多出一份会走散的逻辑, 所以这里连"它不许读存储"一起钉住
+// 主题的存储键写在两处(首帧内联脚本读、useTheme 写), 走散症状是"切换过主题、重启又
+// 变回系统主题"; 内联脚本还必须排在入口脚本之前, 挪进 Vue 就等于首帧闪白。判定只许
+// 有一处: useTheme 再算一遍(读存储 + 跟随系统)就多出一份会走散的逻辑。
+// 见 docs/invariants.md「其它不变量」
 func TestThemeBootScriptKeepsKeyAndOrder(t *testing.T) {
 	ts := repoFile(t, "frontend", "src", "composables", "useTheme.ts")
 	m := regexp.MustCompile(`THEME_KEY = '([^']+)'`).FindStringSubmatch(ts)
@@ -394,12 +384,10 @@ func TestThemeBootScriptKeepsKeyAndOrder(t *testing.T) {
 
 // ─── 前端镜像: --ui-scale 的基准宽度 ───────────────────
 
-// 前端 --ui-scale 的基准宽度必须等于宿主窗口的宽度下限。
-// 两处各是"内宽 540 时缩放为 1"这条承诺的一半: 宿主把窗口下限定在 540
-// (internal/win32 的 MinWindowW), 前端说到 540 为止不缩放。只改一处的话, 界面在
-// 大窗口里要么开始缩放、要么不再缩放, 而两边的编译与测试都不会失败 —— 这类
-// "跨端同一个数字"的漂移此前发生过一次(前端注释里写死过旧的 480/720, 而宿主
-// 实际是 540/648)
+// 前端 --ui-scale 的基准宽度必须等于宿主窗口的宽度下限: 宿主把窗口下限定在 540
+// (internal/win32 的 MinWindowW), 前端说到 540 为止不缩放; 只改一处时两边都不报错,
+// 界面要么开始缩放要么不再缩放(这类"跨端同一个数字"此前漂移过: 旧的 480/720)。
+// 见 docs/invariants.md「其它不变量」
 func TestUiScaleBaseMatchesWindowFloor(t *testing.T) {
 	ts := repoFile(t, "frontend", "src", "composables", "useUiScale.ts")
 	m := regexp.MustCompile(`BASE_WIDTH\s*=\s*(\d+)`).FindStringSubmatch(ts)

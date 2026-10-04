@@ -14,14 +14,12 @@ import (
 )
 
 const (
-	// 互斥体不在 Global\ 命名空间: 多用户同时登录时各自可开一个实例。
-	// 名字必须固定且不带 PID: 跨进程互斥恰恰依赖两个进程认领同一个名字,
-	// 一旦带上 PID, 每个进程的名字都互不相同, 第二个实例永远撞不上,
-	// 守卫形同虚设(初版就栽在这里)
+	// 名字必须固定且不带 PID: 跨进程互斥依赖两个进程认领同一个名字, 带上 PID 就
+	// 永远撞不上, 守卫形同虚设(初版栽过)。不在 Global\ 命名空间: 多用户同时登录
+	// 时各自可以开一个实例
 	instanceMutexName  = `Local\Type-KeyboardInputSimulator`
 	errorAlreadyExists = 183
-	// ERROR_ACCESS_DENIED 见 claimInstanceMutex 的说明: 名字已被占用但当前
-	// 进程无权打开时, CreateMutexW 返回的是它而不是 ERROR_ALREADY_EXISTS
+	// 名字已被占用但无权打开时返回它, 而不是 ERROR_ALREADY_EXISTS(判据见 mutexAlreadyHeld)
 	errorAccessDenied = 5
 )
 
@@ -42,19 +40,10 @@ func GuardSingleInstance() bool {
 	return true
 }
 
-// mutexAlreadyHeld 判断 CreateMutexW 的结果意味着"已经有实例占着这个名字"。
-// 两个错误码都是这个意思, 成因不同, 抽出来是为了能直接测:
-//
-//   - ERROR_ALREADY_EXISTS: 名字已被占用, 且本进程有权打开 -> 返回句柄 + 此码;
-//   - ERROR_ACCESS_DENIED: 名字已被占用, 但本进程拿不到访问权。
-//     CreateMutexW 的文档并没有逐字写这一支, 它只说明"名字命中已存在的对象时
-//     请求 MUTEX_ALL_ACCESS"以及"失败返回 NULL"; ACCESS_DENIED 是从这两句推得
-//     的(访问检查只在对象存在时才会做)。它与"根本没建成"共用返回值 0, 语义却
-//     相反 —— 只按键值判断就会放行。README 建议需要向提权窗口注入的用户以管理
-//     员身份运行, 于是"先管理员开的实例、后普通权限的实例"是很自然的用法,
-//     漏掉这一支就等于让两个实例同时抢剪贴板与键盘焦点
-//
-// 这一支本机造不出来(要两个不同完整性级别的进程), 所以用单测钉的是分类本身
+// mutexAlreadyHeld 判断 CreateMutexW 的结果意味着"已经有实例占着这个名字":
+// ERROR_ALREADY_EXISTS(有权打开, 返回句柄)与 ERROR_ACCESS_DENIED(无权打开,
+// 返回 NULL)都算, 后者与"根本没建成"共用返回值 0、语义却相反, 漏掉就形同虚设。
+// 文档依据与本机造不出后一支的原因见 docs/invariants.md「其它不变量」
 func mutexAlreadyHeld(h uintptr, callErr error) bool {
 	if errors.Is(callErr, syscall.Errno(errorAlreadyExists)) {
 		return true
@@ -62,19 +51,18 @@ func mutexAlreadyHeld(h uintptr, callErr error) bool {
 	return h == 0 && errors.Is(callErr, syscall.Errno(errorAccessDenied))
 }
 
-// claimInstanceMutex 尝试以 name 认领单实例互斥体, 返回"可否继续启动"。
-// 名字由调用方传入: 生产用固定名, 测试传入带 PID 的名字, 既复现"两个进程
-// 认领同一个名字"的场景, 又不会与真正在运行的 Type 相互干扰。
-// 与提示框分开则是为了让测试能验证判定本身: messageBox 是模态对话框,
-// 在无头 CI 上没有人点确定, 一旦被测试触发就会一直阻塞到 go test 超时
+// claimInstanceMutex 以 name 认领单实例互斥体, 返回"可否继续启动"。
+// 名字由调用方传入: 生产用固定名, 测试传带 PID 的名字 —— 既复现"两个进程认领
+// 同一个名字", 又不干扰真正在运行的 Type。判定与提示框分开则是为了可测:
+// messageBox 是模态框, 无头 CI 上没人点确定会一直阻塞到 go test 超时(已实际发生过)
 func claimInstanceMutex(name string) (proceed bool) {
 	ptr, err := syscall.UTF16PtrFromString(name)
 	if err != nil {
 		return true // 构造名字都失败时放行, 不因守卫本身挡住启动
 	}
-	// 必须用 LazyProc.Call 返回的 err 判断"已存在": 它是系统调用返回瞬间
-	// 取的 GetLastError, 而事后再调 syscall.GetLastError() 已被 Go 运行时
-	// 清零(实测恒为 0), 那样守卫会永远放行、形同虚设
+	// 必须用 LazyProc.Call 返回的 err 判断"已存在": 它是系统调用返回瞬间取的
+	// GetLastError; 事后再调 syscall.GetLastError() 已被运行时清零(实测恒为 0),
+	// 那样守卫会永远放行、形同虚设
 	h, _, callErr := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(ptr)))
 	if mutexAlreadyHeld(h, callErr) {
 		if h != 0 {

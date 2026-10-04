@@ -40,13 +40,12 @@ func main() {
 		win32.PromptWebView2Unusable(win32.MsgWebView2Missing) // 提示后退出, 不返回
 	}
 
-	// Debug 直接决定库的两项设置: 默认右键菜单与 DevTools 是否可用。
-	// 正式构建必须两者皆关 —— 发布版留 DevTools 没有意义, 而右键菜单里的
-	// "重新加载"会让前端复位、与仍在跑的后端任务脱钩。
-	// 建窗失败有两条来路(同步返回 nil 与库内部 panic), 都收在 createWebView2 里
+	// Debug 打开 WebView2 的默认右键菜单与 DevTools; 正式构建两者皆关 —— 发布版留
+	// DevTools 没有意义, 而右键菜单里的"重新加载"会让前端复位、与仍在跑的后端任务脱钩。
+	// 见 docs/architecture.md「布局与单一来源」
 	w := createWebView2()
-	// 判空必须在 defer 之前: 失败时 New 返回的是 nil 接口, 而 defer 语句
-	// 求值 receiver 的那一刻就会 panic(已实测: 栈顶正落在那条 defer 上)
+	// 判空必须在 defer 之前: 失败时 New 返回 nil 接口, defer 求值 receiver 就 panic
+	// 见 docs/invariants.md「其它不变量」
 	if w == nil {
 		win32.PromptWebView2Unusable(win32.MsgWebView2InitFailed) // 提示后退出, 不返回
 	}
@@ -57,24 +56,23 @@ func main() {
 	// (manifest 声明了 PerMonitorV2, 见 internal/win32 的 ScaledForDPI)
 	hw := uintptr(w.Window())
 
-	// 尺寸与位置只在启动时算一次, 之后固定:
-	//   ① 按窗口所在显示器的工作区定尺寸(内置 540×480 ~ 648×540 的上下限,
-	//      见 internal/win32 的 initialWindowSize), 4K 上不会缩成一张邮票;
-	//   ② 位置在该工作区内居中。
+	// 尺寸与位置只在启动时算一次, 之后固定: 按窗口所在显示器的工作区定尺寸(内置
+	// 540×480 ~ 648×540 的上下限, 见 internal/win32 的 initialWindowSize), 4K 上不会
+	// 缩成一张邮票; 位置在该工作区内居中
+
 	// 刻意不做的两件事, 别顺手加回来:
-	//   - 不响应 WM_DPICHANGED(把窗口拖到缩放比例不同的显示器上重新适配)。
-	//     用户明确不要这个; 而且窗口侧改尺寸与内容侧 Chromium 改缩放若不同步,
-	//     就会变成"渲染缩放 ≠ 显示器缩放", 那才是真正的位图拉伸发虚;
-	//   - 不放宽窗口样式。HintFixed 会去掉 WS_THICKFRAME|WS_MAXIMIZEBOX,
-	//     窗口尺寸固定、右下角拖不动(internal/win32 的 TestWindowSizeIsFixed
-	//     读回样式位与命中测试钉着这条)。HintFixed 省不掉, 那是"不可缩放"的
-	//     唯一来源 —— 只调 SetWindowClientRect 的话窗口仍是可拖大的
-	//
-	// 顺序也是刻意的: 先让库 SetSize 拿到 HintFixed(不可拖大)并设一次 bounds,
-	// 再用 SetWindowClientRect 把客户区精确摆到目标。反过来的话, 库会用非 DPI 版
-	// 的边框推算再摆一次, 把客户区带回偏差(见 internal/win32 的 windowRectForClient)
-	//
-	// lw/lh 是**设计逻辑尺寸**(内容缩放为 1 时的基准), 留着给下面的内容缩放校正:
+	//   ① 不响应 WM_DPICHANGED(把窗口拖到缩放比例不同的显示器上重新适配)。用户明确
+	//      不要; 窗口侧改尺寸与内容侧 Chromium 改缩放不同步, 就会变成"渲染缩放 ≠
+	//      显示器缩放", 那才是真正的位图拉伸发虚;
+	//   ② 不放宽窗口样式。HintFixed 去掉 WS_THICKFRAME|WS_MAXIMIZEBOX 是"不可拖大"的
+	//      唯一来源(internal/win32 的 TestWindowSizeIsFixed 读回样式位与命中测试钉着),
+	//      只调 SetWindowClientRect 的话窗口仍可拖大
+
+	// 顺序也是刻意的: 先让库 SetSize 拿到 HintFixed 并设一次 bounds, 再用
+	// SetWindowClientRect 把客户区精确摆到目标 —— 反过来库会用非 DPI 版的边框再摆一次,
+	// 把客户区带回偏差(见 internal/win32 的 windowRectForClient)
+
+	// lw/lh 是设计逻辑尺寸(内容缩放为 1 时的基准), 留给下面的内容缩放校正:
 	// 客户区 = 设计逻辑尺寸 × 真实内容缩放, CSS 视口才等于设计尺寸
 	lw, lh := win32.MinWindowW, win32.MinWindowH
 	if plan, ok := win32.PlanForDisplay(hw); ok {
@@ -116,14 +114,9 @@ func main() {
 	// 前端轮询读取当前输入状态
 	w.Bind("getTypingStatus", svc.Status)
 
-	// 内容缩放校正: CSS 视口 = 客户区物理像素 / 内容缩放, 而内容缩放由 WebView2
-	// 自己定(官方口径是"显示器缩放 × 用户文本大小", 还叠着页面缩放), 并不等于窗口
-	// DPI 缩放。两者不等时视口就不再是设计尺寸: 实测某用户机上窗口按 125% 建成
-	// 720×600 物理像素, 内容却按 1.75 倍渲染, 视口缩到 411×343, 输入框(下限 195px)
-	// 直接压住了选项行 —— 用户看到的是"选项行不见了"。
-	// 这里把页面报回来的真实比值(devicePixelRatio)接住, 反过来让窗口去适配内容缩放;
-	// 比值非法、或按它算出的窗口装不进工作区时保持原尺寸, 由前端的滚动兜底
-	// (见 frontend/src/style.css 的 .section 下限与 .options-row 的 flex-shrink)
+	// CSS 视口 = 客户区物理像素 ÷ 内容缩放; 内容缩放由 WebView2 自己定、不等于窗口 DPI 缩放,
+	// 实测 125% 那台机器上内容按约 1.75 倍渲染、视口缩到 411×343, 输入框(195px 下限)压住选项行。
+	// 见 docs/invariants.md「其它不变量」
 	var (
 		vpMu      sync.Mutex
 		vpSeen    float64
@@ -162,17 +155,9 @@ func main() {
 }
 
 // createWebView2 建 WebView2; 建不出来时返回 nil, 由调用方给出"界面起不来"的提示。
-//
-// 除了 New 同步返回 nil 这条明路, 还有一条暗路: 控制器是在
-// CreateCoreWebView2Controller 的回调里异步创建的, 失败时 go-webview2 先用
-// int64(res) < 0 判 HRESULT —— 而 HRESULT 错误码是负的 32 位值, 零扩展进 uintptr
-// 之后 int64() 反而是正数, 这个判断永不成立, 该打印的
-// "Creating controller failed with %08x" 从不出现, 它接着对 nil 控制器解引用,
-// panic 从 NewWithOptions 里冒出来(帧都在库内, 但整条链都在 main 这个 goroutine 上,
-// 所以这里能接住)。不接住的话用户看到的是"双击之后窗口一闪就没了" —— GUI 子系统
-// 没有控制台, panic 文本一个字都到不了他眼前, 而这正是两条启动提示要避免的情形。
-// 实测触发条件: 宿主进程完整性级别偏低时(例如 exe 所在目录被沙箱类工具打上
-// Low 完整性标签)WebView2 拒绝创建控制器。
+// **recover 不能删**: 控制器异步创建失败时 go-webview2 的 HRESULT 判断永不成立、接着
+// 解引用 nil panic; GUI 子系统没有控制台, 不接住就是"双击之后窗口一闪就没了"。
+// 见 docs/invariants.md「其它不变量」
 func createWebView2() (w webview2.WebView) {
 	defer func() {
 		if recover() != nil {

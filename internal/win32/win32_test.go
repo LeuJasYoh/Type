@@ -17,15 +17,14 @@ import (
 
 // clipboardExclusive 确认剪贴板此刻归我们: 写一段探针文本并立刻读回, 最多试 3 次。
 //
-// 下面是真剪贴板用例的共同前提 —— "这段时间里没有别人动剪贴板"。某些常驻程序
-// (剪贴板桥接/同步类)会让系统剪贴板持续被别人持有: 本机实测连 PowerShell 的
-// Set-Clipboard 都 5/5 失败, 而 `SetClipboardData` 可能"成功"、紧接着读回来却是
-// 对方的字节。那种环境里断言往返结果只会得到一个假的"回归"。
+// 真剪贴板用例的共同前提是"这段时间里没有别人动剪贴板": 剪贴板桥接/同步类常驻程序
+// 会让系统剪贴板持续被别人持有(本机实测连 PowerShell 的 Set-Clipboard 都 5/5 失败,
+// `SetClipboardData` 可能"成功"、紧接着读回却是对方的字节), 那种环境里断言往返结果
+// 只会得到一个假的"回归"。
 //
-// 前提不成立时, **本机**跳过并说明读到什么, 而不是改断言放水; **CI 里一律红** ——
-// runner 是干净环境, 那里出现"剪贴板不可用"要么是真回归(这两条是全仓唯一真实的
-// 剪贴板读写往返, 写错字节/读错字节都会走到这里), 要么是环境真坏了, 两种都该让人
-// 看见, 不能被一个 SKIP 掩盖过去(2026-10 独立验证提出: 跳过分支会同时吃掉这两类)
+// 前提不成立时**本机**跳过并写明读到了什么, 不改断言放水; **CI 里一律红** —— runner
+// 是干净环境, 那里的"剪贴板不可用"要么是真回归(这两条是全仓唯一真实的剪贴板读写
+// 往返), 要么是环境真坏了, 两种都该让人看见, 不能被一个 SKIP 掩盖过去
 func clipboardExclusive(t *testing.T, cb Clipboard, why string) {
 	t.Helper()
 	const probe = "Type::ClipboardProbe"
@@ -196,11 +195,9 @@ func TestClipboardHoldsTextNul(t *testing.T) {
 }
 
 // TestClaimInstanceMutex 单实例判定: 同一进程内第二次认领必须被拦下。
-// 认领名由调用方传入, 测试用带 PID 的名字: 同名第二次调用即"第二个进程
-// 认领同一个名字"的场景, 又不会与真正在运行的 Type 相互干扰
-// (生产守卫用的是不带 PID 的固定名, 跨进程互斥全靠名字相同)。
-// 这里验证 claimInstanceMutex 而不是 GuardSingleInstance: 后者会弹模态提示框,
-// 在无头 CI 上没人点确定, 会让 go test 一直挂到超时(已实际发生过一次)
+// 认领名带 PID —— 同名第二次调用即"第二个进程认领同一个名字"的场景, 又不干扰
+// 真正在运行的 Type。这里测 claimInstanceMutex 而不是 GuardSingleInstance:
+// 后者会弹模态提示框, 无头 CI 上没人点确定, 会让 go test 挂到超时(实际发生过)
 func TestClaimInstanceMutex(t *testing.T) {
 	name := instanceMutexName + "-test-" + strconv.Itoa(os.Getpid())
 	if !claimInstanceMutex(name) {
@@ -215,12 +212,9 @@ func TestClaimInstanceMutex(t *testing.T) {
 }
 
 // TestMutexAlreadyHeld 认领结果的分类: 哪些返回值算"已有实例占着"。
-//
-// 这条必须单独测, 因为 ERROR_ACCESS_DENIED 那一支在本机造不出来(要两个不同
-// 完整性级别的进程), 而它恰恰是守卫会失效的地方: 该错误码与"根本没建成"
-// 共用返回值 0, 语义却相反。判据是文档写明的 CreateMutexW 语义 ——
-// 名字已存在且有权打开时报 ERROR_ALREADY_EXISTS 并返回句柄; 名字已存在但
-// 无权打开时报 ERROR_ACCESS_DENIED 并返回 NULL
+// ERROR_ACCESS_DENIED 那一支本机造不出来(要两个不同完整性级别的进程), 而它恰恰
+// 与"根本没建成"共用返回值 0、语义相反, 所以用单测钉分类本身(判据与后果见
+// docs/invariants.md「其它不变量」)
 func TestMutexAlreadyHeld(t *testing.T) {
 	const someHandle = uintptr(0x1234)
 	cases := []struct {
@@ -462,16 +456,11 @@ func TestInitialWindowSize(t *testing.T) {
 		wantW int
 		wantH int
 	}{
-		// 1920×1040 工作区(1080p 减任务栏): 49% = 509, 宽 509*6/5 = 610
 		{"1080p 100%", 1920, 1040, 610, 509},
-		// 1520×912 工作区(本机实测: 125% 缩放下的逻辑工作区 1536×912):
-		// 49% = 446 → 抬到下限 480, 宽按 480 推 = 576
 		{"1536×912 工作区", 1536, 912, 576, 480},
-		// 高工作区: 49% 超过上限, 压到 540 → 宽 648
 		{"高工作区压上限", 1920, 1174, 648, 540},
 		// 超宽屏不会因为宽而变高(只与工作区高度有关)
 		{"21:9 超宽", 3440, 1400, 648, 540},
-		// 小屏: 49% = 294 → 抬到下限 480, 宽 480*6/5 = 576
 		{"1024×600 小屏", 1024, 600, 576, 480},
 		// 工作区比下限还矮: 高度被工作区压到 440, 宽度按收窄后的高度推得 528,
 		// 再被 MinWindowW(540)抬回来 —— 屏幕矮不代表可以把窗口弄得更窄
@@ -630,21 +619,12 @@ func abs(v int) int {
 // TestWindowSizeIsFixed 窗口尺寸必须真的固定: 这是用户明确定下的行为
 // ("启动时按显示器定一次, 之后不可手动缩放")。
 //
-// 判据不能只看源码, 也不能只写"去掉样式位之后不可拖大"这一半 —— 那样写出来的是
-// 恒真断言: dwStyle=0 建出的窗口本来就没有 WS_THICKFRAME, 而按**客户区**取点的
-// 命中测试对任何带边框的窗口都答 HTCLIENT(1)。2026-10 的独立探针正是这样证明
-// 旧版用例两条断言都不可能失败的。现在改成 A/B 两段, 缺一不可:
-//
-//	① 阳性对照: 用 WS_OVERLAPPEDWINDOW 建窗, 断言两个样式位都在、右下角命中
-//	   htBottomRight(17) —— 先证明这套取证手段认得出"可拖大";
-//	② 复刻库 SetSize(HintFixed) 的处理(清位 + SWP_FRAMECHANGED 让边框按新样式
-//	   刷新), 断言样式位没了、右下角也不再是 htBottomRight。
-//
-// 缺 ① 则 ② 是自我安慰(怎么都会绿), 缺 ② 则 ① 什么都没证明。
-//
-// 客户区尺寸同时核对: 请求多少就该是多少(表面与客户区一致的前提)。这一步放在
-// 改样式之前 —— SetWindowClientRect 的反推按 WS_OVERLAPPEDWINDOW 算边框, 要在
-// 窗口就是那个样式时量才作数
+// 判据是 A/B 两段, 缺一不可: ① 用 WS_OVERLAPPEDWINDOW 建窗, 先证明这套取证认得出
+// "可拖大"; ② 复刻库 SetSize(HintFixed) 的清位加 SWP_FRAMECHANGED, 再断言认不出。
+// 缺 ① 则 ② 是自我安慰(怎么都会绿), 缺 ② 则 ① 什么都没证明 —— 恒真断言那次踩坑
+// 与全貌见 docs/invariants.md「其它不变量」
+// 客户区尺寸同时核对, 且必须放在改样式之前: SetWindowClientRect 的反推按
+// WS_OVERLAPPEDWINDOW 算边框, 要在窗口就是那个样式时量才作数
 func TestWindowSizeIsFixed(t *testing.T) {
 	hwnd := newTestWindow(t, "Fixed").createStyled(t, "TypeFixedSizeTest", wsOverlappedWindow)
 

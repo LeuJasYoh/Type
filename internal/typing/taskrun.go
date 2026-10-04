@@ -1,13 +1,8 @@
 // ─── 一次输入任务的执行流程 ────────────────────────────
-// 从 typing.go 拆出来的: 那边留下"接口 + 状态 + 文案 + 时序常量 + 任务的判定与
-// 占领(Start/Cancel/Status)", 这里管"任务占了槽之后怎么走完"。
-//
-// 拆分前它是一个 256 行、9 个形参、6 个跨 150 行持续改写的局部变量的函数, 读的
-// 人要同时维护十来个状态。现在每段是一个方法, 段与段之间只靠 taskRun 的字段交接。
-//
-// **判定顺序、守卫位置与 sleep 注入点一个都没动**: 它们是 docs/invariants.md 逐条记着、
-// 40 条用例逐条钉着的行为契约(过代守卫、漂移守卫的三处位置、剪贴板失败后不再退
-// 逐字符、倒计时的采样与写状态分离……), 动它们要连着契约一起改。
+// typing.go 留下"接口 + 状态 + 文案 + 时序常量 + 任务的判定与占领(Start/Cancel/
+// Status)", 这里管"任务占了槽之后怎么走完"。**判定顺序、守卫位置与 sleep 注入点
+// 一个都没动** —— 见 docs/invariants.md「任务槽与并发启动」; 它们是用例逐条钉着的
+// 行为契约, 动它们要连着契约一起改
 
 package typing
 
@@ -35,12 +30,8 @@ type taskRun struct {
 }
 
 // runOutcome 一次注入的落点事实, 终态文案由它决定。
-//
-// clipboardKept 的零值是 false、含义却是"剪贴板没保住", 所以构造 taskRun 时显式
-// 写 true(与拆分前的 `clipboardOK := true` 初值一致)。当前逻辑下漏写并不可观测:
-// 读它的终态分支还要求 touchedClipboard, 而那只在剪贴板成功路径里置位 —— 但别
-// 依赖这一点, 将来多一条读它的路径, 零值就变成谎话。同类的坑本仓库踩过一次:
-// TypingStatus.Progress 的零值恰好等于合法取值 0(见 docs/invariants.md「空闲态不许有进度条」)
+// clipboardKept 的零值 false 含义却是"剪贴板没保住", 构造 taskRun 时必须显式写
+// true; 同类的零值陷阱(Progress)见 docs/invariants.md「其它不变量」
 type runOutcome struct {
 	success          bool   // 整条路径是否成功
 	delivered        bool   // 是否有内容真正送达目标窗口
@@ -60,10 +51,8 @@ const (
 
 // ─── 主流程: 五个阶段 ─────────────────────────────────
 
-// runTypingTask 执行一次完整的输入任务(倒计时 + 注入)。
-// 任务槽已由 Start 在临界区内占好, 倒计时初态也已写好。
-//
-// 它只负责"按原顺序走过五个阶段", 每个阶段是一个方法:
+// runTypingTask 执行一次完整的输入任务(倒计时 + 注入): 任务槽已由 Start 在
+// 临界区内占好, 倒计时初态也已写好。按原顺序走过五个阶段, 每段是一个方法 ——
 // 收尾 → 开工前置 → 倒计时与锁定 → 分流注入 → 终态
 func (s *TypingService) runTypingTask(r *taskRun) {
 	defer s.finishTaskSlot(r) // 收尾: 先放信号再腾空任务槽
@@ -72,11 +61,9 @@ func (s *TypingService) runTypingTask(r *taskRun) {
 		return // 上一任务没能及时退出, 超时终态已写
 	}
 
-	// 出生之前那次取消已经把本次启动作废: 这里必须自己把终态说出来。
-	// 不说的话状态就停在 Start 写下的倒计时上 —— 倒计时不是终态, 前端会一直
-	// 轮询下去, 用户看到的是永远不动的"剩余 N 秒"(v1.5.6 复核发现的缺口)。
-	// 用 gen 当守卫: 已被更新一代接管时不能插嘴, 状态归新任务写。
-	// 这一判必须放在上面"清标志"之后: 在那之前看到的标志还是上一轮留下的
+	// 出生之前那次取消已作废本次启动: 必须自己把终态说出来, 否则状态停在 Start
+	// 写下的倒计时上 —— 见 docs/invariants.md「任务槽与并发启动」。这一判必须排在
+	// 上面清标志之后: 在那之前看到的标志还是上一轮留下的
 	if r.cancelHonored {
 		if r.gen == s.taskGen.Load() {
 			s.typingStatus.Store(&TypingStatus{Phase: PhaseCancel, Message: msgCancelled, Progress: -1})
@@ -107,12 +94,9 @@ func (s *TypingService) finishTaskSlot(r *taskRun) {
 	s.mu.Unlock()
 }
 
-// cancelled 本任务是否已被取代或取消。两个判据与拆分前逐字一致:
-//   - 代数变了: 更新一代的 start/cancel 已接管, 本任务的后续写入本就作废;
-//   - 取消标志置位: 让循环尽快察觉(它会被下一次 Start 清掉, 所以单独看它不够,
-//     还得靠代数这条 —— 见 docs/invariants.md「任务槽与并发启动」)
-//
-// 拆分前它是 runTypingTask 里的闭包, 现在按 run 逐个判
+// cancelled 本任务是否已被取代或取消: 代数变了(更新一代已接管)或取消标志置位
+// (让循环尽快察觉; 它会被下一次 Start 清掉, 所以还得靠代数这条) ——
+// 见 docs/invariants.md「任务槽与并发启动」
 func (s *TypingService) cancelled(r *taskRun) bool {
 	return r.gen != s.taskGen.Load() || s.cancelFlag.Load()
 }
@@ -120,30 +104,22 @@ func (s *TypingService) cancelled(r *taskRun) bool {
 // beginRun 开工前置: 等上一任务停手, 再清掉那个用来催它退出的取消标志。
 // 返回 false 表示本任务到此为止(超时终态已写)
 func (s *TypingService) beginRun(r *taskRun) bool {
-	// 上一任务还在收尾时先等它停手, 免得两路注入交叠。等不到就让界面如实显示
-	// "没能启动": 此刻状态是 Start 写下的倒计时, 而倒计时不是终态, 前端会一直
-	// 轮询下去。
-	// 这里必须用本任务的代数(r.gen)去写, 不能拿 s.taskGen.Load() 当守卫 ——
-	// 那是拿自己和自己比, 恒真, 迟到的旧任务会把终态盖到在途的新任务上
-	// (v1.5.6 复核发现)
+	// 上一任务还在收尾时先等它停手, 免得两路注入交叠; 等不到就如实播报"没能
+	// 启动"(此刻状态还是倒计时, 不是终态)。这里的守卫必须用本任务自己的代数,
+	// 不能是 s.taskGen.Load() —— 自比较恒真, 见 docs/invariants.md「任务槽与并发启动」
 	if r.prev != nil && !s.waitPreviousTask(r.prev) {
 		s.storeStatus(r.gen, &TypingStatus{Phase: PhaseError, Message: msgPreviousTaskStuck, Progress: -1})
 		return false
 	}
-	// 上一任务已经停手, 现在才轮到自己当"当前任务": 清掉那个用来催它退出的取消
-	// 标志。Start 里刻意没清(那时清会让第二次启动被误判成重入), 这里清才安全
-	// —— 此刻再来的取消就是冲着我来的
+	// 上一任务已停手, 现在才轮到自己当"当前任务": 清掉那个用来催它退出的取消
+	// 标志 —— Start 里刻意没清, 见 docs/invariants.md「任务槽与并发启动」
 	s.cancelFlag.Store(false)
 	return true
 }
 
 // runCountdown 倒计时 + 目标锁定, 返回 (锁定的目标, 是否可以继续注入)。
-//
-// 目标预览 = 当前前台窗口, countdownTick 节拍采样, 但只在可见内容变化时才写状态:
-// 秒边界写一次(文案与旧版逐字符一致), 窗口标识或标题一变立即跟上(用户切到哪个
-// 窗口, 预览最多迟一拍), 其余节拍只采样不写。采样与写状态分离后, 取消与切窗的
-// 响应从最坏 1 秒缩到 1 拍, 而每秒 10 次的冗余状态写入并不存在; 总时长仍是
-// delay 秒 —— 每拍 sleep(countdownTick), 共 delay*countdownTicksPerSec 拍
+// 预览 = 当前前台窗口(所见即所选, 不做排除) —— 见 docs/invariants.md「目标窗口与轮询」;
+// 每拍只采样、秒边界或内容变化才写状态, 见 docs/invariants.md「焦点锁定与漂移防护」
 func (s *TypingService) runCountdown(r *taskRun) (ForegroundSample, bool) {
 	shownSec, shown := r.delay, r.baseline
 	for i := 0; i < r.delay*countdownTicksPerSec; i++ {
@@ -170,9 +146,9 @@ func (s *TypingService) runCountdown(r *taskRun) (ForegroundSample, bool) {
 
 	s.sleep(lockSettleWait)
 
-	// 执行目标锁定: 倒计时结束时的前台窗口, 贯穿到执行与终态状态。
-	// 标识与标题取自同一次采样, 展示的标题一定就是锁定下来的那个窗口;
-	// 焦点仍在 Type 自身时注入会落进自己的输入框 —— 明确报错, 不静默打错地方
+	// 执行目标锁定: 倒计时结束时的前台窗口, 标识与标题取自同一次采样。
+	// 焦点仍在 Type 自身时注入会落进自己的输入框, 明确报错 ——
+	// 见 docs/invariants.md「目标窗口与轮询」
 	locked := s.foreground.Sample()
 	if locked.Self {
 		s.storeStatus(r.gen, &TypingStatus{
@@ -185,9 +161,8 @@ func (s *TypingService) runCountdown(r *taskRun) (ForegroundSample, bool) {
 	return locked, true
 }
 
-// runInjection 按路径分流并执行注入, 返回是否需要立即返回(取消已接管状态)。
-// 分流判据与拆分前逐字一致: 含非 ASCII 且没被强制逐字符时才走剪贴板 —— 含中文
-// 自动改用粘贴是发布语义(README「为什么含中文会自动改用剪贴板」)
+// runInjection 按分支执行注入, 返回是否要立即返回(取消已接管状态): 含非 ASCII 且
+// 没被强制逐字符才走剪贴板(发布语义见 README「为什么含中文会自动改用剪贴板」)
 func (s *TypingService) runInjection(r *taskRun) (aborted bool) {
 	if !containsNonASCII(r.text) || r.forceSendInput {
 		s.runCharPath(r)
@@ -202,11 +177,8 @@ func (s *TypingService) runInjection(r *taskRun) (aborted bool) {
 	return false
 }
 
-// runClipboardPath 剪贴板粘贴路径, 三种去向见 dispatchResult。
-//
-// 快照拿不全时退回逐字符(一个字节都不碰剪贴板: 拿残缺快照恢复会把没抄到的那些
-// 格式永久销毁); 失败时不再退逐字符 —— 能走到失败说明剪贴板已经写过或粘贴已经
-// 发出, 再打一遍就是注入两遍, 也会用 SendRune 的失败原因把那边的具体原因盖掉
+// runClipboardPath 剪贴板粘贴路径, 三种去向见 dispatchResult; 不完整快照退回
+// 逐字符, 失败后不再退 —— 见 docs/invariants.md「其它不变量」
 func (s *TypingService) runClipboardPath(r *taskRun) dispatchResult {
 	s.storeStatus(r.gen, &TypingStatus{
 		Phase: PhaseTyping, Message: msgClipboardStart, Progress: -1,
@@ -217,8 +189,7 @@ func (s *TypingService) runClipboardPath(r *taskRun) dispatchResult {
 		// 剪贴板打开失败(原状态未知), 或有的格式没能照抄下来
 		return dispatchFallback
 	}
-	// 失败原因由被调方给出: 剪贴板故障、目标窗口拒收 Ctrl+V、目标窗口切换三者的
-	// 处置不同, 不能都退化成通用的"输入失败"
+	// 失败原因由被调方给出: 三者处置不同, 不能都退化成通用的"输入失败"
 	success, failMsg, clipboardKept := s.typeTextViaClipboard(r.text, r.locked.ID,
 		func() bool { return s.cancelled(r) }, snap.Formats)
 	r.outcome.success = success
@@ -241,11 +212,9 @@ func (s *TypingService) runClipboardPath(r *taskRun) dispatchResult {
 	return dispatchDone
 }
 
-// runCharPath 逐字符注入路径。
-//
-// 漂移守卫在每个字符注入前比对(判定按顶层窗口标识, 严格); 注入通道按 textDirect
-// 分流(文本直投下只有换行还是真按键); 进度每 progressEvery 个字写一次(末字必刷);
-// 字符间隔三档见常量区。注入失败即停, 不继续虚报进度
+// runCharPath 逐字符注入路径: 每个字符注入前比对顶层窗口标识(漂移守卫), 注入
+// 通道按 textDirect 分流; 注入失败即停, 不继续虚报进度 ——
+// 见 docs/invariants.md「文本直投」
 func (s *TypingService) runCharPath(r *taskRun) {
 	// 剔除 \r 使进度分母与实际注入次数一致 (\r\n 由 \n 触发回车)
 	runes := []rune(strings.ReplaceAll(r.text, "\r", ""))
@@ -262,18 +231,14 @@ func (s *TypingService) runCharPath(r *taskRun) {
 		if s.cancelled(r) {
 			break
 		}
-		// 漂移守卫: 每次注入前确认前台仍是倒计时结束时锁定的那个窗口。判定按顶层
-		// 窗口标识(严格): 输入法候选窗与补全弹窗不是顶层前台窗口, 不会误触发;
-		// 用户切走(含切回 Type 自身)则立即停止, 不把剩余内容打进错误的窗口。
-		// 检查与注入之间仍有毫秒级窗口, 切换恰好发生在其中时, 最多漏进一两个字符
+		// 漂移守卫: 每次注入前确认前台仍是锁定目标(按顶层标识) ——
+		// 见 docs/invariants.md「焦点锁定与漂移防护」
 		if !s.targetHeld(r.locked.ID) {
 			drifted = true
 			break
 		}
-		// 注入通道分流: 文本直投把字符(含 Tab, WM_CHAR 可插入制表符)送到文本层
-		// (无按键事件), 弹窗劫持与括号配对都挂在 keydown 上因而无从触发; 换行
-		// 无法走文本层 —— 实测 Chromium 会过滤 WM_CHAR 的 \n/\r 控制字符, 只能
-		// 真按键, 故先经 sendEscaped 用 Esc 关掉可能挂着的弹窗再按回车
+		// 文本直投把字符(含 Tab)送到文本层; 换行无法走文本层(Chromium 过滤
+		// \n/\r), 只有它仍需真按键 —— 见 docs/invariants.md「文本直投」
 		switch {
 		case r.textDirect && ru == '\n':
 			ok = s.sendEscaped(s.injector.SendEnter)
@@ -328,9 +293,8 @@ func (s *TypingService) runCharPath(r *taskRun) {
 	}
 }
 
-// reportOutcome 写终态(前端检测到终止 phase 后停止轮询); 过代则静默, 状态已由
-// 新操作接管。分支顺序与拆分前逐字一致: 取消 → 送达但剪贴板没换回 → 成功 →
-// 兜底成功(整段文本无内容可注入) → 失败(保留具体原因)
+// reportOutcome 写终态(前端检测到终止 phase 后停止轮询), 过代则静默; 分支顺序:
+// 取消 → 送达但剪贴板没换回 → 成功 → 兜底 → 失败(保留具体原因)
 func (s *TypingService) reportOutcome(r *taskRun) {
 	st := &TypingStatus{Progress: -1, TargetWindow: r.target}
 	switch {

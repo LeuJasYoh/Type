@@ -183,7 +183,7 @@ Type/
 ├── docs/                    ← 工程约定专题 (从 AGENTS.md 拆出: 架构 / 构建发版 / 行为契约 / 踩坑 / 对外文字)
 ├── release-notes/           ← 各版本发布说明 (v<版本>.md, 发布时原样作为 Release 正文)
 ├── .github/workflows/
-│   ├── verify.yml           ← 检查项的唯一处 (gofmt / vet / -race 测试 / build + 前端单测 + 前端产物漂移检查 + 版本同步), CI 与发版共用
+│   ├── verify.yml           ← 检查项的唯一处 (gofmt / vet / -race 测试 / 漏洞扫描 / go build + 前端单测 + 前端产物漂移检查 + 版本同步 + build.ps1 的 BOM 检查), CI 与发版共用
 │   ├── ci.yml               ← CI: 调用 verify.yml, 另按 amd64/arm64 矩阵做发布构建与资源读回
 │   └── release.yml          ← 发版: 打 v<版本> 标签触发, 先跑 verify.yml 再构建/校验/打包/建 Release (也可在 Actions 页面手动触发)
 ├── go.mod / go.sum          ← Go 模块定义

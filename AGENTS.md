@@ -21,6 +21,7 @@
 | 构建 / CI / 发版 / 版本号 | [docs/build-and-release.md](docs/build-and-release.md) |
 | 目录结构 / 分层 / 平台层导出面 / 工具链选型 | [docs/architecture.md](docs/architecture.md) |
 | README / 发布说明 / 界面文案 | [docs/writing-style.md](docs/writing-style.md) |
+| 写代码注释 / 注释重写 | [docs/comment-style.md](docs/comment-style.md)（三种形态 + 归置判据 + 重写台账与闸门基线） |
 
 **代码注释里的「见 …」直接指向对应文件**；小节标题在拆分时原样保留，搜标题最快。
 本文件与 `docs/` 都随代码提交，改了哪一处的规矩就同步哪一份。
