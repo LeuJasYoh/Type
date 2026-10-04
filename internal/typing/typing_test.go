@@ -664,11 +664,12 @@ func TestSupersededTimeoutWriteIsDroppedOnProductionPath(t *testing.T) {
 		t.Fatalf("T2 Start 失败: %v", err)
 	}
 
-	// 隔开 300ms 再顶掉 T2。两条任务"等让位"的上界都是 yieldDeadline: 若几乎
+	// 隔开 800ms 再顶掉 T2。两条任务"等让位"的上界都是 yieldDeadline: 若几乎
 	// 同时起跑, T3 自己的超时会与 T2 的收尾撞在同一时刻, 那一拍谁先到不确定 ——
 	// 用例会随机红(实测 -count=5 与 -race 都命中过)。隔开之后 T2 必先超时退位,
-	// 而 T3 的等待在它自己的上界之前就结束
-	time.Sleep(300 * time.Millisecond)
+	// 而 T3 的等待在它自己的上界之前就结束。留 800ms 而不是刚好够: CI 的 runner
+	// 上有 -race 与其他用例抢 CPU, 余量太小会把调度延迟算成失败(独立验证提过)
+	time.Sleep(800 * time.Millisecond)
 
 	// T3: 趁 T2 还在等让位把它顶掉(过代), 并写下自己的倒计时初态
 	if _, err := svc.Cancel(); err != nil {
