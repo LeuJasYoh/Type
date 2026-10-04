@@ -167,7 +167,8 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
 
 规则本身写在 `.gitattributes` 里，用的是 Linguist 的官方开关 `-linguist-detectable`：
 它只影响统计与语言条，**不影响语法高亮，也不进任何构建产物**（文件照旧被构建读取）。
-覆盖范围：`*_test.go`、`frontend/test/**`、`frontend/tools/**`、`scripts/**`、`tools/**`。
+覆盖范围：`*_test.go`、`frontend/test/**`、`frontend/tools/**`、`scripts/**`、`tools/**`、
+`*.config.ts`（构建配置是构建的输入，不是产品代码；首个漏网的是 `frontend/vite.config.ts`）。
 
 为什么要有这条（2026-10）：`scripts/build.ps1` 的一次改动给它加了约 35 行注释，文件从
 5.6KB 涨到 8.5KB，于是在语言条上把只有 7.5KB 的 Vue 挤进了 Other —— 一个构建脚本排在
@@ -180,12 +181,13 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
 |---|---|---|
 | Go | 105,868 | 68.7% |
 | CSS | 20,002 | 13.0% |
-| TypeScript | 19,402 | 12.6% |
+| TypeScript | 19,364 | 12.6% |
 | Vue | 7,530 | 4.9% |
 | HTML | 1,305 | 0.9% |
 
-合计约 147 KB。JavaScript、Python、PowerShell 三者**全部**来自测试与工具链
-（版式探针、测试解析钩子、资产管线、资源生成与校验工具、构建脚本），因此不在条里。
+合计约 150 KB（Go 侧不含 126 KB 测试、前端侧不含 23 KB 测试与 24 KB 工具）。
+JavaScript、Python、PowerShell 三者**全部**来自测试与工具链（版式探针、测试解析钩子、
+资产管线、资源生成与校验工具、构建脚本），因此不在条里。
 
 新增顶层测试或工具目录时，记得让 `.gitattributes` 的规则覆盖到；否则它会带着自己的
 字节数重新挤进那条构成里。

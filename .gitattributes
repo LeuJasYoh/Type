@@ -21,6 +21,9 @@ frontend/test/**  -linguist-detectable
 frontend/tools/** -linguist-detectable
 scripts/**        -linguist-detectable
 tools/**          -linguist-detectable
+# 构建配置是构建的输入, 不是产品代码(首个漏网的是 frontend/vite.config.ts:
+# 它 557 B, 而产品源码里最小的模块只有几百字节, 不排除就会一直占着 TypeScript 的份额)
+*.config.ts       -linguist-detectable
 # 起因: build.ps1 加了几十行注释后从 5.6KB 涨到 8.5KB, 在语言条上把 7.5KB 的 Vue
 # 挤进了 Other —— 中文注释一个字 3 字节, 注释越清楚这个数字涨得越快, 于是"按字节
 # 比大小"的条读起来完全不像这个项目。新增测试或工具目录时让上面的规则覆盖到,
