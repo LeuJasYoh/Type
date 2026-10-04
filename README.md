@@ -121,6 +121,7 @@ Type/
 │   └── devserver_dev.go     ← dev 构建 (`-tags dev`): 指向 Vite dev server, 并打开 DevTools 与右键菜单
 ├── internal/typing/         ← 业务层: 输入状态机 (平台无关, 在任意系统上都能编译并跑测试)
 │   ├── typing.go            ← TypingService 输入状态机 + 平台能力接口 + 时序常量
+│   ├── taskrun.go           ← 一次任务怎么走完: 五个阶段 (收尾/前置/倒计时/注入/终态)
 │   ├── typing_test.go       ← 状态机单元测试 (fake 注入器/剪贴板/前台窗口, 不触真实系统)
 │   ├── contract_test.go     ← 冻结文案逐字表 + 状态 JSON 的键与 phase 取值
 │   └── helpers_test.go      ← 输入路径判断的纯函数测试 (ASCII 判断 / CJK 标点)

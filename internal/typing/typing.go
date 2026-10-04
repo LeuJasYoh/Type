@@ -328,7 +328,23 @@ func (s *TypingService) Start(text string, delay int, forceSendInput bool, textD
 	// 本任务的收尾信号: 挂到 prevTask 上, 下一个任务据此等本任务停手
 	slot := &taskSlot{done: make(chan struct{})}
 	s.prevTask = slot
-	go s.runTypingTask(gen, cancelHonored, text, delay, forceSendInput, textDirect, baseline, slot, prev)
+	// 运行现场一次填好交给任务(原先这里是 9 个形参, 见 taskrun.go)。
+	// outcome.clipboardKept 显式写 true, 与拆分前的局部初值一致; 当前逻辑下漏写
+	// 并不可观测(读它的终态分支还要求 touchedClipboard, 那只在剪贴板成功路径里
+	// 置位), 但别依赖这一点 —— 将来多一条读它的路径, 零值就成了"剪贴板没保住"
+	// 这句谎话(同类零值陷阱见 AGENTS.md「空闲态不许有进度条」)
+	go s.runTypingTask(&taskRun{
+		gen:            gen,
+		cancelHonored:  cancelHonored,
+		text:           text,
+		delay:          delay,
+		forceSendInput: forceSendInput,
+		textDirect:     textDirect,
+		baseline:       baseline,
+		slot:           slot,
+		prev:           prev,
+		outcome:        runOutcome{clipboardKept: true},
+	})
 	return "started", nil
 }
 
@@ -367,266 +383,6 @@ func (s *TypingService) Cancel() (string, error) {
 		Phase: PhaseCancel, Message: msgCancelled, Progress: -1,
 	})
 	return "cancelled", nil
-}
-
-// runTypingTask 执行一次完整的输入任务(倒计时 + 注入)。
-// 任务槽已由 Start 在临界区内占好, 倒计时初态也已写好; slot 是本任务的
-// 收尾信号, prev 是占领时仍在收尾的上一任务(没有则为 nil)
-func (s *TypingService) runTypingTask(gen uint64, cancelHonored bool, text string, delay int, forceSendInput bool, textDirect bool, baseline ForegroundSample, slot *taskSlot, prev *taskSlot) {
-	// 收尾时先放信号再腾空任务槽: 下一个任务等的是信号, 而空闲判定看的是槽
-	defer func() {
-		close(slot.done)
-		s.mu.Lock()
-		if s.prevTask == slot {
-			s.prevTask = nil
-		}
-		s.mu.Unlock()
-	}()
-
-	// 等待点的取消判据:
-	//   ① 自己出生之后来的取消 —— 取消计数涨过了基线。这条是判据的主力:
-	//      取消标志会被下一次 Start 清掉, 而计数只增不减, 藏在采样窗口里的
-	//      那次取消也只有它认得出来;
-	//   ② 本任务已被更新一代的操作取代(任务代数变了);
-	//   ③ 取消标志本身, 它让循环尽快察觉, 但单独看它不可靠(见 ①)
-	cancelled := func() bool {
-		return gen != s.taskGen.Load() || s.cancelFlag.Load()
-	}
-
-	// 上一任务还在收尾时先等它停手, 免得两路注入交叠。等不到就让界面如实
-	// 显示"没能启动": 此刻状态是 Start 写下的倒计时, 而倒计时不是终态,
-	// 前端会一直轮询下去。
-	// 这里必须用本任务的代数(gen)去写, 不能拿 s.taskGen.Load() 当守卫 ——
-	// 那是拿自己和自己比, 恒真, 迟到的旧任务会把终态盖到在途的新任务上
-	// (v1.5.6 复核发现)
-	if prev != nil && !s.waitPreviousTask(prev) {
-		s.storeStatus(gen, &TypingStatus{
-			Phase: PhaseError, Message: msgPreviousTaskStuck, Progress: -1,
-		})
-		return
-	}
-	// 上一任务已经停手, 现在才轮到自己当"当前任务": 清掉那个用来催它退出的
-	// 取消标志。Start 里刻意没清(那时清会让第二次启动被误判成重入),
-	// 这里清才安全 —— 此刻再来的取消就是冲着我来的
-	s.cancelFlag.Store(false)
-
-	// 出生之前那次取消已经把本次启动作废了: 这里必须自己把终态说出来。
-	// 不说的话状态就停在 Start 写下的倒计时上 —— 倒计时不是终态, 前端会一直
-	// 轮询下去, 用户看到的是永远不动的"剩余 N 秒"(v1.5.6 复核发现的缺口)。
-	// 用 gen 当守卫: 已被更新一代接管时不能插嘴, 状态归新任务写。
-	// 这一判必须放在上面"清标志"之后: 在那之前看到的标志还是上一轮留下的
-	if cancelHonored {
-		if gen == s.taskGen.Load() {
-			s.typingStatus.Store(&TypingStatus{Phase: PhaseCancel, Message: msgCancelled, Progress: -1})
-		}
-		return
-	}
-
-	// ── 倒计时 ──
-	// 目标预览 = 当前前台窗口, countdownTick 节拍采样, 但只在可见内容变化时才写
-	// 状态: 秒边界写一次(文案与旧版逐字符一致), 窗口标识或标题一变立即
-	// 跟上(用户切到哪个窗口, 预览最多迟一拍), 其余节拍只采样不写。
-	// 采样与写状态分离后, 取消与切窗的响应从最坏 1 秒缩到 1 拍, 而每秒
-	// 10 次的冗余状态写入并不存在; 总时长仍是 delay 秒 —— 每拍
-	// sleep(countdownTick), 共 delay*countdownTicksPerSec 拍, 与旧实现
-	// 每次写入后 sleep(1s) 的总时长一致
-	shownSec, shown := delay, baseline
-	for i := 0; i < delay*countdownTicksPerSec; i++ {
-		if cancelled() {
-			return // Cancel 已写入取消状态
-		}
-		sec := delay - i/countdownTicksPerSec
-		sample := s.foreground.Sample()
-		if sec != shownSec || sample != shown {
-			shownSec, shown = sec, sample
-			s.storeStatus(gen, &TypingStatus{
-				Phase:        PhaseCountdown,
-				Message:      countdownMessage(sec),
-				SecondsLeft:  sec,
-				Progress:     -1,
-				TargetWindow: sample.Title,
-			})
-		}
-		s.sleep(countdownTick)
-	}
-	if cancelled() {
-		return
-	}
-
-	s.sleep(lockSettleWait)
-
-	// 执行目标锁定: 倒计时结束时的前台窗口, 贯穿到执行与终态状态。
-	// 标识与标题取自同一次采样, 展示的标题一定就是锁定下来的那个窗口;
-	// 焦点仍在 Type 自身时注入会落进自己的输入框 —— 明确报错, 不静默打错地方
-	locked := s.foreground.Sample()
-	if locked.Self {
-		s.storeStatus(gen, &TypingStatus{
-			Phase:    PhaseError,
-			Message:  msgFocusStayedOnSelf,
-			Progress: -1,
-		})
-		return
-	}
-	target := locked.Title
-
-	// ── 执行 ──
-	success := false
-	// injected 是否有内容真正送达目标窗口。系统拒绝注入(SendInput 返回 0,
-	// 典型为 UIPI)时注入器返回 false, 此时不得报"输入完成"
-	injected := false
-	// failMsg 注入中途被拒的具体原因; 为空则终态用通用"输入失败"
-	failMsg := ""
-	// clipboardOK 剪贴板是否仍保有注入前的内容。只有粘贴路径会碰剪贴板,
-	// 恢复失败时终态必须如实说明: 报完"输入完成"就把用户原本复制的东西
-	// 当成还在, 是最容易让人吃亏的那种隐瞒
-	clipboardOK := true
-	// 先试剪贴板路径: 含非 ASCII 且没有被强制逐字符时, 粘贴是最省事也最可靠的办法。
-	// 快照拿不全时(拿不全就恢复不回去)与剪贴板不可用时都退到逐字符, 而不是
-	// 硬走粘贴把用户原本复制的内容销毁掉
-	useClipboard := containsNonASCII(text) && !forceSendInput
-	// pasteSnap 剪贴板确实被本任务动过(终态要认这个事实);
-	// clipboardGaveUp 剪贴板这条路已经失败且不该重试, 逐字符通道必须让位,
-	// 否则它会用 SendRune 的失败原因把剪贴板那边的具体原因盖掉
-	pasteSnap, clipboardGaveUp := false, false
-	if useClipboard {
-		s.storeStatus(gen, &TypingStatus{
-			Phase: PhaseTyping, Message: msgClipboardStart, Progress: -1,
-			TargetWindow: target,
-		})
-		snap := s.clipboard.Snapshot()
-		if snap.UnsafeToRestore() {
-			// 剪贴板打开失败(原状态未知), 或有的格式没能照抄下来。这份快照
-			// 一写回去就会把没抄到的那些格式永久销毁, 所以干脆不碰剪贴板
-			useClipboard = false
-		} else {
-			// 失败原因由被调方给出: 剪贴板故障、目标窗口拒收 Ctrl+V、目标窗口
-			// 切换三者的处置不同, 不能都退化成通用的"输入失败"。
-			// 这里必须写在外层 failMsg 上(不是新声明一个): 终态要用它
-			success, failMsg, clipboardOK = s.typeTextViaClipboard(text, locked.ID, cancelled, snap.Formats)
-			injected = success // 粘贴按键被接受即内容已送达
-			if success {
-				pasteSnap = true // 剪贴板确实被本任务动过了, 终态要认这个事实
-			} else {
-				if cancelled() {
-					return // Cancel 已写入取消状态
-				}
-				if failMsg != "" {
-					s.storeStatus(gen, &TypingStatus{
-						Phase: PhaseTyping, Message: failMsg, Progress: -1,
-						TargetWindow: target,
-					})
-				}
-				// 到了这里一律不再退到逐字符: 能走到这一步说明剪贴板已经被
-				// 写过或粘贴已经发出(入口那次漂移守卫失败会在下个分支处理),
-				// 再打一遍就是把内容注入两遍, 也会把上面那个具体原因盖成
-				// 一句泛泛的"输入中断"
-				clipboardGaveUp = true
-			}
-		}
-	}
-	if !useClipboard && !clipboardGaveUp {
-		// 剔除 \r 使进度分母与实际注入次数一致 (\r\n 由 \n 触发回车)
-		runes := []rune(strings.ReplaceAll(text, "\r", ""))
-		total := len(runes)
-		s.storeStatus(gen, &TypingStatus{
-			Phase: PhaseTyping, Message: progressMessage(0, total), Progress: 0,
-			TargetWindow: target,
-		})
-
-		typed := 0
-		ok := true
-		drifted := false
-		for _, r := range runes {
-			if cancelled() {
-				break
-			}
-			// 漂移守卫: 每次注入前确认前台仍是倒计时结束时锁定的那个窗口。
-			// 判定按顶层窗口标识(严格): 输入法候选窗与补全弹窗不是顶层前台
-			// 窗口, 不会误触发; 用户切走(含切回 Type 自身)则立即停止, 不把
-			// 剩余内容打进错误的窗口。检查与注入之间仍有毫秒级窗口, 切换
-			// 恰好发生在其中时, 最多漏进一两个字符
-			if !s.targetHeld(locked.ID) {
-				drifted = true
-				break
-			}
-			// 注入通道分流: 文本直投把字符(含 Tab, WM_CHAR 可插入制表符)
-			// 送到文本层(无按键事件), 弹窗劫持与括号配对都挂在 keydown 上
-			// 因而无从触发; 换行无法走文本层 —— 实测 Chromium 会过滤
-			// WM_CHAR 的 \n/\r 控制字符, 只能真按键, 故先经 sendEscaped
-			// 用 Esc 关掉可能挂着的弹窗再按回车
-			switch {
-			case textDirect && r == '\n':
-				ok = s.sendEscaped(s.injector.SendEnter)
-			case textDirect:
-				ok = s.injector.SendText(r)
-			case r == '\n':
-				ok = s.injector.SendEnter()
-			default:
-				ok = s.injector.SendRune(r)
-			}
-			if !ok {
-				break // 注入被拒: 停止并报错, 不继续虚报进度
-			}
-			injected = true
-			typed++
-
-			if typed%progressEvery == 0 || typed == total {
-				s.storeStatus(gen, &TypingStatus{
-					Phase:        PhaseTyping,
-					Message:      progressMessage(typed, total),
-					Progress:     typed * 100 / total,
-					TargetWindow: target,
-				})
-			}
-
-			// 固定快速延迟: 三档数值见常量区 (给 IME 喘息)
-			charDelay := charDelayASCII
-			if r > 127 {
-				if isCJKPunct(r) {
-					charDelay = charDelayPunct
-				} else {
-					charDelay = charDelayCJK
-				}
-			}
-			s.sleep(charDelay)
-		}
-		if cancelled() {
-			success = false
-		} else if drifted {
-			// 已注入的部分无法撤回, 如实报出停在第几个字
-			failMsg = msgTargetSwitchedTyped(typed)
-			success = false
-		} else if !ok {
-			s.storeStatus(gen, &TypingStatus{Phase: PhaseTyping, Message: msgPartialSendInput, Progress: -1, TargetWindow: target})
-			failMsg = msgPartialSendInput
-			success = false
-		} else {
-			success = true
-		}
-	}
-
-	// 最终状态（前端检测到终止 phase 后停止轮询）; 过代则静默, 状态已由新操作接管
-	switch {
-	case cancelled():
-		// Cancel 已写入取消状态
-	case success && injected && pasteSnap && !clipboardOK:
-		// 内容已送达, 但剪贴板没能换回原内容: 如实说明, 不报"输入完成"
-		s.storeStatus(gen, &TypingStatus{Phase: PhaseSuccess, Message: msgClipboardNotRestored, Progress: -1, TargetWindow: target})
-	case success && injected:
-		s.storeStatus(gen, &TypingStatus{Phase: PhaseSuccess, Message: msgDone, Progress: -1, TargetWindow: target})
-	case success:
-		// 兜底: 一个字符都没注入成功(即整段文本无内容可注入)。正常走不到这里 ——
-		// 那种文本已被 Start 当场拒掉, 留着是为了将来有别的路径把文本整段剔除时,
-		// 界面不会把"什么都没做"报成"输入完成"
-		s.storeStatus(gen, &TypingStatus{Phase: PhaseSuccess, Message: msgNothingToType, Progress: -1, TargetWindow: target})
-	default:
-		// 保留注入器给出的具体原因(如权限不足), 而不是笼统的"输入失败"
-		msg := failMsg
-		if msg == "" {
-			msg = msgGenericFailure
-		}
-		s.storeStatus(gen, &TypingStatus{Phase: PhaseError, Message: msg, Progress: -1, TargetWindow: target})
-	}
 }
 
 // sendEscaped 先注入 Esc 关闭目标编辑器的补全弹窗, 稍候再注入 key。

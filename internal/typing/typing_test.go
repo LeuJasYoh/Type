@@ -629,6 +629,72 @@ func TestSupersededTaskTimeoutDoesNotOverwriteNewerTask(t *testing.T) {
 	waitIdle(t, svc)
 }
 
+// 过代任务的超时终态必须被丢弃 —— 这条走**生产路径**, 不是直接调 storeStatus。
+//
+// 上一条用例(TestSupersededTaskTimeoutDoesNotOverwriteNewerTask)自己构造代数去调
+// storeStatus, 钉住的是守卫函数本身; 而生产侧那一行若写成 s.taskGen.Load()(自比较、
+// 恒真 —— 正是 v1.5.6 的真缺陷), 它照样绿。独立验证的变异实测过这个缺口: 把生产
+// 路径改回自比较, 当时 40 条用例没有一条变红。这里让一个真任务在"等上一任务让位"的
+// 超时点上以过代身份去写终态, 再核对新任务的状态没被盖掉。
+//
+// 代价是必须真等满 yieldDeadline(2s), 因为 waitPreviousTask 刻意用真实时钟
+// (等的是别的任务, 不走 s.sleep); 这条缺口值得这 2.5 秒
+func TestSupersededTimeoutWriteIsDroppedOnProductionPath(t *testing.T) {
+	releaseOld := make(chan struct{})
+	sleeping := make(chan struct{}, 1)
+	svc := newTestService(newFakeInjector(), &fakeClipboard{}, func(time.Duration) {
+		select {
+		case sleeping <- struct{}{}:
+		default:
+		}
+		<-releaseOld
+	})
+
+	// T1: 占住任务槽并停在它的第一个等待点上(既不释放槽, 也看不到取消)
+	if _, err := svc.Start("甲", 1, false, false); err != nil {
+		t.Fatalf("T1 Start 失败: %v", err)
+	}
+	<-sleeping
+
+	// T2: 排在 T1 后面等让位(最长 yieldDeadline), 稍后会在超时点上写终态
+	if _, err := svc.Cancel(); err != nil {
+		t.Fatalf("Cancel 失败: %v", err)
+	}
+	if _, err := svc.Start("乙", 1, false, false); err != nil {
+		t.Fatalf("T2 Start 失败: %v", err)
+	}
+
+	// 隔开 300ms 再顶掉 T2。两条任务"等让位"的上界都是 yieldDeadline: 若几乎
+	// 同时起跑, T3 自己的超时会与 T2 的收尾撞在同一时刻, 那一拍谁先到不确定 ——
+	// 用例会随机红(实测 -count=5 与 -race 都命中过)。隔开之后 T2 必先超时退位,
+	// 而 T3 的等待在它自己的上界之前就结束
+	time.Sleep(300 * time.Millisecond)
+
+	// T3: 趁 T2 还在等让位把它顶掉(过代), 并写下自己的倒计时初态
+	if _, err := svc.Cancel(); err != nil {
+		t.Fatalf("第二次 Cancel 失败: %v", err)
+	}
+	if _, err := svc.Start("丙", 1, false, false); err != nil {
+		t.Fatalf("T3 Start 失败: %v", err)
+	}
+	want := countdownMessage(1)
+
+	// 等过 T2 的超时点: 它此刻是过代任务, 那句"上一任务未能及时退出"必须被整个
+	// 丢弃。T3 此时正卡在它自己的第一个倒计时等待里(注入的假 sleep 阻塞), 状态
+	// 应当还是 T3 的倒计时
+	time.Sleep(yieldDeadline + 200*time.Millisecond)
+	st := svc.Status()
+	if st.Message == msgPreviousTaskStuck {
+		t.Errorf("过代任务的超时终态盖到了新任务上: phase=%s, message=%q", st.Phase, st.Message)
+	}
+	if st.Phase != PhaseCountdown || st.Message != want {
+		t.Errorf("新任务的状态被改动: phase=%s, message=%q, want countdown/%q", st.Phase, st.Message, want)
+	}
+
+	close(releaseOld)
+	waitIdle(t, svc)
+}
+
 // 运行中 Start 拒绝重入, 且拒绝不影响在途任务
 func TestStartRejectsReentryWhileRunning(t *testing.T) {
 	inj := newFakeInjector()
