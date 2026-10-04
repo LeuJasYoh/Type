@@ -16,7 +16,7 @@ import (
 	"github.com/jchv/go-webview2"
 )
 
-var version = "1.6.1"
+var version = "1.6.2"
 
 // maxViewportFixes 内容缩放最多校正几次。正常只有一次(页面报回来的第一个比值),
 // 留第二次是给"创建初期读到一个错的比值、随后自行修正"的兜底; 再往上就不跟了,
