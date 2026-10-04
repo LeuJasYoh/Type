@@ -180,6 +180,7 @@ Type/
 │   ├── pecheck/             ← 构建产物读回校验: PE 架构 + 图标/版本/manifest 是否真的链进 exe (发版与 CI 共用)
 │   └── wmcharprobe/         ← 注入通道探针 (WM_CHAR 文本直投 vs SendInput 按键, 用法见文件头注释)
 ├── testdata/                ← 手工测试页 (paste-guard.html 防粘贴 / completion-guard.html 补全+配对, 用法见页内注释)
+├── docs/                    ← 工程约定专题 (从 AGENTS.md 拆出: 架构 / 构建发版 / 行为契约 / 踩坑 / 对外文字)
 ├── release-notes/           ← 各版本发布说明 (v<版本>.md, 发布时原样作为 Release 正文)
 ├── .github/workflows/
 │   ├── verify.yml           ← 检查项的唯一处 (gofmt / vet / -race 测试 / build + 前端单测 + 前端产物漂移检查 + 版本同步), CI 与发版共用

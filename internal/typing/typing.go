@@ -143,7 +143,7 @@ func msgTargetSwitchedTyped(n int) string {
 
 // ─── 用户可见文案(冻结清单的其余部分) ─────────────────
 // 逐字固定, 改动会直接落到用户眼前; contract_test.go 里有一张字面量表钉着
-// 它们。允许新增, 但新增也要登记进 AGENTS.md 的清单
+// 它们。允许新增, 但新增也要登记进 docs/behavior-contract.md 的清单
 const (
 	// 倒计时: 逐拍刷新秒数, 也是用户盯得最久的一句
 	msgCountdownFormat = "剩余 %d 秒 — 请聚焦目标窗口..."
@@ -170,7 +170,7 @@ func progressMessage(done, total int) string { return fmt.Sprintf(msgProgressFor
 
 // ─── 输入任务时序(调参集中处) ─────────────────────────
 // 状态机里所有等待与节拍只有这一处定义, 各处按名字取用。改动前先想清楚
-// 对取消响应与字符间隔的影响(见 AGENTS.md「焦点锁定与漂移防护」)。
+// 对取消响应与字符间隔的影响(见 docs/invariants.md「焦点锁定与漂移防护」)。
 // 同值不同义的不要合并: 100ms 在倒计时节拍与剪贴板稳定等待上各出现一次,
 // 两处可以独立调整
 const (
@@ -332,7 +332,7 @@ func (s *TypingService) Start(text string, delay int, forceSendInput bool, textD
 	// outcome.clipboardKept 显式写 true, 与拆分前的局部初值一致; 当前逻辑下漏写
 	// 并不可观测(读它的终态分支还要求 touchedClipboard, 那只在剪贴板成功路径里
 	// 置位), 但别依赖这一点 —— 将来多一条读它的路径, 零值就成了"剪贴板没保住"
-	// 这句谎话(同类零值陷阱见 AGENTS.md「空闲态不许有进度条」)
+	// 这句谎话(同类零值陷阱见 docs/invariants.md「空闲态不许有进度条」)
 	go s.runTypingTask(&taskRun{
 		gen:            gen,
 		cancelHonored:  cancelHonored,

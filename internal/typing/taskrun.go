@@ -5,7 +5,7 @@
 // 拆分前它是一个 256 行、9 个形参、6 个跨 150 行持续改写的局部变量的函数, 读的
 // 人要同时维护十来个状态。现在每段是一个方法, 段与段之间只靠 taskRun 的字段交接。
 //
-// **判定顺序、守卫位置与 sleep 注入点一个都没动**: 它们是 AGENTS.md 逐条记着、
+// **判定顺序、守卫位置与 sleep 注入点一个都没动**: 它们是 docs/invariants.md 逐条记着、
 // 40 条用例逐条钉着的行为契约(过代守卫、漂移守卫的三处位置、剪贴板失败后不再退
 // 逐字符、倒计时的采样与写状态分离……), 动它们要连着契约一起改。
 
@@ -40,7 +40,7 @@ type taskRun struct {
 // 写 true(与拆分前的 `clipboardOK := true` 初值一致)。当前逻辑下漏写并不可观测:
 // 读它的终态分支还要求 touchedClipboard, 而那只在剪贴板成功路径里置位 —— 但别
 // 依赖这一点, 将来多一条读它的路径, 零值就变成谎话。同类的坑本仓库踩过一次:
-// TypingStatus.Progress 的零值恰好等于合法取值 0(见 AGENTS.md「空闲态不许有进度条」)
+// TypingStatus.Progress 的零值恰好等于合法取值 0(见 docs/invariants.md「空闲态不许有进度条」)
 type runOutcome struct {
 	success          bool   // 整条路径是否成功
 	delivered        bool   // 是否有内容真正送达目标窗口
@@ -110,7 +110,7 @@ func (s *TypingService) finishTaskSlot(r *taskRun) {
 // cancelled 本任务是否已被取代或取消。两个判据与拆分前逐字一致:
 //   - 代数变了: 更新一代的 start/cancel 已接管, 本任务的后续写入本就作废;
 //   - 取消标志置位: 让循环尽快察觉(它会被下一次 Start 清掉, 所以单独看它不够,
-//     还得靠代数这条 —— 见 AGENTS.md「任务槽与并发启动」)
+//     还得靠代数这条 —— 见 docs/invariants.md「任务槽与并发启动」)
 //
 // 拆分前它是 runTypingTask 里的闭包, 现在按 run 逐个判
 func (s *TypingService) cancelled(r *taskRun) bool {

@@ -19,8 +19,10 @@ package main
 
 import (
 	"bytes"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -151,4 +153,71 @@ func TestBuildScriptKeepsUTF8BOM(t *testing.T) {
 		}
 		t.Errorf("scripts/build.ps1 的 BOM 丢了: 首三字节 = % X, want EF BB BF", head)
 	}
+}
+
+// ─── 文档指向的守护 ───────────────────────────────────
+
+// docRefRE 匹配代码注释里的跨文件指向: 「见 docs/某文档.md「某小节」」(示例故意用
+// 中文占位, 免得本文件自己的注释被这条正则当成一条真实指向去解析 —— 第一版就踩了)。
+// 注意 "见 " 后面必须有空格, 中文里写成"陷阱见 docs/…"也要能匹配上
+var docRefRE = regexp.MustCompile(`见 (docs/[a-z-]+\.md)「([^」]+)」`)
+
+// TestDocSectionReferencesResolve 代码注释里的跨文件指向必须真的指得到。
+//
+// 2026-10 把 AGENTS.md 拆成 docs/ 之后, 那些跨文件指向(见 docs/某文档.md「某小节」)
+// 是后来者唯一的线索: 文档再拆一次、或小节改了名, 它们就会变成空指针, 而没有任何环节
+// 会失败(独立验证提出的建议)。这里只查两件事 —— 目标文件存在、小节名在那个文件里
+// 出现过; 语义对不对仍是人的事
+func TestDocSectionReferencesResolve(t *testing.T) {
+	root := filepath.Join("..", "..")
+	dirs := [][]string{
+		{"cmd"}, {"internal"}, {"tools"},
+		{"frontend", "src"}, {"frontend", "test"}, {"frontend", "tools"},
+	}
+	var files []string
+	for _, parts := range dirs {
+		base := filepath.Join(append([]string{root}, parts...)...)
+		err := filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil // 目录不存在或读不动都跳过: 这条用例只管已存在的源码
+			}
+			switch filepath.Ext(path) {
+			case ".go", ".ts", ".mjs", ".vue":
+				files = append(files, path)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("遍历 %s 失败: %v", base, err)
+		}
+	}
+	if len(files) == 0 {
+		t.Fatal("一个源码文件都没扫到: 目录列表过期了?")
+	}
+
+	checked := 0
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, m := range docRefRE.FindAllStringSubmatch(string(data), -1) {
+			checked++
+			rel, section := m[1], m[2]
+			doc, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+			if err != nil {
+				relPath, _ := filepath.Rel(root, path)
+				t.Errorf("%s 指向 %s, 但该文件不存在", relPath, rel)
+				continue
+			}
+			if !strings.Contains(string(doc), section) {
+				relPath, _ := filepath.Rel(root, path)
+				t.Errorf("%s 指向 %s「%s」, 但那里没有这一节(改名了? 拆走了?)", relPath, rel, section)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Error("一条跨文件指向都没扫到: 正则或目录列表过期了?")
+	}
+	t.Logf("已核对 %d 条跨文件文档指向", checked)
 }

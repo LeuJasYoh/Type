@@ -289,7 +289,7 @@ func activate(hwnd uintptr) bool {
 // (顶层容器窗口会把 WM_CHAR 丢掉, 而 SendMessageTimeout 照样返回成功, 于是
 // "一个字都没进去"会被报成注入成功)。本探针只测 WM_CHAR 这条通道, 没有落点
 // 就如实说没有 —— 拿顶层窗口顶替, 会在"产品其实走了按键注入"的场景里给出一份
-// 不属于产品的结论, 而 AGENTS.md 恰恰让人拿这个工具的输当下判断的依据
+// 不属于产品的结论, 而 docs/invariants.md 恰恰让人拿这个工具的输当下判断的依据
 func focusedTarget() (uintptr, string) {
 	fg, _, _ := procGetForegroundWindow.Call()
 	if fg == 0 {

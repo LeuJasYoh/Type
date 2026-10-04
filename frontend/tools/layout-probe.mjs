@@ -1,7 +1,7 @@
 // ═══ 版式几何探针 ═══════════════════════════════════════
 // 用无头 Edge 逐档量真实几何, 而不是"看代码觉得对"。
 //
-// 页面配方与 AGENTS.md「README 配图的复现方式」同一套: 取已构建的
+// 页面配方与 docs/architecture.md「README 配图的复现方式」同一套: 取已构建的
 // internal/web/dist/index.html(只读, 不修改产物), 复制到临时目录, 在 <head> 顶部插一段
 // 打桩脚本(定义 startTyping / getTypingStatus 等五个绑定, 按 URL 的 scenario 返回固定
 // 状态; 必须先于 Vue 的 module 脚本执行), 末尾插一段度量脚本(量完把几何写进

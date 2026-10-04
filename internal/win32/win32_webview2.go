@@ -23,7 +23,7 @@ const webview2DownloadURL = "https://developer.microsoft.com/microsoft-edge/webv
 
 const (
 	webview2PromptTitle = "Type 无法启动"
-	// 两条正文都是发布语言, 逐字固定(见 AGENTS.md 行为契约)。目标读者是
+	// 两条正文都是发布语言, 逐字固定(见 docs/behavior-contract.md)。目标读者是
 	// 从没听说过"运行时"的人: 只需要说清缺什么、点哪里、之后做什么
 	MsgWebView2Missing = "缺少 Microsoft Edge WebView2 运行时，Type 的界面需要它才能显示。\n\n" +
 		"点\"是\"打开微软官方下载页；装好后重新运行 Type 即可，不必重启电脑。\n" +
