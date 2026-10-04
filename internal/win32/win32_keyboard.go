@@ -10,17 +10,17 @@ import (
 )
 
 const (
-	INPUT_KEYBOARD    = 1
-	KEYEVENTF_KEYUP   = 0x0002
-	KEYEVENTF_UNICODE = 0x0004
+	inputKeyboard    = 1
+	keyeventfKeyUp   = 0x0002
+	keyeventfUnicode = 0x0004
 
-	WM_CHAR          = 0x0102
-	SMTO_ABORTIFHUNG = 0x0002 // 目标窗口挂起时放弃消息, 不阻塞发送方
+	wmChar          = 0x0102
+	smtoAbortIfHung = 0x0002 // 目标窗口挂起时放弃消息, 不阻塞发送方
 
-	VK_CONTROL = 0x11
-	VK_V       = 0x56
-	VK_RETURN  = 0x0D
-	VK_ESCAPE  = 0x1B
+	vkControl = 0x11
+	vkV       = 0x56
+	vkReturn  = 0x0D
+	vkEscape  = 0x1B
 )
 
 // 注入之间的间隔与超时(调参集中处; 字符间隔的业务层三档见 internal/typing 常量区)
@@ -34,7 +34,7 @@ const (
 	wmCharTimeoutMS = 1000
 )
 
-type KEYBDINPUT struct {
+type keybdInput struct {
 	wVk         uint16
 	wScan       uint16
 	dwFlags     uint32
@@ -44,10 +44,10 @@ type KEYBDINPUT struct {
 
 // INPUT 结构体的手工填充(40 字节)仅匹配 64 位 ABI: 386 下真实布局为 28 字节,
 // SendInput 会静默注入乱码, 因此本包连同产品只按 64 位构建
-type INPUT struct {
+type input struct {
 	_type uint32
 	_     [4]byte
-	ki    KEYBDINPUT
+	ki    keybdInput
 	_     [8]byte
 }
 
@@ -77,17 +77,17 @@ func (Injector) SendText(r rune) bool { return sendCharUnitsViaWMChar(r) }
 
 // SendEscape 注入 Esc 真键: 关闭目标编辑器的补全弹窗(其键义劫持的唯一
 // 解除手段), 供文本直投模式在回车前调用
-func (Injector) SendEscape() bool { return sendVK(VK_ESCAPE) }
+func (Injector) SendEscape() bool { return sendVK(vkEscape) }
 
-func (Injector) SendEnter() bool { return sendVK(VK_RETURN) }
+func (Injector) SendEnter() bool { return sendVK(vkReturn) }
 
 // SendPaste 注入 Ctrl+V, 返回是否被系统接受
 func (Injector) SendPaste() bool {
-	inputs := [4]INPUT{
-		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: VK_CONTROL}},
-		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: VK_V}},
-		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: VK_V, dwFlags: KEYEVENTF_KEYUP}},
-		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: VK_CONTROL, dwFlags: KEYEVENTF_KEYUP}},
+	inputs := [4]input{
+		{_type: inputKeyboard, ki: keybdInput{wVk: vkControl}},
+		{_type: inputKeyboard, ki: keybdInput{wVk: vkV}},
+		{_type: inputKeyboard, ki: keybdInput{wVk: vkV, dwFlags: keyeventfKeyUp}},
+		{_type: inputKeyboard, ki: keybdInput{wVk: vkControl, dwFlags: keyeventfKeyUp}},
 	}
 	return sendInput(inputs[:]) == uint32(len(inputs))
 }
@@ -95,30 +95,30 @@ func (Injector) SendPaste() bool {
 // sendInput 返回实际插入的事件数。SendInput 被 UIPI 拦截(目标窗口权限更高)、
 // 工作站锁定或输入桌面不可用时整体失败并返回 0, 部分失败则小于请求数,
 // 故一律以"返回值等于请求数"作为成功判据
-func sendInput(inputs []INPUT) uint32 {
+func sendInput(inputs []input) uint32 {
 	if len(inputs) == 0 {
 		return 0
 	}
 	ret, _, _ := procSendInput.Call(
 		uintptr(len(inputs)),
 		uintptr(unsafe.Pointer(&inputs[0])),
-		unsafe.Sizeof(INPUT{}),
+		unsafe.Sizeof(input{}),
 	)
 	return uint32(ret)
 }
 
 // sendChar16 注入一个 UTF-16 码元(按下+抬起), 两者都被接受才算成功
 func sendChar16(code uint16) bool {
-	down := [1]INPUT{{
-		_type: INPUT_KEYBOARD,
-		ki:    KEYBDINPUT{wScan: code, dwFlags: KEYEVENTF_UNICODE},
+	down := [1]input{{
+		_type: inputKeyboard,
+		ki:    keybdInput{wScan: code, dwFlags: keyeventfUnicode},
 	}}
 	ok := sendInput(down[:]) == 1
 	time.Sleep(keyDownUpGap)
 
-	up := [1]INPUT{{
-		_type: INPUT_KEYBOARD,
-		ki:    KEYBDINPUT{wScan: code, dwFlags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP},
+	up := [1]input{{
+		_type: inputKeyboard,
+		ki:    keybdInput{wScan: code, dwFlags: keyeventfUnicode | keyeventfKeyUp},
 	}}
 	ok = sendInput(up[:]) == 1 && ok
 	return ok
@@ -155,7 +155,7 @@ func sendCharUnitsViaWMChar(r rune) bool {
 	// 带超时发送, 目标窗口挂起时放弃而不是卡死输入循环
 	var result uintptr
 	for _, u := range utf16Units(r) {
-		ret, _, _ := procSendMessageTimeoutW.Call(hwnd, WM_CHAR, uintptr(u), 1, SMTO_ABORTIFHUNG, wmCharTimeoutMS, uintptr(unsafe.Pointer(&result)))
+		ret, _, _ := procSendMessageTimeoutW.Call(hwnd, wmChar, uintptr(u), 1, smtoAbortIfHung, wmCharTimeoutMS, uintptr(unsafe.Pointer(&result)))
 		if ret == 0 {
 			return false
 		}
@@ -175,9 +175,9 @@ func sendCharUnitsViaInput(r rune) bool {
 }
 
 func sendVK(vk uint16) bool {
-	inputs := [2]INPUT{
-		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: vk}},
-		{_type: INPUT_KEYBOARD, ki: KEYBDINPUT{wVk: vk, dwFlags: KEYEVENTF_KEYUP}},
+	inputs := [2]input{
+		{_type: inputKeyboard, ki: keybdInput{wVk: vk}},
+		{_type: inputKeyboard, ki: keybdInput{wVk: vk, dwFlags: keyeventfKeyUp}},
 	}
 	return sendInput(inputs[:]) == uint32(len(inputs))
 }

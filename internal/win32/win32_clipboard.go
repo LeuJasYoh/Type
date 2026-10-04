@@ -18,28 +18,28 @@ import (
 type Clipboard struct{}
 
 const (
-	CF_UNICODETEXT = 13
-	CF_BITMAP      = 2 // 以下三者 GetClipboardData 返回 GDI 句柄而非 HGLOBAL
-	CF_PALETTE     = 9
-	CF_ENHMETAFILE = 14
+	cfUnicodeText = 13
+	cfBitmap      = 2 // 以下三者 GetClipboardData 返回 GDI 句柄而非 HGLOBAL
+	cfPalette     = 9
+	cfEnhMetafile = 14
 	// CF_METAFILEPICT 块本身就是内存, 但块里装着另一个图形句柄(hmf),
 	// EmptyClipboard 之后那个句柄已失效: 照抄会恢复出一个悬空句柄
-	CF_METAFILEPICT = 3
+	cfMetafilePict = 3
 	// 所有者绘制与"私有显示"格式: 数据由持有方解释, 形状不保证是内存块
-	CF_OWNERDISPLAY    = 0x0080
-	CF_DSPTEXT         = 0x0081
-	CF_DSPBITMAP       = 0x0082
-	CF_DSPMETAFILEPICT = 0x0083
-	CF_DSPENHMETAFILE  = 0x008E
+	cfOwnerDisplay    = 0x0080
+	cfDspText         = 0x0081
+	cfDspBitmap       = 0x0082
+	cfDspMetafilePict = 0x0083
+	cfDspEnhMetafile  = 0x008E
 	// GDI 对象格式族: 数据是 GDI 句柄, 不是内存块
-	CF_GDIOBJFIRST = 0x0300
-	CF_GDIOBJLAST  = 0x03FF
+	cfGdiObjFirst = 0x0300
+	cfGdiObjLast  = 0x03FF
 	// 程序私有格式族: 通常是内存块, 刻意不跳过(见 skippableFormat)
-	CF_PRIVATEFIRST = 0x0200
-	CF_PRIVATELAST  = 0x02FF
-	GMEM_MOVABLE    = 0x0002
-	GMEM_ZEROINIT   = 0x0040
-	GHND            = GMEM_MOVABLE | GMEM_ZEROINIT
+	cfPrivateFirst = 0x0200
+	cfPrivateLast  = 0x02FF
+	gmemMovable    = 0x0002
+	gmemZeroInit   = 0x0040
+	ghnd           = gmemMovable | gmemZeroInit
 )
 
 // 打开剪贴板的重试档位。Windows 同一时刻只允许一个程序持有剪贴板, 被其他
@@ -92,7 +92,7 @@ func (Clipboard) SetText(text string) bool {
 
 	encoded := encodedText(text)
 	size := len(encoded)
-	hMem, _, _ := procGlobalAlloc.Call(GHND, uintptr(size))
+	hMem, _, _ := procGlobalAlloc.Call(ghnd, uintptr(size))
 	if hMem == 0 {
 		return false
 	}
@@ -105,7 +105,7 @@ func (Clipboard) SetText(text string) bool {
 	// 目标为 Windows 返回的 uintptr 直接传入, 避免 uintptr->unsafe.Pointer 转换
 	procRtlMoveMemory.Call(ptr, uintptr(unsafe.Pointer(unsafe.SliceData(encoded))), uintptr(size))
 	procGlobalUnlock.Call(hMem)
-	ret, _, _ := procSetClipboardData.Call(CF_UNICODETEXT, hMem)
+	ret, _, _ := procSetClipboardData.Call(cfUnicodeText, hMem)
 	if ret == 0 {
 		procGlobalFree.Call(hMem) // 系统未接管所有权时由调用方释放
 	}
@@ -117,7 +117,7 @@ func (Clipboard) GetText() string {
 		return ""
 	}
 	defer procCloseClipboard.Call()
-	hMem, _, _ := procGetClipboardData.Call(CF_UNICODETEXT)
+	hMem, _, _ := procGetClipboardData.Call(cfUnicodeText)
 	if hMem == 0 {
 		return ""
 	}
@@ -158,7 +158,7 @@ func (Clipboard) HoldsText(text string) (holds bool, known bool) {
 		return false, false
 	}
 	defer procCloseClipboard.Call()
-	hMem, _, _ := procGetClipboardData.Call(CF_UNICODETEXT)
+	hMem, _, _ := procGetClipboardData.Call(cfUnicodeText)
 	if hMem == 0 {
 		// 我们自己 SetClipboardData 过 CF_UNICODETEXT, 取不到即说明剪贴板已被重写
 		return false, true
@@ -193,9 +193,9 @@ func clipboardClear() bool {
 // handleFormats: GetClipboardData 返回 GDI 句柄而非 HGLOBAL 内存块的标准格式,
 // 无法按字节复制, 快照时跳过 (延迟渲染格式 GetClipboardData 返回 0, 同样跳过)
 var handleFormats = map[uint32]struct{}{
-	CF_BITMAP:      {},
-	CF_PALETTE:     {},
-	CF_ENHMETAFILE: {},
+	cfBitmap:      {},
+	cfPalette:     {},
+	cfEnhMetafile: {},
 }
 
 // skippableFormat 该格式是否不适合按"一整块内存"快照。
@@ -211,11 +211,11 @@ func skippableFormat(fmt uint32) bool {
 		return true
 	}
 	switch fmt {
-	case CF_METAFILEPICT, CF_OWNERDISPLAY,
-		CF_DSPTEXT, CF_DSPBITMAP, CF_DSPMETAFILEPICT, CF_DSPENHMETAFILE:
+	case cfMetafilePict, cfOwnerDisplay,
+		cfDspText, cfDspBitmap, cfDspMetafilePict, cfDspEnhMetafile:
 		return true
 	}
-	return fmt >= CF_GDIOBJFIRST && fmt <= CF_GDIOBJLAST
+	return fmt >= cfGdiObjFirst && fmt <= cfGdiObjLast
 }
 
 // Snapshot 复制当前剪贴板的全部内存块型格式(文本/图片 CF_DIB/文件
@@ -292,7 +292,7 @@ func readClipboardFormat(fmt uint32) ([]byte, bool) {
 func writeClipboardFormats(snap []typing.ClipboardFormat) bool {
 	all := true
 	for _, cf := range snap {
-		hMem, _, _ := procGlobalAlloc.Call(GHND, uintptr(len(cf.Data)))
+		hMem, _, _ := procGlobalAlloc.Call(ghnd, uintptr(len(cf.Data)))
 		if hMem == 0 {
 			all = false
 			continue

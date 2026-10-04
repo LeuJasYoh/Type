@@ -16,15 +16,15 @@ import (
 )
 
 const (
-	WM_SETICON     = 0x0080
-	ICON_SMALL     = 0
-	ICON_BIG       = 1
-	IMAGE_ICON     = 1
-	LR_DEFAULTSIZE = 0x0040
+	wmSetIcon     = 0x0080
+	iconSmall     = 0
+	iconBig       = 1
+	imageIcon     = 1
+	lrDefaultSize = 0x0040
 )
 
 // MonitorFromWindow 的标志: 拿不到窗口所在显示器时退回主显示器
-const MONITOR_DEFAULTTOPRIMARY = 1
+const monitorDefaultToPrimary = 1
 
 // ─── 窗口尺寸与 DPI ───────────────────────────────────
 
@@ -53,9 +53,11 @@ func scaledByDPI(w, h, dpi int) (int, int) {
 	return roundDiv(w*dpi, 96), roundDiv(h*dpi, 96)
 }
 
-// roundDiv 四舍五入的整数除法。两个方向都要用它: 逻辑→物理用 dpi 乘,
-// 物理→逻辑用 dpi 除, 截断会让误差单向累积(实测 100 DPI 下 720 逻辑 →
-// 750 物理, 再截断折回就变成 720, 看着对; 但 599 这类值会稳定地少 1)
+// roundDiv 四舍五入的整数除法: 逻辑尺寸 → 物理像素的换算要用它。
+// 截断(整数除法)会让误差单向累积 —— 实测 100 DPI 下 720 逻辑 → 750 物理, 再截断
+// 折回就变成 720, 看着对; 但 599 这类值会稳定地少 1。
+// 2026-10 收窄导出面时删掉了唯一的"物理 → 逻辑"调用点(clientLogicalSize), 现在
+// 生产里只有 scaledByDPI 在用; 折回方向与负值分支一并留着(换算规则本是双向的)
 func roundDiv(v, div int) int {
 	if v < 0 {
 		return -((-v + div/2) / div)
@@ -63,10 +65,10 @@ func roundDiv(v, div int) int {
 	return (v + div/2) / div
 }
 
-// DPIForWindow 读窗口当前所在显示器的 DPI(取不到时按 96)。
+// dpiForWindow 读窗口当前所在显示器的 DPI(取不到时按 96)。
 // 注意它不一定是 96 的整数倍: Windows 允许 100、110、125 这类自定义缩放,
 // 本机实测就是 100 —— 非整数倍正是取整误差最容易露头的地方
-func DPIForWindow(hwnd uintptr) int {
+func dpiForWindow(hwnd uintptr) int {
 	dpi, _, _ := procGetDpiForWindow.Call(hwnd)
 	if dpi < 96 {
 		return 96
@@ -74,9 +76,9 @@ func DPIForWindow(hwnd uintptr) int {
 	return int(dpi)
 }
 
-// ClientPhysicalSize 读客户区的物理像素尺寸, 即 WebView2 渲染表面的实际大小
-func ClientPhysicalSize(hwnd uintptr) (w, h int, ok bool) {
-	var r Rect
+// clientPhysicalSize 读客户区的物理像素尺寸, 即 WebView2 渲染表面的实际大小
+func clientPhysicalSize(hwnd uintptr) (w, h int, ok bool) {
+	var r rect
 	if ret, _, _ := procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ret == 0 {
 		return 0, 0, false
 	}
@@ -101,21 +103,21 @@ func ClientPhysicalSize(hwnd uintptr) (w, h int, ok bool) {
 const (
 	MinWindowW = 540
 	MinWindowH = 480
-	MaxWindowW = 648
-	MaxWindowH = 540
+	maxWindowW = 648
+	maxWindowH = 540
 )
 
-// InitialWindowSize 按显示器可用工作区(逻辑像素)算窗口尺寸(逻辑像素)。
+// initialWindowSize 按显示器可用工作区(逻辑像素)算窗口尺寸(逻辑像素)。
 // workH 用不上时忽略(恒返回下限), 只有工作区比下限还矮(小屏 / 横屏少见情形)
 // 才据它收窄, 不让窗口高过屏幕
-func InitialWindowSize(workW, workH int) (w, h int) {
+func initialWindowSize(workW, workH int) (w, h int) {
 	_ = workW // 宽度由高度推出; 保留参数是为了将来要按工作区宽度兜底时有处可加
 	h = workH * 49 / 100
 	if h < MinWindowH {
 		h = MinWindowH
 	}
-	if h > MaxWindowH {
-		h = MaxWindowH
+	if h > maxWindowH {
+		h = maxWindowH
 	}
 	// 工作区比下限还矮: 按工作区收窄, 不让窗口高过屏幕(此时会低于 MinWindowH,
 	// 这是"屏幕放不下"的现实, 不是配置错误)
@@ -127,40 +129,40 @@ func InitialWindowSize(workW, workH int) (w, h int) {
 	if w < MinWindowW {
 		w = MinWindowW
 	}
-	if w > MaxWindowW {
-		w = MaxWindowW
+	if w > maxWindowW {
+		w = maxWindowW
 	}
 	return w, h
 }
 
-// Rect 屏幕/工作区矩形(物理像素)
-type Rect struct {
+// rect 屏幕/工作区矩形(物理像素)
+type rect struct {
 	Left, Top, Right, Bottom int32
 }
 
 // MONITORINFO 只用到 rcWork; cbSize 必须按结构体尺寸填(含尾部 dwFlags 的填充)
-type MONITORINFO struct {
+type monitorInfo struct {
 	cbSize    uint32
-	rcMonitor Rect
-	rcWork    Rect
+	rcMonitor rect
+	rcWork    rect
 	dwFlags   uint32
 }
 
-// MonitorWorkArea 取窗口所在显示器的可用工作区(物理像素), 已排除任务栏。
+// monitorWorkArea 取窗口所在显示器的可用工作区(物理像素), 已排除任务栏。
 // 拿不到显示器信息时返回 false, 由调用方退回默认尺寸 —— 这条路径不该让程序
 // 起不来, 也不该弹框: 它只是"尺寸算不准", 不是"界面建不出来"
-func MonitorWorkArea(hwnd uintptr) (Rect, bool) {
-	mon, _, _ := procMonitorFromWindow.Call(hwnd, MONITOR_DEFAULTTOPRIMARY)
+func monitorWorkArea(hwnd uintptr) (rect, bool) {
+	mon, _, _ := procMonitorFromWindow.Call(hwnd, monitorDefaultToPrimary)
 	if mon == 0 {
-		return Rect{}, false
+		return rect{}, false
 	}
-	var mi MONITORINFO
+	var mi monitorInfo
 	mi.cbSize = uint32(unsafe.Sizeof(mi))
 	if ret, _, _ := procGetMonitorInfoW.Call(mon, uintptr(unsafe.Pointer(&mi))); ret == 0 {
-		return Rect{}, false
+		return rect{}, false
 	}
 	if mi.rcWork.Right <= mi.rcWork.Left || mi.rcWork.Bottom <= mi.rcWork.Top {
-		return Rect{}, false
+		return rect{}, false
 	}
 	return mi.rcWork, true
 }
@@ -179,16 +181,16 @@ type WindowPlan struct {
 // (调用方用 SetSize 即可), 不让"尺寸算不准"升级成"界面起不来"。
 // hwnd 需要已存在: DPI 与工作区都从它所在的显示器取
 func PlanForDisplay(hwnd uintptr) (WindowPlan, bool) {
-	work, haveWork := MonitorWorkArea(hwnd)
+	work, haveWork := monitorWorkArea(hwnd)
 	if !haveWork {
 		return WindowPlan{}, false
 	}
-	dpi := DPIForWindow(hwnd)
+	dpi := dpiForWindow(hwnd)
 	// 工作区是物理像素, 先折回逻辑像素再算尺寸, 最后统一换算回物理像素:
 	// 全程只经过一次四舍五入, 不会出现两次取整叠加的漂移
 	workW := int(work.Right-work.Left) * 96 / dpi
 	workH := int(work.Bottom-work.Top) * 96 / dpi
-	lw, lh := InitialWindowSize(workW, workH)
+	lw, lh := initialWindowSize(workW, workH)
 	cw, ch := scaledByDPI(lw, lh, dpi)
 
 	plan := WindowPlan{
@@ -221,10 +223,10 @@ func PlanForDisplay(hwnd uintptr) (WindowPlan, bool) {
 // 实测 scale=1e15 时窗口矩形的 int32 截断会让"装不进工作区"的判定读到垃圾值而放行
 const maxContentScale = 16
 
-// ScaledClientSize 设计逻辑尺寸 × 内容缩放 → 客户区物理像素(四舍五入)。
+// scaledClientSize 设计逻辑尺寸 × 内容缩放 → 客户区物理像素(四舍五入)。
 // 比值非法(≤0 / NaN / ±Inf / 超过 maxContentScale)或算出的尺寸超出 INT32 时返回 (0,0),
 // 调用方按"不校正"处理 —— 这是个全函数, 不会把溢出值交给调用方
-func ScaledClientSize(lw, lh int, scale float64) (int, int) {
+func scaledClientSize(lw, lh int, scale float64) (int, int) {
 	if math.IsNaN(scale) || math.IsInf(scale, 0) || scale <= 0 || scale > maxContentScale {
 		return 0, 0
 	}
@@ -241,11 +243,11 @@ func ScaledClientSize(lw, lh int, scale float64) (int, int) {
 // ok=false 有三种情形: 比值非法、算出的尺寸非正、或按它放大的整窗(含边框)装不进
 // 工作区。此时调用方保持原尺寸 —— 宁可让界面滚动, 也不把窗口摆到屏幕外
 func WindowClientForScale(hwnd uintptr, lw, lh int, scale float64) (cw, ch, x, y int, ok bool) {
-	cw, ch = ScaledClientSize(lw, lh, scale)
+	cw, ch = scaledClientSize(lw, lh, scale)
 	if cw <= 0 || ch <= 0 {
 		return 0, 0, 0, 0, false
 	}
-	work, haveWork := MonitorWorkArea(hwnd)
+	work, haveWork := monitorWorkArea(hwnd)
 	if !haveWork {
 		return 0, 0, 0, 0, false
 	}
@@ -267,14 +269,14 @@ func WindowClientForScale(hwnd uintptr, lw, lh int, scale float64) (cw, ch, x, y
 // 会差十几个物理像素; 而客户区同时决定 WebView2 的渲染表面大小。拿不到该入口时
 // (极老的系统)退回非 DPI 版, 行为与改动前一致
 func windowRectForClient(hwnd uintptr, cw, ch int) (w, h int) {
-	r := Rect{Right: int32(cw), Bottom: int32(ch)}
+	r := rect{Right: int32(cw), Bottom: int32(ch)}
 	ok := false
 	if err := procAdjustWindowRectExForDpi.Find(); err == nil {
 		// 参数顺序是 (lpRect, dwStyle, bMenu, dwExStyle, dpi) —— dpi 是第 5 个。
 		// 只传 4 个的话 dpi 会取到寄存器里的残留值, 边框被算成几百像素宽, 窗口
 		// 直接涨成两倍多(实测 600×400 的请求摆出 1540×941 的客户区)
 		ret, _, _ := procAdjustWindowRectExForDpi.Call(
-			uintptr(unsafe.Pointer(&r)), wsOverlappedWindow, 0, 0, uintptr(DPIForWindow(hwnd)))
+			uintptr(unsafe.Pointer(&r)), wsOverlappedWindow, 0, 0, uintptr(dpiForWindow(hwnd)))
 		ok = ret != 0
 	}
 	if !ok {
@@ -304,9 +306,9 @@ func SetWindowClientRect(hwnd uintptr, x, y, cw, ch int) {
 			hwnd, 0,
 			toUint32(x), toUint32(y),
 			uintptr(uint32(ww)), uintptr(uint32(wh)),
-			SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED,
+			swpNoZOrder|swpNoActivate|swpFrameChanged,
 		)
-		pw, ph, ok := ClientPhysicalSize(hwnd)
+		pw, ph, ok := clientPhysicalSize(hwnd)
 		if !ok || (pw == cw && ph == ch) || attempt >= 1 {
 			return
 		}
@@ -344,35 +346,20 @@ func toUint32(v int) uintptr {
 	return uintptr(uint32(int32(v)))
 }
 
-// ClientLogicalSize 读回窗口客户区的逻辑尺寸(把物理像素按当前 DPI 折回 96 DPI
-// 基准)。存在的理由只有一个: 客户区同时决定 WebView2 的渲染表面大小, 表面与
-// 客户区一旦不匹配(哪怕差 1 像素), Chromium 的输出就会被重采样成"发虚"。
-// 所以"请求的逻辑尺寸"与"读回的客户区逻辑尺寸"必须相等, 这是可校验的事实
-func ClientLogicalSize(hwnd uintptr) (w, h int, ok bool) {
-	pw, ph, hasRect := ClientPhysicalSize(hwnd)
-	if !hasRect {
-		return 0, 0, false
-	}
-	dpi := DPIForWindow(hwnd)
-	// 与 scaledByDPI 用同一个 roundDiv: 折回方向若改用截断, 在 100 DPI 这类
-	// 非整数倍缩放下会凭空少 1 像素, 看上去像"窗口尺寸算错了"
-	return roundDiv(pw*96, dpi), roundDiv(ph*96, dpi), true
-}
-
 // ─── 窗口置顶 ─────────────────────────────────────────
 
-// WindowStyle / HitTestBottomRight 是"窗口到底能不能拖大"的取证手段。
+// windowStyle / hitTestBottomRight 是"窗口到底能不能拖大"的取证手段。
 // 库的 SetSize(HintFixed) 会清掉 wsThickFrame|wsMaximizeBox(见上面的常量注释),
 // 但判据不能只看源码: 样式位要读回, 还要真的问系统一次命中测试。
 // 这两条取证在 TestWindowSizeIsFixed 里以 A/B 形式钉着 —— 先在一个真的可拖大的
 // 窗口上证明"认得出"(阳性对照), 再去掉样式位证明"认不出"; 只有阳性对照成立,
 // 后一半才不是自我安慰(此前这条用例两头都缺, 两条断言恒真)
-func WindowStyle(hwnd uintptr) uint32 {
+func windowStyle(hwnd uintptr) uint32 {
 	style, _, _ := procGetWindowLongPtrW.Call(hwnd, ^uintptr(15)) // GWL_STYLE = -16
 	return uint32(style)
 }
 
-// HitTestBottomRight 在**窗口矩形**(含边框)右下角内侧 2px 处做一次
+// hitTestBottomRight 在**窗口矩形**(含边框)右下角内侧 2px 处做一次
 // WM_NCHITTEST, 返回命中码: htBottomRight(17) 表示那里是缩放边框, 其余
 // (HTCLIENT=1 / HTBORDER=18)表示不可拖大。失败返回 -1。
 //
@@ -380,40 +367,40 @@ func WindowStyle(hwnd uintptr) uint32 {
 // 任何带边框的窗口都只会回 HTCLIENT —— 于是"验证窗口不可拖大"的断言对**可拖大**
 // 的窗口同样成立, 是恒真的。2026-10 用独立探针实测确认过这一条: 同一个
 // WS_OVERLAPPEDWINDOW 窗口, 按客户区取点得 1, 按窗口矩形取点得 17
-func HitTestBottomRight(hwnd uintptr) int {
-	var r Rect
+func hitTestBottomRight(hwnd uintptr) int {
+	var r rect
 	if ret, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ret == 0 {
 		return -1
 	}
 	// WM_NCHITTEST 的 lParam 是屏幕坐标打包成的 POINTS: 低 16 位 x, 高 16 位 y
 	lp := int32(r.Bottom-2)<<16 | (r.Right - 2)
-	ret, _, _ := procSendMessageW.Call(hwnd, WM_NCHITTEST, 0, uintptr(uint32(lp)))
+	ret, _, _ := procSendMessageW.Call(hwnd, wmNCHitTest, 0, uintptr(uint32(lp)))
 	return int(int32(uint32(ret)))
 }
 
 // WM_NCHITTEST: 问系统"这个坐标点命中了窗口的哪个部位", 用来验证右下角
-// 到底是不是缩放边框(见 HitTestBottomRight)
-const WM_NCHITTEST = 0x0084
+// 到底是不是缩放边框(见 hitTestBottomRight)
+const wmNCHitTest = 0x0084
 
 const (
-	HWND_TOPMOST     = ^uintptr(0) // -1
-	HWND_NOTOPMOST   = ^uintptr(1) // -2
-	SWP_NOSIZE       = 0x0001
-	SWP_NOMOVE       = 0x0002
-	SWP_NOZORDER     = 0x0004
-	SWP_NOACTIVATE   = 0x0010
-	SWP_FRAMECHANGED = 0x0020
-	SWP_SHOWWINDOW   = 0x0040
+	hwndTopmost     = ^uintptr(0) // -1
+	hwndNotTopmost  = ^uintptr(1) // -2
+	swpNoSize       = 0x0001
+	swpNoMove       = 0x0002
+	swpNoZOrder     = 0x0004
+	swpNoActivate   = 0x0010
+	swpFrameChanged = 0x0020
+	swpShowWindow   = 0x0040
 )
 
 func SetTopmost(hwnd uintptr, topmost bool) bool {
-	insertAfter := HWND_NOTOPMOST
+	insertAfter := hwndNotTopmost
 	if topmost {
-		insertAfter = HWND_TOPMOST
+		insertAfter = hwndTopmost
 	}
 	ret, _, _ := procSetWindowPos.Call(
 		hwnd, insertAfter, 0, 0, 0, 0,
-		SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW|SWP_NOACTIVATE,
+		swpNoMove|swpNoSize|swpShowWindow|swpNoActivate,
 	)
 	return ret != 0
 }
@@ -421,7 +408,7 @@ func SetTopmost(hwnd uintptr, topmost bool) bool {
 // ─── 窗口图标（从 exe 自身提取，设置标题栏/任务栏）─────
 
 // SHFILEINFO 用于 SHGetFileInfoW
-type SHFILEINFO struct {
+type shFileInfo struct {
 	hIcon         uintptr
 	iIcon         int32
 	dwAttributes  uint32
@@ -430,9 +417,9 @@ type SHFILEINFO struct {
 }
 
 const (
-	SHGFI_ICON      = 0x100
-	SHGFI_LARGEICON = 0x000
-	SHGFI_SMALLICON = 0x001
+	shgfiIcon      = 0x100
+	shgfiLargeIcon = 0x000
+	shgfiSmallIcon = 0x001
 )
 
 // loadAppIcon 从当前 exe 提取大图标和小图标句柄
@@ -440,8 +427,8 @@ func loadAppIcon() (hLarge, hSmall uintptr) {
 	exe, _ := os.Executable()
 	exeW, _ := syscall.UTF16PtrFromString(exe)
 
-	var fiLarge, fiSmall SHFILEINFO
-	infoSize := unsafe.Sizeof(SHFILEINFO{})
+	var fiLarge, fiSmall shFileInfo
+	infoSize := unsafe.Sizeof(shFileInfo{})
 
 	// 大图标（任务栏）
 	procSHGetFileInfoW.Call(
@@ -449,7 +436,7 @@ func loadAppIcon() (hLarge, hSmall uintptr) {
 		0,
 		uintptr(unsafe.Pointer(&fiLarge)),
 		infoSize,
-		SHGFI_ICON|SHGFI_LARGEICON,
+		shgfiIcon|shgfiLargeIcon,
 	)
 
 	// 小图标（标题栏）
@@ -458,7 +445,7 @@ func loadAppIcon() (hLarge, hSmall uintptr) {
 		0,
 		uintptr(unsafe.Pointer(&fiSmall)),
 		infoSize,
-		SHGFI_ICON|SHGFI_SMALLICON,
+		shgfiIcon|shgfiSmallIcon,
 	)
 
 	return fiLarge.hIcon, fiSmall.hIcon
@@ -472,10 +459,10 @@ func loadAppIcon() (hLarge, hSmall uintptr) {
 func applyWindowIcon(hwnd, hLarge, hSmall uintptr, withSetIcon bool) {
 	if withSetIcon {
 		if hLarge != 0 {
-			procPostMessageW.Call(hwnd, WM_SETICON, ICON_BIG, hLarge)
+			procPostMessageW.Call(hwnd, wmSetIcon, iconBig, hLarge)
 		}
 		if hSmall != 0 {
-			procPostMessageW.Call(hwnd, WM_SETICON, ICON_SMALL, hSmall)
+			procPostMessageW.Call(hwnd, wmSetIcon, iconSmall, hSmall)
 		}
 	}
 
@@ -519,11 +506,11 @@ func RetrySetIcon(hwnd uintptr) {
 }
 
 // GUITHREADINFO / RECT 用于 GetGUIThreadInfo 定位焦点窗口
-type RECT struct {
+type winRect struct {
 	Left, Top, Right, Bottom int32
 }
 
-type GUITHREADINFO struct {
+type guiThreadInfo struct {
 	cbSize        uint32
 	flags         uint32
 	hwndActive    uintptr
@@ -532,25 +519,15 @@ type GUITHREADINFO struct {
 	hwndMenuOwner uintptr
 	hwndMoveSize  uintptr
 	hwndCaret     uintptr
-	rcCaret       RECT
-}
-
-// focusedTarget 从 GetGUIThreadInfo 的结果里挑出可安全投递 WM_CHAR 的落点。
-// 拿不到焦点子窗口(hwndFocus 为 0)时返回 0, 不拿容器窗口顶替 —— 顶层窗口
-// (浏览器主窗口那类)会把 WM_CHAR 丢掉, 而 SendMessageTimeout 照样返回成功,
-// 于是"一个字都没进去"被报成注入成功。
-// 单独抽出来是为了能直接测这个判断, 它的另一半(GUI 线程查询本身)要靠真窗口
-func focusedTarget(hwndFocus uintptr) uintptr {
-	if hwndFocus == 0 {
-		return 0
-	}
-	return hwndFocus
+	rcCaret       winRect
 }
 
 // focusedHWND 返回当前实际持有键盘焦点的窗口;
 // 前台顶层窗口通常只是容器(如浏览器主窗口), 直接向其发消息会被丢弃。
-// 拿不到焦点子窗口时返回 0 —— 这与"没有前台窗口"一样, 都意味着没有可安全
-// 投递 WM_CHAR 的落点, 调用方据此退化为按键注入(见 win32_keyboard.go)
+// 拿不到焦点子窗口(hwndFocus 为 0)时返回 0, 不拿容器窗口顶替 —— 这与"没有前台
+// 窗口"一样, 都意味着没有可安全投递 WM_CHAR 的落点: 顶层窗口(浏览器主窗口那类)
+// 会把 WM_CHAR 丢掉, 而 SendMessageTimeout 照样返回成功, 于是"一个字都没进去"
+// 被报成注入成功。调用方据此退化为按键注入(见 win32_keyboard.go)
 func focusedHWND() uintptr {
 	hwnd, _, _ := procGetForegroundWindow.Call()
 	if hwnd == 0 {
@@ -560,10 +537,10 @@ func focusedHWND() uintptr {
 	if tid == 0 {
 		return 0
 	}
-	var gti GUITHREADINFO
+	var gti guiThreadInfo
 	gti.cbSize = uint32(unsafe.Sizeof(gti))
 	if ret, _, _ := procGetGUIThreadInfo.Call(tid, uintptr(unsafe.Pointer(&gti))); ret != 0 {
-		return focusedTarget(gti.hwndFocus)
+		return gti.hwndFocus
 	}
 	return 0
 }

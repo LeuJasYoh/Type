@@ -9,10 +9,50 @@ import (
 	"strconv"
 	"syscall"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/LeuJasYoh/type/internal/typing"
 )
+
+// clipboardExclusive 确认剪贴板此刻归我们: 写一段探针文本并立刻读回, 最多试 3 次。
+//
+// 下面是真剪贴板用例的共同前提 —— "这段时间里没有别人动剪贴板"。某些常驻程序
+// (剪贴板桥接/同步类)会让系统剪贴板持续被别人持有: 本机实测连 PowerShell 的
+// Set-Clipboard 都 5/5 失败, 而 `SetClipboardData` 可能"成功"、紧接着读回来却是
+// 对方的字节。那种环境里断言往返结果只会得到一个假的"回归"。
+//
+// 前提不成立时, **本机**跳过并说明读到什么, 而不是改断言放水; **CI 里一律红** ——
+// runner 是干净环境, 那里出现"剪贴板不可用"要么是真回归(这两条是全仓唯一真实的
+// 剪贴板读写往返, 写错字节/读错字节都会走到这里), 要么是环境真坏了, 两种都该让人
+// 看见, 不能被一个 SKIP 掩盖过去(2026-10 独立验证提出: 跳过分支会同时吃掉这两类)
+func clipboardExclusive(t *testing.T, cb Clipboard, why string) {
+	t.Helper()
+	const probe = "Type::ClipboardProbe"
+	deadline := time.Now().Add(2 * time.Second)
+	fail := func(got string) {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("CI 环境里剪贴板不可用(写入 %q 后读回 %q): %s —— 不许跳过, 先查是写读链路回归还是环境",
+				probe, got, why)
+		}
+		t.Skipf("剪贴板被外部程序占用/改写(写入 %q 后读回 %q): %s —— 前提不成立, 跳过而不是报假回归",
+			probe, got, why)
+	}
+	for attempt := 1; ; attempt++ {
+		if cb.SetText(probe) {
+			if got := cb.GetText(); got == probe {
+				return // 前提成立
+			} else if attempt >= 3 || time.Now().After(deadline) {
+				fail(got)
+				return
+			}
+		} else if attempt >= 3 || time.Now().After(deadline) {
+			fail("<SetText 失败>")
+			return
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+}
 
 func TestUtf16Units(t *testing.T) {
 	cases := []struct {
@@ -52,6 +92,7 @@ func TestClipboardSnapshotRoundtrip(t *testing.T) {
 		t.Skip("剪贴板被占用或读不全, 无法保存原始状态")
 	}
 	defer cb.RestoreSnapshotRaw(orig.Formats)
+	clipboardExclusive(t, cb, "快照/恢复往返")
 
 	if !cb.SetText("快照测试文本") {
 		t.Fatal("SetText 失败")
@@ -77,7 +118,7 @@ func TestClipboardSnapshotRoundtrip(t *testing.T) {
 	var sawText, sawReg bool
 	for _, cf := range snap.Formats {
 		switch cf.Fmt {
-		case CF_UNICODETEXT:
+		case cfUnicodeText:
 			sawText = true
 		case uint32(reg):
 			sawReg = true
@@ -91,10 +132,10 @@ func TestClipboardSnapshotRoundtrip(t *testing.T) {
 	if !cb.SetText("覆盖后的内容") {
 		t.Fatal("覆盖剪贴板失败")
 	}
-	cb.RestoreSnapshotRaw(snap.Formats)
+	restored := cb.RestoreSnapshotRaw(snap.Formats)
 
 	if got := cb.GetText(); got != "快照测试文本" {
-		t.Errorf("恢复后文本 = %q, want %q", got, "快照测试文本")
+		t.Errorf("恢复后文本 = %q, want %q (RestoreSnapshotRaw 返回 %v)", got, "快照测试文本", restored)
 	}
 	if !openClipboardWithRetry() {
 		t.Fatal("打开剪贴板失败")
@@ -140,6 +181,7 @@ func TestClipboardHoldsTextNul(t *testing.T) {
 		t.Skip("剪贴板被占用或读不全, 无法保存原始状态")
 	}
 	defer cb.RestoreSnapshotRaw(orig.Formats)
+	clipboardExclusive(t, cb, "内嵌 NUL 的 holdsText 比对")
 
 	const text = "A\x00B"
 	if !cb.SetText(text) {
@@ -187,10 +229,10 @@ func TestMutexAlreadyHeld(t *testing.T) {
 		callErr error
 		want    bool
 	}{
-		{"有权打开已存在的同名对象", someHandle, syscall.Errno(ERROR_ALREADY_EXISTS), true},
-		{"无权打开已存在的同名对象(提权实例在先)", 0, syscall.Errno(ERROR_ACCESS_DENIED), true},
+		{"有权打开已存在的同名对象", someHandle, syscall.Errno(errorAlreadyExists), true},
+		{"无权打开已存在的同名对象(提权实例在先)", 0, syscall.Errno(errorAccessDenied), true},
 		{"新建成功", someHandle, syscall.Errno(0), false},
-		{"创建失败但不是已存在(如命名空间受限)", 0, syscall.Errno(ERROR_ACCESS_DENIED + 1000), false},
+		{"创建失败但不是已存在(如命名空间受限)", 0, syscall.Errno(errorAccessDenied + 1000), false},
 		{"无错误信息但拿到句柄", someHandle, nil, false},
 		{"无错误信息且没有句柄", 0, nil, false},
 	}
@@ -210,18 +252,18 @@ func TestSkippableFormat(t *testing.T) {
 		name string
 		fmt  uint32
 	}{
-		{"CF_BITMAP", CF_BITMAP},
-		{"CF_PALETTE", CF_PALETTE},
-		{"CF_ENHMETAFILE", CF_ENHMETAFILE},
-		{"CF_METAFILEPICT(块内含图形句柄)", CF_METAFILEPICT},
-		{"CF_OWNERDISPLAY", CF_OWNERDISPLAY},
-		{"CF_DSPTEXT", CF_DSPTEXT},
-		{"CF_DSPBITMAP", CF_DSPBITMAP},
-		{"CF_DSPMETAFILEPICT", CF_DSPMETAFILEPICT},
-		{"CF_DSPENHMETAFILE", CF_DSPENHMETAFILE},
-		{"CF_GDIOBJFIRST", CF_GDIOBJFIRST},
+		{"CF_BITMAP", cfBitmap},
+		{"CF_PALETTE", cfPalette},
+		{"CF_ENHMETAFILE", cfEnhMetafile},
+		{"CF_METAFILEPICT(块内含图形句柄)", cfMetafilePict},
+		{"CF_OWNERDISPLAY", cfOwnerDisplay},
+		{"CF_DSPTEXT", cfDspText},
+		{"CF_DSPBITMAP", cfDspBitmap},
+		{"CF_DSPMETAFILEPICT", cfDspMetafilePict},
+		{"CF_DSPENHMETAFILE", cfDspEnhMetafile},
+		{"CF_GDIOBJFIRST", cfGdiObjFirst},
 		{"GDI 对象族中间值", 0x0350},
-		{"CF_GDIOBJLAST", CF_GDIOBJLAST},
+		{"CF_GDIOBJLAST", cfGdiObjLast},
 	}
 	for _, c := range skip {
 		if !skippableFormat(c.fmt) {
@@ -233,17 +275,17 @@ func TestSkippableFormat(t *testing.T) {
 		name string
 		fmt  uint32
 	}{
-		{"CF_UNICODETEXT", CF_UNICODETEXT},
+		{"CF_UNICODETEXT", cfUnicodeText},
 		{"CF_TEXT", 1},
 		{"CF_OEMTEXT", 7},
 		{"CF_DIB", 8},
 		{"CF_WAVE", 12},
 		{"CF_HDROP", 15},
 		{"CF_DIBV5", 17},
-		{"CF_PRIVATEFIRST", CF_PRIVATEFIRST},
-		{"CF_PRIVATELAST", CF_PRIVATELAST},
-		{"GDI 族下界前一个", CF_GDIOBJFIRST - 1},
-		{"GDI 族上界后一个", CF_GDIOBJLAST + 1},
+		{"CF_PRIVATEFIRST", cfPrivateFirst},
+		{"CF_PRIVATELAST", cfPrivateLast},
+		{"GDI 族下界前一个", cfGdiObjFirst - 1},
+		{"GDI 族上界后一个", cfGdiObjLast + 1},
 	}
 	for _, c := range keep {
 		if skippableFormat(c.fmt) {
@@ -436,16 +478,16 @@ func TestInitialWindowSize(t *testing.T) {
 		{"工作区偏矮", 1024, 440, 540, 440},
 	}
 	for _, c := range cases {
-		w, h := InitialWindowSize(c.workW, c.workH)
+		w, h := initialWindowSize(c.workW, c.workH)
 		if w != c.wantW || h != c.wantH {
-			t.Errorf("%s: InitialWindowSize(%d,%d) = (%d,%d), want (%d,%d)",
+			t.Errorf("%s: initialWindowSize(%d,%d) = (%d,%d), want (%d,%d)",
 				c.name, c.workW, c.workH, w, h, c.wantW, c.wantH)
 		}
-		if w < MinWindowW || w > MaxWindowW {
-			t.Errorf("%s: 宽度 %d 越界 [%d,%d]", c.name, w, MinWindowW, MaxWindowW)
+		if w < MinWindowW || w > maxWindowW {
+			t.Errorf("%s: 宽度 %d 越界 [%d,%d]", c.name, w, MinWindowW, maxWindowW)
 		}
-		if h > MaxWindowH {
-			t.Errorf("%s: 高度 %d 超过上限 %d", c.name, h, MaxWindowH)
+		if h > maxWindowH {
+			t.Errorf("%s: 高度 %d 超过上限 %d", c.name, h, maxWindowH)
 		}
 		if c.workH > MinWindowH && h > c.workH {
 			t.Errorf("%s: 高度 %d 超过工作区 %d", c.name, h, c.workH)
@@ -459,7 +501,7 @@ func TestInitialWindowSize(t *testing.T) {
 // 首次调用时报错, 不调就永远不知道
 func TestMonitorWorkArea(t *testing.T) {
 	hwnd := newTestWindow(t, "WorkArea").create(t, "TypeWorkAreaTest")
-	work, ok := MonitorWorkArea(hwnd)
+	work, ok := monitorWorkArea(hwnd)
 	if !ok {
 		t.Skip("当前环境拿不到显示器工作区(无头会话?), 跳过")
 	}
@@ -490,9 +532,9 @@ func TestMonitorWorkArea(t *testing.T) {
 		dpi = 96
 	}
 	lw, lh := int(cw)*96/int(dpi), int(ch)*96/int(dpi)
-	if lw < MinWindowW-1 || lw > MaxWindowW+1 || lh < MinWindowH-1 {
+	if lw < MinWindowW-1 || lw > maxWindowW+1 || lh < MinWindowH-1 {
 		t.Errorf("客户区折回逻辑尺寸 = %dx%d, 越出 [%d,%d]x[%d,∞)",
-			lw, lh, MinWindowW, MaxWindowW, MinWindowH)
+			lw, lh, MinWindowW, maxWindowW, MinWindowH)
 	}
 	// 带出来的设计逻辑尺寸就是上面折回来的那个值: 内容缩放校正要拿它乘真实比值,
 	// 基准错了就会按错的尺寸重设窗口(而界面只是"看起来挤", 不会有任何报错)
@@ -518,27 +560,27 @@ func TestScaledClientSize(t *testing.T) {
 		{"非整数倍四舍五入", 1.1, 634, 528}, // 576×1.1 = 633.6 → 634
 	}
 	for _, c := range cases {
-		gotW, gotH := ScaledClientSize(576, 480, c.scale)
+		gotW, gotH := scaledClientSize(576, 480, c.scale)
 		if gotW != c.wantW || gotH != c.wantH {
-			t.Errorf("%s: ScaledClientSize(576,480,%.2f) = (%d,%d), want (%d,%d)",
+			t.Errorf("%s: scaledClientSize(576,480,%.2f) = (%d,%d), want (%d,%d)",
 				c.name, c.scale, gotW, gotH, c.wantW, c.wantH)
 		}
 	}
 	// 非法比值一律 (0,0): 调用方据此"不校正", 不许把 NaN/Inf 变成尺寸
 	for _, bad := range []float64{0, -1, math.NaN(), math.Inf(1), math.Inf(-1)} {
-		if w, h := ScaledClientSize(576, 480, bad); w != 0 || h != 0 {
+		if w, h := scaledClientSize(576, 480, bad); w != 0 || h != 0 {
 			t.Errorf("比值 %v 非法, 却算出了 (%d,%d)", bad, w, h)
 		}
 	}
 	// 上界: 实测 1e15 曾经一路走进窗口矩形的 int32 截断, 让"装不进工作区"的判定失真
 	// (returns ok=true 加一个天量客户区), 这条钉住它必须被当成"不校正"
 	for _, huge := range []float64{maxContentScale + 1, 1e15, 1e18, 1e300} {
-		if w, h := ScaledClientSize(576, 480, huge); w != 0 || h != 0 {
+		if w, h := scaledClientSize(576, 480, huge); w != 0 || h != 0 {
 			t.Errorf("比值 %v 超出上界, 却算出了 (%d,%d)", huge, w, h)
 		}
 	}
 	// 上界之内仍要照常工作(边界值不能被顺手挡掉)
-	if w, h := ScaledClientSize(576, 480, maxContentScale); w != 9216 || h != 7680 {
+	if w, h := scaledClientSize(576, 480, maxContentScale); w != 9216 || h != 7680 {
 		t.Errorf("上界值 maxContentScale 被挡掉了: (%d,%d), want (9216,7680)", w, h)
 	}
 }
@@ -548,7 +590,7 @@ func TestScaledClientSize(t *testing.T) {
 // 调用方据此保持原尺寸、由前端滚动兜底, 不许把窗口摆到屏幕外
 func TestWindowClientForScale(t *testing.T) {
 	hwnd := newTestWindow(t, "ViewportScale").create(t, "TypeViewportScaleTest")
-	work, ok := MonitorWorkArea(hwnd)
+	work, ok := monitorWorkArea(hwnd)
 	if !ok {
 		t.Skip("当前环境拿不到显示器工作区(无头会话?), 跳过")
 	}
@@ -562,7 +604,7 @@ func TestWindowClientForScale(t *testing.T) {
 		t.Errorf("客户区 = %dx%d, want 720x600", cw, ch)
 	}
 	SetWindowClientRect(hwnd, x, y, cw, ch)
-	if pw, ph, has := ClientPhysicalSize(hwnd); !has || pw != cw || ph != ch {
+	if pw, ph, has := clientPhysicalSize(hwnd); !has || pw != cw || ph != ch {
 		t.Errorf("读回客户区 = %dx%d (ok=%v), want %dx%d", pw, ph, has, cw, ch)
 	}
 
@@ -610,16 +652,16 @@ func TestWindowSizeIsFixed(t *testing.T) {
 	SetWindowClientRect(hwnd, 100, 100, wantW, wantH)
 	// 客户区必须等于请求值: 反推若把标题栏算漏, 这里会少一截 —— 界面底部被切、
 	// 但表面与客户区仍一致, 不会发虚, 更难发现
-	if w, h, ok := ClientPhysicalSize(hwnd); !ok || w != wantW || h != wantH {
+	if w, h, ok := clientPhysicalSize(hwnd); !ok || w != wantW || h != wantH {
 		t.Errorf("客户区 = %dx%d (ok=%v), want %dx%d: AdjustWindowRect 的反推不对?",
 			w, h, ok, wantW, wantH)
 	}
 
 	// ① 阳性对照: 此刻窗口真的可拖大, 取证手段必须认得出
-	if got := WindowStyle(hwnd); got&wsThickFrame == 0 || got&wsMaximizeBox == 0 {
+	if got := windowStyle(hwnd); got&wsThickFrame == 0 || got&wsMaximizeBox == 0 {
 		t.Fatalf("阳性对照不成立: WS_OVERLAPPEDWINDOW 建出的窗口缺少缩放样式位 (GWL_STYLE=0x%08X)", got)
 	}
-	if hit := HitTestBottomRight(hwnd); hit != htBottomRight {
+	if hit := hitTestBottomRight(hwnd); hit != htBottomRight {
 		t.Fatalf("阳性对照不成立: 可拖大的窗口右下角命中 = %d, want %d(HTBOTTOMRIGHT) —— 取证手段本身失效了",
 			hit, htBottomRight)
 	}
@@ -630,16 +672,16 @@ func TestWindowSizeIsFixed(t *testing.T) {
 	style &^= wsThickFrame | wsMaximizeBox
 	procSetWindowLongPtrW.Call(hwnd, ^uintptr(15), style)
 	procSetWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
-		SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED)
+		swpNoMove|swpNoSize|swpNoZOrder|swpNoActivate|swpFrameChanged)
 
-	got := WindowStyle(hwnd)
+	got := windowStyle(hwnd)
 	if got&wsThickFrame != 0 {
 		t.Error("WS_THICKFRAME 仍在: 窗口右下角可拖拽, 尺寸不固定")
 	}
 	if got&wsMaximizeBox != 0 {
 		t.Error("WS_MAXIMIZEBOX 仍在: 最大化键可用, 尺寸不固定")
 	}
-	if hit := HitTestBottomRight(hwnd); hit == htBottomRight {
+	if hit := hitTestBottomRight(hwnd); hit == htBottomRight {
 		t.Errorf("右下角 WM_NCHITTEST = %d: 已清掉缩放样式位, 那里却仍报缩放边框", hit)
 	}
 }

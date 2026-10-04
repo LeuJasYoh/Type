@@ -129,7 +129,28 @@ jobs:
           $pkg = Get-Content -Raw $f | ConvertFrom-Json
           if ($pkg.version -ne $ver) {
             Write-Host "$f 的 version = '$($pkg.version)', main.go 是 '$ver'"
-            Write-Host "跑一次 scripts/build.ps1 让两边同步(它会重写 package.json)"
+            Write-Host "跑一次 scripts/build.ps1 让两边同步(它会重写 package.json 与 package-lock.json)"
             exit 1
           }
-          Write-Host "版本号 $ver 已同步到 $f"
+          # lock 的根版本长期没人管: 它曾停在 1.5.8, 而 package.json 早已是 1.6.1。
+          # 刻意**不用 ConvertFrom-Json**: lock 里有一个空字符串键(npm 的根包条目
+          # packages[""]), PS 5.1 遇到空键直接报 argument "name" is not valid(最小复现
+          # '{"":"x"}' | ConvertFrom-Json), 与行数无关。这里取前两处 "version" 字面量 ——
+          # 顶层与 packages[""] —— 与 build.ps1 的改写口径完全一致(它也有同款位置守卫),
+          # 并核对顺序, 布局变了就明确失败而不是静默放过
+          $lf = 'frontend/package-lock.json'
+          $lk = [System.IO.File]::ReadAllText((Resolve-Path $lf))
+          $mv = [regex]::Matches($lk, '(?m)^\s*"version"\s*:\s*"([^"]+)"')
+          if ($mv.Count -lt 2) { throw "$lf 里找不到两处根版本(实际 $($mv.Count) 处): npm 换了 lock 格式?" }
+          $packagesAt = $lk.IndexOf('"packages"')
+          if ($packagesAt -lt 0 -or -not ($mv[0].Index -lt $packagesAt -and $mv[1].Index -gt $packagesAt)) {
+            throw "$lf 的前两处 version 不是(顶层, packages[""])这个顺序: npm 换了 lock 布局?"
+          }
+          $lockRoot = $mv[0].Groups[1].Value
+          $lockPkg = $mv[1].Groups[1].Value
+          if ($lockRoot -ne $ver -or $lockPkg -ne $ver) {
+            Write-Host "$lf 的根版本 = '$lockRoot' / '$lockPkg', main.go 是 '$ver'"
+            Write-Host "跑一次 scripts/build.ps1 让两边同步(它会重写 lock 的两处根版本)"
+            exit 1
+          }
+          Write-Host "版本号 $ver 已同步到 $f 与 $lf"

@@ -195,7 +195,9 @@ func main() {
 		os.Exit(2)
 	}
 	oldRev, newRev := os.Args[1], os.Args[2]
-	oldFile := "main.go"
+	// 默认旧侧路径要跟当前布局一致(代码搬进 cmd/type 之后, 写 "main.go" 会让默认用法
+	// 直接死在 git show 上); 旧侧一次只读一个文件, 多文件重构要逐个 --old-file
+	oldFile := "cmd/type/main.go"
 	renamesFile := defaultRenamesPath()
 	useRenames := false
 	for i := 3; i < len(os.Args); i++ {
@@ -226,7 +228,9 @@ func main() {
 	// ── 旧侧: 单个文件 ──
 	oldSrc, err := gitShow(oldRev, oldFile)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintf(os.Stderr, "旧侧 %s@%s 读取失败: %v\n", oldFile, oldRev, err)
+		fmt.Fprintln(os.Stderr, "提示: --old-file 指定旧侧路径(默认 cmd/type/main.go); 旧侧一次只比一个文件,")
+		fmt.Fprintln(os.Stderr, "      重构跨了多个文件时要逐个跑(例: --old-file internal/typing/typing.go)")
 		os.Exit(1)
 	}
 	old, err := extract(oldSrc)

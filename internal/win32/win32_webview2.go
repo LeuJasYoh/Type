@@ -48,7 +48,7 @@ func WebView2Available() bool {
 // 脚本与支持排查。不返回(提示之后流程到此为止)
 func PromptWebView2Unusable(text string) {
 	if messageBox(webview2PromptTitle, text,
-		MB_YESNO|MB_ICONWARNING|MB_SETFOREGROUND|MB_TOPMOST) == IDYES {
+		mbYesNo|mbIconWarning|mbSetForeground|mbTopmost) == idYes {
 		openInBrowser(webview2DownloadURL)
 	}
 	os.Exit(1)

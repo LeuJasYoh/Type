@@ -46,7 +46,7 @@ var (
 	procGetClientRect            = user32.NewProc("GetClientRect")
 	// GetWindowRect: 窗口矩形(含边框), "右下角是不是缩放边框"必须按它取点 ——
 	// 按客户区取点会落在客户区里面, 任何带边框的窗口都答 HTCLIENT(见
-	// HitTestBottomRight 的说明)
+	// hitTestBottomRight 的说明)
 	procGetWindowRect    = user32.NewProc("GetWindowRect")
 	procAdjustWindowRect = user32.NewProc("AdjustWindowRect")
 	// DPI 版本: 非 DPI 版在"系统 DPI 与显示器 DPI 不同"的机器上按错的那个算边框,

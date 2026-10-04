@@ -14,13 +14,13 @@ import (
 )
 
 const (
-	MB_OK              = 0x00000000
-	MB_YESNO           = 0x00000004
-	MB_ICONWARNING     = 0x00000030
-	MB_ICONINFORMATION = 0x00000040
-	MB_SETFOREGROUND   = 0x00010000
-	MB_TOPMOST         = 0x00040000
-	IDYES              = 6
+	mbOK              = 0x00000000
+	mbYesNo           = 0x00000004
+	mbIconWarning     = 0x00000030
+	mbIconInformation = 0x00000040
+	mbSetForeground   = 0x00010000
+	mbTopmost         = 0x00040000
+	idYes             = 6
 )
 
 // messageBox 显示置顶提示框, 返回被按下的按钮 ID(IDYES/IDOK 等)。

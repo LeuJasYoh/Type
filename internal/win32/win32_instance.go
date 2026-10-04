@@ -18,11 +18,11 @@ const (
 	// 名字必须固定且不带 PID: 跨进程互斥恰恰依赖两个进程认领同一个名字,
 	// 一旦带上 PID, 每个进程的名字都互不相同, 第二个实例永远撞不上,
 	// 守卫形同虚设(初版就栽在这里)
-	instanceMutexName    = `Local\Type-KeyboardInputSimulator`
-	ERROR_ALREADY_EXISTS = 183
+	instanceMutexName  = `Local\Type-KeyboardInputSimulator`
+	errorAlreadyExists = 183
 	// ERROR_ACCESS_DENIED 见 claimInstanceMutex 的说明: 名字已被占用但当前
 	// 进程无权打开时, CreateMutexW 返回的是它而不是 ERROR_ALREADY_EXISTS
-	ERROR_ACCESS_DENIED = 5
+	errorAccessDenied = 5
 )
 
 // instanceMutex 句柄常驻至进程结束, 不释放: 系统在进程退出时回收。
@@ -36,7 +36,7 @@ func GuardSingleInstance() bool {
 		messageBox("Type 已在运行",
 			"另一个 Type 窗口已经打开，请使用那个窗口。\n\n"+
 				"两个实例同时输入会互相干扰：剪贴板内容可能被覆盖或丢失。",
-			MB_OK|MB_ICONINFORMATION|MB_SETFOREGROUND|MB_TOPMOST)
+			mbOK|mbIconInformation|mbSetForeground|mbTopmost)
 		return false
 	}
 	return true
@@ -56,10 +56,10 @@ func GuardSingleInstance() bool {
 //
 // 这一支本机造不出来(要两个不同完整性级别的进程), 所以用单测钉的是分类本身
 func mutexAlreadyHeld(h uintptr, callErr error) bool {
-	if errors.Is(callErr, syscall.Errno(ERROR_ALREADY_EXISTS)) {
+	if errors.Is(callErr, syscall.Errno(errorAlreadyExists)) {
 		return true
 	}
-	return h == 0 && errors.Is(callErr, syscall.Errno(ERROR_ACCESS_DENIED))
+	return h == 0 && errors.Is(callErr, syscall.Errno(errorAccessDenied))
 }
 
 // claimInstanceMutex 尝试以 name 认领单实例互斥体, 返回"可否继续启动"。

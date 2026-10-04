@@ -24,6 +24,9 @@ $env:GOARCH = "arm64"; go build -trimpath -ldflags="-H windowsgui -s -w" -o Type
 gofmt -l ./cmd ./internal ./tools   # 应输出为空
 go vet ./...
 go test -count=1 -race ./...        # Windows 上竞态检测需要 cgo, 要 MinGW 的 gcc
+#   internal/win32 会操作真实剪贴板: 本机若有第三方剪贴板程序(桥接/同步类)占着,
+#   那两条真剪贴板用例会 SKIP 并写明读到什么; **CI 里同样情形一律红**(不许跳过掩盖
+#   写读链路的回归)
 
 # 发布构建的读回校验: 图标/版本/DPI manifest 是否真的链进了 exe。
 # 资源缺失或架构不匹配时 go build 不报错, 只有读回才看得见 (CI 同款)
@@ -45,7 +48,8 @@ cd frontend; npm test
 # Python 报 ModuleNotFoundError: PIL —— 那条报错看着像没装 Pillow, 不是路径错了)
 uv run --directory tools/gen-icon gen_icon.py
 
-# 重构等价性验证 (逐函数比对函数体, 结构调整后证明零行为变化)
+# 重构等价性验证 (逐函数比对函数体, 结构调整后证明零行为变化;
+# 旧侧只读 --old-file 指定的那一个文件, 默认 cmd/type/main.go, 跨多文件要逐个跑)
 go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 ```
 
@@ -167,7 +171,9 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
     用法见文件头注释
   - `equivcheck/`：重构等价性验证（逐函数比对函数体；键含 receiver（`类型.方法`），
     不同结构体的同名方法不再互相覆盖）。**只比函数体**：签名、参数顺序、包级常量、
-    结构体字段与 tag 都在视野之外，别拿它的输出当"零行为变化"的唯一证据
+    结构体字段与 tag 都在视野之外，别拿它的输出当"零行为变化"的唯一证据。
+    旧侧只读 `--old-file` 指定的**一个**文件（默认 `cmd/type/main.go`），重构跨了多个
+    文件时要逐个跑；默认值必须跟当前布局一致，写错时它会给出提示而不是一句 git 报错
   - `less-ai-tone/`：对外文字的去 AI 味规则与检测脚本（写、改散文前读它，不进产品与 CI）
   - `gen-icon/`：图标资产管线（**自包含的 uv 项目**：`gen_icon.py` + pyproject.toml /
     uv.lock / .python-version，`.venv` 就地生成；命令 `uv run --directory tools/gen-icon gen_icon.py`）。
@@ -189,10 +195,17 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
   - `release.yml`：发版（见「发布流程」）。它的 `release` 作业 `needs: verify`，
     所以发布包不可能出自检查不过的提交
 - **版本号单一来源**：`cmd/type/main.go` 的 `version` 变量；build.ps1 自动同步到
-  package.json，并在构建期把它传给 `tools/mkres` 生成资源，改版本只改 main.go，
-  然后跑 build.ps1。版本可带预发布后缀（如 `1.5.0-rc.1`）：资源里的数字字段取后缀前
-  的数字部分（只允许数字），ProductVersion / package.json 用完整串（semver 兼容）；
-  ci.yml / release.yml 的版本检查用同款正则校验完整串。
+  package.json 与 package-lock.json 的**两处根版本**（顶层与 `packages[""]`；依赖自己的
+  version 不碰），并在构建期把它传给 `tools/mkres` 生成资源，改版本只改 main.go，
+  然后跑 build.ps1。lock 的根版本曾长期没人管（停在 1.5.8 而 package.json 已是 1.6.1），
+  现在 verify.yml 的版本同步检查会连它一起断言。**那条断言刻意用正则而不是
+  `ConvertFrom-Json`**：lock 里有一个**空字符串键**（npm 的根包条目 `packages[""]`），
+  PS 5.1 的 `ConvertFrom-Json` 遇到空键直接报 `argument "name" is not valid`
+  （最小复现 `'{"":"x"}' | ConvertFrom-Json`；同一时刻解析 package.json 正常）。
+  与文件行数无关，换个 PowerShell 版本或 npm 布局就会冒出与版本号无关的失败。
+  版本可带预发布后缀（如 `1.5.0-rc.1`）：
+  资源里的数字字段取后缀前的数字部分（只允许数字），ProductVersion / package.json 用
+  完整串（semver 兼容）；ci.yml / release.yml 的版本检查用同款正则校验完整串。
   **提取版本号的正则必须锚定 `(?m)^\s*var\s+version\s*=`、带 `-CaseSensitive`，并断言
   匹配数恰好为 1**（build.ps1 / verify.yml / ci.yml / release.yml 四处同款，改一处要
   一起改）：`version` 是常见词，无锚点的子串匹配会命中注释里的 `// version = "1.5.8"`
@@ -209,6 +222,9 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
   对无 BOM 的 .ps1 按系统 ANSI（中文系统为 GBK）解码，中文注释的尾字节会吞掉换行，
   把下一行代码并进注释成为死代码，ProductVersion 同步曾因此静默失效。改脚本后若
   BOM 丢失（部分编辑器会吞），构建产物版本属性会先出症状。**verify.yml 的「build.ps1 BOM 检查」量首三字节**（2026-10 补：这条检查加上来之前，改写工具刚吞过一次）
+  **别以为"部分编辑器"离你很远**：2026-10 又一次复现——用不带 BOM 写回的方式改了一行脚本，
+  本机 PowerShell 5.1 立刻报"字符串缺少终止符"，靠 `cmd/type/build_contract_test.go` 的
+  `TestBuildScriptKeepsUTF8BOM` 当场拦下；改完 `.ps1` 请先跑一次 `go test ./cmd/type/`
 - **build.ps1 自己钉住构建环境**（2026-10）：`GOARCH=amd64`、`GOFLAGS` 清空，跑完把两者还原给调用者。
   调用者会话里遗留的 GOARCH（「常用命令」的 ARM64 配方就在同一个 shell 里导出）会让
   `go run ./tools/mkres` 先交叉编译再执行，报 `This version of %1 is not compatible with the
@@ -462,8 +478,8 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
 
 ### 其它不变量
 
-- **窗口尺寸只在启动时算一次，之后固定**（`internal/win32` 的 `InitialWindowSize` +
-  `GetMonitorInfoW.rcWork`）：占工作区高度 49%，夹在 540×480 ~ 648×540（逻辑像素），
+- **窗口尺寸只在启动时算一次，之后固定**（`internal/win32` 的 `initialWindowSize` +
+  `GetMonitorInfoW.rcWork`；它原叫 `InitialWindowSize`，2026-10 收窄导出面时改小写）：占工作区高度 49%，夹在 540×480 ~ 648×540（逻辑像素），
   宽度由高度按 6:5 推出，位置在工作区内居中。下限是**保守取值**：实测最长的那条终态
   文案在 540 宽下只占一行（446px < 可用 470px），状态栏恒为单行 37.5px，两行要到 496 宽
   才出现（已在官方尺寸之外），所以别按"刚好放下"的更紧数字往下调。
@@ -523,7 +539,8 @@ MinGW 的 gcc/g++，把"只需 Go + Node 即可构建"这个前提打破）。
   注入、直接走生产默认值**的用例：默认参数被换成空函数时，只有它拦得住）。**只断言"某个
   表达式在文件里出现过"是拦不住"调用点被删掉"的**，所以调用端必须钉调用点本身；
   **默认参数也是接线**，钉了内层函数的默认值不等于钉了外层的
-- **`ScaledForDPI` 的取整必须四舍五入**（`roundDiv`，两个方向共用）：整数除法的截断在
+- **`ScaledForDPI` 的取整必须四舍五入**（`roundDiv`；2026-10 删掉 `ClientLogicalSize`
+  后，生产里只剩"逻辑→物理"一个调用点）：整数除法的截断在
   非整数倍缩放下会稳定少一个物理像素（125% 下 1024 → 1023），而客户区尺寸同时决定
   WebView2 的渲染表面大小，差一像素就要重采样。本机实测 DPI 为 120（非 96 整数倍），
   这类机器正是误差最容易露头的地方，`TestScaledByDPIRoundsToNearest` 钉着

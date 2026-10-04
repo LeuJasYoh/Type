@@ -210,16 +210,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
 
 # 或手动分步:
 cd frontend
-npm install                         # 安装前端依赖 (仅首次)
+npm ci                              # 安装前端依赖 (仅首次; 按 lock 精确安装, 与 CI 同一条路径)
 npm run build                       # vue-tsc 类型检查 + Vite → ../internal/web/dist/index.html
 cd ..
-# 下面的 1.5.7 要跟 cmd/type/main.go 里的 version 一致 (版本号只在那里定义)
-go run ./tools/mkres -version 1.5.7 -icon assets/icon.ico -out cmd/type/version
+# 下面的 <版本> 换成 cmd/type/main.go 里的 version (版本号只在那里定义)
+go run ./tools/mkres -version <版本> -icon assets/icon.ico -out cmd/type/version
 go build -trimpath -ldflags="-H windowsgui -s -w" -o Type.exe ./cmd/type
 
 # 读回校验: 图标/版本信息/DPI 声明是否真的链进了产物(.syso 缺失时
 # go build 不会失败, 产物只是悄悄少了这些)
-go run ./tools/pecheck -exe Type.exe -version 1.5.7 -arch amd64
+go run ./tools/pecheck -exe Type.exe -version <版本> -arch amd64
 
 # 交叉编译 ARM64 版 (纯 Go, 不需要额外工具链; 资源上一步已按架构生成)
 $env:GOARCH = "arm64"; go build -trimpath -ldflags="-H windowsgui -s -w" -o Type-arm64.exe ./cmd/type
