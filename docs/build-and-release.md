@@ -21,7 +21,8 @@
    与源码不符的旧界面，而且没有任何环节会失败（这件事曾经真的会漏，v1.5.6 补的）；
 2. **版本一致**：标签 == `cmd/type/main.go` 的 `version`，且 `release-notes/v<版本>.md` 存在、
    里面确实写了本版包名、`package.json` 的 `version` 字段已同步（后两条专治"复制上一版说明
-   忘了改版本号"）；
+   忘了改版本号"）。其中"说明文件存在且写了本版包名"这条已由 `cmd/type` 的契约测试提前到
+   每次 `go test` 就核对，不必等到打标签；
 3. **读回校验**：`tools/pecheck` 逐项确认架构、版本号、图标、DPI manifest 真的链进了 exe。
 
 发布说明与代码放在同一次提交里（`release-notes/v<版本>.md`），原样作为 Release 正文：

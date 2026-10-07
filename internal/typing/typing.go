@@ -128,7 +128,7 @@ func msgTargetSwitchedTyped(n int) string {
 
 // ─── 用户可见文案(冻结清单的其余部分) ─────────────────
 // 逐字固定; 新增要登记 —— 见 docs/behavior-contract.md「行为契约（冻结，改动需双端同步）」。
-// msgCountdownFormat 必须留在本文件: cmd/type/contract_test.go 直读源码核这个名字
+// msgCountdownFormat 留在本包非测试文件里即可: cmd/type/contract_test.go 扫包目录核这个名字
 const (
 	// 倒计时: 逐拍刷新秒数, 也是用户盯得最久的一句
 	msgCountdownFormat = "剩余 %d 秒 — 请聚焦目标窗口..."

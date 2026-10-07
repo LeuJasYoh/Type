@@ -234,6 +234,32 @@ func repoFile(t *testing.T, parts ...string) string {
 	return string(data)
 }
 
+// packageGoSource 拼接一个包目录下全部非 _test.go 的 .go 文件文本: 契约钉的是"符号在
+// 包里", 不是"符号在某个文件里", 文件拆分搬家不该撞红。必须排除 _test.go —— 契约正则的
+// 模式串自己就写在测试里, 扫进去会"自己吃掉自己", 断言变成永真
+func packageGoSource(t *testing.T, dir ...string) string {
+	t.Helper()
+	path := filepath.Join(append([]string{"..", ".."}, dir...)...)
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		t.Fatalf("读取包目录 %s 失败: %v (目录被移动了?)", path, err)
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(path, name))
+		if err != nil {
+			t.Fatalf("读取 %s 失败: %v", filepath.Join(path, name), err)
+		}
+		b.Write(data)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
 var (
 	tsStatusBodyRE = regexp.MustCompile(`(?s)export interface TypingStatus \{(.*?)\n\}`)
 	tsFieldRE      = regexp.MustCompile(`(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\??\s*:`)
@@ -314,11 +340,11 @@ func TestFrontendTypesPhaseValues(t *testing.T) {
 	}
 
 	want := map[string]bool{}
-	for _, p := range goPhaseDeclRE.FindAllStringSubmatch(repoFile(t, "internal", "typing", "typing.go"), -1) {
+	for _, p := range goPhaseDeclRE.FindAllStringSubmatch(packageGoSource(t, "internal", "typing"), -1) {
 		want[p[1]] = true
 	}
 	if len(want) == 0 {
-		t.Fatal("internal/typing/typing.go 里找不到 TypingPhase 常量声明")
+		t.Fatal("internal/typing 包里找不到 TypingPhase 常量声明")
 	}
 	for p := range want {
 		if !got[p] {
@@ -342,10 +368,11 @@ func TestFrontendCountdownMessageMirrorsGo(t *testing.T) {
 	if lit == nil {
 		t.Fatal("useTypingTask.ts 里找不到含倒计时文案的反引号模板串")
 	}
-	want := goCountdownFormatRE.FindStringSubmatch(repoFile(t, "internal", "typing", "typing.go"))
-	if want == nil {
-		t.Fatal("internal/typing/typing.go 里找不到 msgCountdownFormat 的字面量")
+	wants := goCountdownFormatRE.FindAllStringSubmatch(packageGoSource(t, "internal", "typing"), -1)
+	if len(wants) != 1 {
+		t.Fatalf("internal/typing 包里 msgCountdownFormat 的字面量应恰好 1 处, 实际 %d 处: 取到的值不可信", len(wants))
 	}
+	want := wants[0]
 	if got := tsInterpRE.ReplaceAllString(lit[1], "%d"); got != want[1] {
 		t.Errorf("前端倒计时文案与后端不一致:\n  前端(插值归一后): %q\n  后端: %q", got, want[1])
 	}
@@ -394,11 +421,12 @@ func TestUiScaleBaseMatchesWindowFloor(t *testing.T) {
 	if m == nil {
 		t.Fatal("useUiScale.ts 里找不到 BASE_WIDTH 的字面量")
 	}
-	goSrc := repoFile(t, "internal", "win32", "win32_window.go")
-	g := regexp.MustCompile(`MinWindowW\s*=\s*(\d+)`).FindStringSubmatch(goSrc)
-	if g == nil {
-		t.Fatal("win32_window.go 里找不到 MinWindowW 的字面量")
+	goSrc := packageGoSource(t, "internal", "win32")
+	gs := regexp.MustCompile(`MinWindowW\s*=\s*(\d+)`).FindAllStringSubmatch(goSrc, -1)
+	if len(gs) != 1 {
+		t.Fatalf("internal/win32 包里 MinWindowW 的字面量应恰好 1 处, 实际 %d 处: 取到的值不可信", len(gs))
 	}
+	g := gs[0]
 	if m[1] != g[1] {
 		t.Errorf("前端缩放基准 BASE_WIDTH = %s, 宿主窗口宽度下限 MinWindowW = %s: 两者必须一致",
 			m[1], g[1])
