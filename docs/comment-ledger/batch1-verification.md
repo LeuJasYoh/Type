@@ -205,7 +205,7 @@ wmcharprobe 55→47 / 339 行中，有 337 行逐行全等、恰好 2 行是它�
    iconName/neutral(0)/语言回退、pecheck 的 `firstResource` 为什么不按 (id,语言) 取 + `fileVersion`
    与 mkres/build.ps1 同规则），并把 `minRows` 从 40 抬到新条数；
    若决定豁免，就把"mkres/pecheck 不进台账"的理由写进 `docs/comment-style.md` 的"已知不设闸门"清单，
-   别让它只留在会被删除的 `progress.md` 里。
+   别让它只留在 `progress.md` 里。
 3. **第 2 批沿用本批的两条好做法**：显式 `0` 基线（而不是删键）；对涉及"行尾注释"的文件
    在 `progress.md` 里单列一节说明（本批就是这么做的，验真成本很低）。
 4. 建议第 2 批的独立验证直接用本报告第 1 节的方法（HEAD 副本按字节取 + token 流比对 +

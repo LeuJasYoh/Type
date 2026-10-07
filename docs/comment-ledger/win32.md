@@ -3,7 +3,7 @@
 - 区域：`internal/win32` —— `win32.go`、`win32_window.go`、`win32_clipboard.go`、`win32_keyboard.go`、`win32_instance.go`、`win32_msgbox.go`、`win32_webview2.go`、`win32_test.go`（测试文件只收解释判据的注释）。
 - 抽取日期 2026-10-04；抽取人：agent（ledger-win32）。
 - 判据与格式见 docs/comment-style.md：只收"只读代码加跑测试也推不出来"的事实；Win32 怪癖按 docs/invariants.md「其它不变量」的既有决定保留在实现内。
-- **临时产物：internal/win32 重写完成、逐条销账后整份删除**；仍有效的长期内容沉进 `docs/invariants.md`。
+- **重写完成后不必删，留着备查**；仍有效的长期内容沉进 `docs/invariants.md`。
 
 | ID | 事实 | 来源 | 类别 | 去向 |
 |---|---|---|---|---|

@@ -3,7 +3,7 @@
 - 区域：internal/typing —— `typing.go`、`taskrun.go`、`contract_test.go`、`typing_test.go`（`helpers_test.go` 一并读过，只是纯函数用例，无独立事实）。
 - 抽取日期 2026-10-04；抽取人：agent（ledger-typing）。
 - 判据：只读代码 + 跑测试能不能重新得到这个结论；能推出来的不复述（本台账里没有 D 类，因为复述代码的条目按要求不收）。
-- **本台账是临时产物：internal/typing 重写完成、逐条销账后整份删除**；仍有效的长期内容沉进 `docs/invariants.md`。
+- **本台账重写完成后不必删，留着备查**；仍有效的长期内容沉进 `docs/invariants.md`。
 
 | ID | 事实 | 来源 | 类别 | 去向 |
 |---|---|---|---|---|

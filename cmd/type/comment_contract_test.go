@@ -257,7 +257,7 @@ type ledgerArea struct {
 	allowedSource []string
 }
 
-// commentLedgerAreas 台账碎片(重写完成后整个目录删除, 这几条常量随之删掉)。
+// commentLedgerAreas 台账碎片(用完不必删, 这几条常量是条数下限)。
 // minRows 是**下限**: 整行被删掉时这里会红 —— 第一版只校验"已存在的行",
 // 删掉规范点名的那条(T-029)照样全绿, 独立核验用一个反例就拆穿了
 var commentLedgerAreas = []ledgerArea{

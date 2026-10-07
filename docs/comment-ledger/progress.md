@@ -1,7 +1,7 @@
-# 阶段 2 进度与销账记录（临时产物）
+# 阶段 2 进度与销账记录
 
 注释重写的**四批已全部完成**。本文件记录每批的改动、销账、独立核验结论与已知偏离；
-重写收尾后本目录（含本文件）整体删除，仍有效的长期内容已沉进 `docs/`。
+重写收尾后本目录（含本文件）不必删，留着即可；仍有效的长期内容已沉进 `docs/`。
 
 台账（不可推导事实清单）：`typing.md` 43 条 / `win32.md` 43 条 / `app.md` 42 条 = **128 条**。
 独立核验报告：`batch1-verification.md`、`batch2-verification.md`、`batch3-verification.md`、
@@ -74,4 +74,4 @@ WM_DPICHANGED / 不放宽窗口样式 / `SetSize` 先于 `SetWindowClientRect` /
 1. 四批完成后把闸门基线全部下调为 0（已完成：`longCommentBudget` / `bareDocRefBudget`）。
 2. 两处遗留裸引用改成冻结格式（`win32_webview2.go`、`internal/typing/contract_test.go`）——已完成。
 3. 按铁律 2 跑 `scripts/build.ps1` 核对 `internal/web/dist/index.html` 是否漂移——见下方记录。
-4. 台账、核验报告与本文件在本轮收尾后删除；`docs/comment-style.md` 保留（规范长期有效）。
+4. 台账、核验报告与本文件留着不删（原计划删除，已作罢）；`docs/comment-style.md` 保留（规范长期有效）。

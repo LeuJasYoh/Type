@@ -5,7 +5,7 @@
   补了 A-041/A-042 两条；其余删除都逐条追过下落（见 `batch1-verification.md`）。日期 2026-10-04；抽取人 agent `ledger-app`。
 - 判据：只登记"只读代码 + 跑一遍测试也重新得不到"的事实（实测数据、被否决的方案、跨文件时序约定）；能被断言表达的标 `转测试`。
 - 复述代码的形态约束（`codeLines` 只剥整行 `//`、`scripts/build.ps1` 的 UTF-8 BOM、版本号四处同款等）已逐字落在 `docs/comment-style.md` 与 `docs/invariants.md`，不重复登记。
-- 本文件是重写期间的临时产物，重写完成后删除；仍有效的长期内容沉进 `docs/invariants.md`。
+- 本文件重写完成后不必删，留着备查；仍有效的长期内容沉进 `docs/invariants.md`。
 
 | ID | 事实 | 来源 | 类别 | 去向 |
 |---|---|---|---|---|
