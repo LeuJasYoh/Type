@@ -5,7 +5,7 @@
 // docs/invariants.md「文本直投」长期标着"未实测"的问题: 全角标点走 SendInput
 // 会不会重复或吞字。
 // 实测结论、它的边界, 以及这夹具踩过的四条坑(锁线程/WS_VISIBLE/泵到读出来/
-// 消息号别传错)都在 docs/invariants.md「注入通道的进程内读回(2026-10)」
+// 消息号别传错)都在 docs/invariants.md「注入通道的进程内读回（2026-10，从"未实测"变成实测结论）」
 
 package win32
 
@@ -221,7 +221,7 @@ func TestInjectorReadsBackEveryChar(t *testing.T) {
 		// 换行刻意不在这一组里: WM_CHAR 的 \n 只要那一次没取到焦点子窗口就会退化成
 		// SendInput, 而 EDIT 对 0x0A 的处理与 \r 不同, 落点于是时有时无。它既不稳定,
 		// 也不是这组要钉的对象(要钉的是全角标点), 观测记录见
-	// docs/invariants.md「注入通道的进程内读回(2026-10, 从"未实测"变成实测结论)」
+		// docs/invariants.md「注入通道的进程内读回（2026-10，从"未实测"变成实测结论）」
 	} {
 		if got := injectAndWait(t, edit, string(c.r), c.send); got != c.want {
 			t.Errorf("%s 读回 %q, want %q", c.name, got, c.want)

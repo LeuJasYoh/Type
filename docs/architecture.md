@@ -24,7 +24,8 @@
 - `frontend/`：自包含 Vite 项目（package.json / node_modules 都在这里，不在仓库根）。
   `test/` 是前端单测：用 Node 自带的测试跑器（`npm test`），零新依赖，不引测试框架；
   `ts-resolve.mjs` 是测试期的解析钩子（给省略扩展名的相对导入补 `.ts`，
-  因为 src 的导入是按打包器写的）。tsconfig 只含 `src/**`，测试不进类型检查与打包
+  因为 src 的导入是按打包器写的）。`tsconfig.json` 只含 `src/**`（类型检查与打包只管产品代码），
+  `test/**` 另有 `tsconfig.test.json` 收口，CI 一并做类型检查（见本文件 CI 行与 README 的 CI 行）
 - `assets/`：图标源图与产物（screenshot-light.png / screenshot-dark.png 为 README
   配图，README 用 `<picture>` + `prefers-color-scheme` 引用，GitHub 会自行按访问者主题切换）
 - **README 配图的复现方式**（1152×960，即逻辑 576×480 / 2 倍像素密度，与尺寸下限档一致）：
@@ -86,7 +87,8 @@
     （scripts/ → tools/gen-icon/），按层数会在搬家时指向 `tools/assets` —— 而源图在仓库根
 - `.github/workflows/`：
   - `verify.yml`：**检查项的唯一处**，`on: workflow_call`，被 ci.yml 与 release.yml 共用。
-    内容：gofmt / vet / `-race` 测试 / 漏洞扫描 / build / 前端单测 / 前端产物漂移检查 / 版本同步检查 /
+    内容：gofmt / vet / `-race` 测试 / 漏洞扫描 / build / 前端格式检查（`format:check` 非改写）/
+    前端类型检查（`src` 与 `test` 各一份 tsconfig）/ 前端单测 / 前端产物漂移检查 / 版本同步检查 /
     `build.ps1` 的 BOM 检查。
     漏洞扫描用 `govulncheck` 的退出码当判据：可达的漏洞返回非零（构建失败），只在依赖里
     存在而调不到的返回零（不算失败，否则一个用不上的 CVE 就能卡住发版）；分析器版本钉住，
