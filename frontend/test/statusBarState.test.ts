@@ -10,7 +10,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { progressVisible, progressWidth, statusBarClass } from '../src/components/statusBarState.ts';
+import {
+  progressVisible,
+  progressWidth,
+  statusBarClass,
+} from '../src/components/statusBarState.ts';
 import type { TypingPhase } from '../src/types.ts';
 
 const NON_IDLE_PHASES: TypingPhase[] = ['countdown', 'typing', 'success', 'error', 'cancel'];

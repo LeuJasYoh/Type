@@ -68,11 +68,13 @@ onMounted(async () => {
         @click="toggleTheme"
       >
         <!-- 太阳：暗色时显示，点击回浅色 -->
+        <!-- prettier-ignore -->
         <svg v-if="theme === 'dark'" :width="iconSize(15)" :height="iconSize(15)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden>
           <circle cx="12" cy="12" r="4" />
           <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
         </svg>
         <!-- 月亮：浅色时显示，点击进暗色 -->
+        <!-- prettier-ignore -->
         <svg v-else :width="iconSize(15)" :height="iconSize(15)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden>
           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
         </svg>
@@ -93,8 +95,15 @@ onMounted(async () => {
     <div class="section">
       <label class="section-label" for="textInput">输入要模拟键入的文本</label>
       <div class="input-wrap">
-        <textarea id="textInput" class="text-input" v-model="text" placeholder="请输入文本..."></textarea>
-        <div class="char-count"><span>{{ charCount }}</span> 个字符</div>
+        <textarea
+          id="textInput"
+          class="text-input"
+          v-model="text"
+          placeholder="请输入文本..."
+        ></textarea>
+        <div class="char-count">
+          <span>{{ charCount }}</span> 个字符
+        </div>
       </div>
     </div>
 
@@ -105,7 +114,9 @@ onMounted(async () => {
         role="switch"
         :class="{ on: forceRaw }"
         :aria-checked="forceRaw"
-        :title="forceRaw ? '当前将绕过目标程序的粘贴检测直接发送' : '点击开启: 绕过目标程序的粘贴检测'"
+        :title="
+          forceRaw ? '当前将绕过目标程序的粘贴检测直接发送' : '点击开启: 绕过目标程序的粘贴检测'
+        "
         @click="forceRaw = !forceRaw"
       >
         <span class="pill-dot" aria-hidden></span>
@@ -117,9 +128,11 @@ onMounted(async () => {
         role="switch"
         :class="{ on: textDirect }"
         :aria-checked="textDirect"
-        :title="textDirect
-          ? '当前绕过按键层注入, 不触发补全弹窗与括号配对'
-          : '点击开启: 用于带代码补全的在线编辑器'"
+        :title="
+          textDirect
+            ? '当前绕过按键层注入, 不触发补全弹窗与括号配对'
+            : '点击开启: 用于带代码补全的在线编辑器'
+        "
         @click="textDirect = !textDirect"
       >
         <span class="pill-dot" aria-hidden></span>
@@ -127,17 +140,19 @@ onMounted(async () => {
       </button>
       <div class="delay-slider-row">
         <span class="slider-label">延迟</span>
-        <input v-model.number="delay" type="range" min="1" max="9" class="slider">
+        <input v-model.number="delay" type="range" min="1" max="9" class="slider" />
         <span class="delay-value">{{ delay }} 秒</span>
       </div>
     </div>
 
     <div class="actions-row">
       <button class="btn btn-primary" :disabled="isRunning" @click="onStart">
+        <!-- prettier-ignore -->
         <svg :width="iconSize(16)" :height="iconSize(16)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden><polygon points="5 3 19 12 5 21 5 3" /></svg>
         启动
       </button>
       <button class="btn btn-secondary" :disabled="!isRunning" @click="onCancel">
+        <!-- prettier-ignore -->
         <svg :width="iconSize(16)" :height="iconSize(16)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
         取消
       </button>

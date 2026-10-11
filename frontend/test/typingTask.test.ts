@@ -24,11 +24,22 @@ type Handler = () => void;
 type Deferred = { resolve: (s: TypingStatus) => void; reject: (e: unknown) => void };
 
 function makeStatus(phase: TypingPhase, over: Partial<TypingStatus> = {}): TypingStatus {
-  return { phase, message: `msg:${phase}`, progress: -1, secondsLeft: 0, targetWindow: '', ...over };
+  return {
+    phase,
+    message: `msg:${phase}`,
+    progress: -1,
+    secondsLeft: 0,
+    targetWindow: '',
+    ...over,
+  };
 }
 
 const COUNTDOWN = (): TypingStatus =>
-  makeStatus('countdown', { message: '剩余 5 秒 — 请聚焦目标窗口...', secondsLeft: 5, targetWindow: '目标窗口 A' });
+  makeStatus('countdown', {
+    message: '剩余 5 秒 — 请聚焦目标窗口...',
+    secondsLeft: 5,
+    targetWindow: '目标窗口 A',
+  });
 
 let now = 0;
 let seq = 0;
@@ -407,7 +418,10 @@ test('⑮ 后端拒绝启动时, 界面显示后端给的原因', async () => {
 
 test('⑯ errMsg 认得后端的两种 reject 形态', () => {
   // go-webview2 是以字符串 reject 的(见其 msgcb), Error 形态也得能读
-  assert.equal(errMsg('已有输入任务在运行中，请先取消或等待完成'), '已有输入任务在运行中，请先取消或等待完成');
+  assert.equal(
+    errMsg('已有输入任务在运行中，请先取消或等待完成'),
+    '已有输入任务在运行中，请先取消或等待完成',
+  );
   assert.equal(errMsg(new Error('boom')), 'boom');
   assert.equal(errMsg(undefined), '操作失败');
 });

@@ -338,10 +338,23 @@ func hitTestBottomRight(hwnd uintptr) int {
 	if ret, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ret == 0 {
 		return -1
 	}
-	// WM_NCHITTEST 的 lParam 是屏幕坐标打包成的 POINTS: 低 16 位 x, 高 16 位 y
+	// WM_NCHITTEST 的 lParam 是屏幕坐标打包成的 POINTS: 低 16 位 x, 高 16 位 y。
+	// **必须带超时**: 窗口若不是由当前线程建的, 同步 SendMessage 会阻塞等对方线程泵
+	// 消息; Go 协程会在线程间迁移, 那个线程可能根本不在泵, 于是整条用例永久卡住
+	// (实测: TestWindowSizeIsFixed 挂到 go test 的超时守护才被发现)。目标无响应时
+	// 放弃并回报 -1, 让断言失败而不是让进程卡死 —— 与产品注入同一条判据
+	// SendMessageTimeout 的返回值只说有没有送成(TRUE/FALSE), 命中码在 lpdwResult 里 ——
+	// 拿返回值当命中码会恒读到 1(TRUE), 正好又是 HTCLIENT, 于是"可拖大"的阳性对照
+	// 被判成失效。产品侧 sendCharUnitsViaWMChar 只用 ret != 0 判成败, 那是正确的;
+	// 这里要的是返回值本身, 必须给 lpdwResult 一个真的地址
 	lp := int32(r.Bottom-2)<<16 | (r.Right - 2)
-	ret, _, _ := procSendMessageW.Call(hwnd, wmNCHitTest, 0, uintptr(uint32(lp)))
-	return int(int32(uint32(ret)))
+	var hit uintptr
+	ret, _, _ := procSendMessageTimeoutW.Call(hwnd, wmNCHitTest, 0, uintptr(uint32(lp)),
+		smtoAbortIfHung, 1000, uintptr(unsafe.Pointer(&hit)))
+	if ret == 0 {
+		return -1
+	}
+	return int(int32(uint32(hit)))
 }
 
 // WM_NCHITTEST: 问系统"这个坐标点命中了窗口的哪个部位", 用来验证右下角

@@ -22,6 +22,7 @@
 
 - **窗口随显示器自适应**（v1.6.0）：窗口尺寸在启动时按当前显示器的可用工作区算一次（占工作区高度约一半，小屏 576×480 起、大屏最多 648×540），并在工作区居中，4K 或缩放比例较高的显示器上不会缩成一小块；输入框会吃下多出来的高度，界面拉伸后不留大块空白。窗口尺寸固定，不用手动拖边
 - **窗口按内容缩放校正**（v1.6.1）：启动时界面把真实的像素缩放比报回程序，窗口按这个比值校正一次尺寸并重新居中，界面能用的宽度与高度就等于设计尺寸；缩放比例偏高的机器上不会再出现输入框盖住选项行。按这个比值算出的窗口如果装不进显示器可用工作区，程序保持原尺寸，界面可以滚动，控件不会被挤没
+- **窗口置顶**：标题栏右侧的「置顶」按钮把窗口钉在所有窗口之上，方便一边看着 Type 一边在目标窗口里定位插入点；按钮显示的是窗口的真实状态，界面重载（Ctrl+R、崩溃后自动恢复）之后不会反过来
 - **多行文本输入**：支持中文、英文、符号、换行
 - **两种输入模式**：
   - **逐字符模拟**：纯英文用 `SendInput` 快速注入，含中文时自动切换为剪贴板
@@ -103,7 +104,7 @@
 | GUI | WebView2（Edge Chromium） |
 | 前端 | Vue 3 + TypeScript，Vite 构建为单文件 HTML（无其他运行时依赖） |
 | 构建 | vue-tsc 类型检查 + Vite（vite-plugin-singlefile）+ `go run ./tools/mkres` + `go build` |
-| CI | GitHub Actions（windows-latest）：gofmt / go vet / `go test -race` / 依赖漏洞扫描（govulncheck）/ go build + 前端单测（`npm test`）+ 前端产物漂移检查 + 版本同步检查 + build.ps1 的 BOM 检查；另按 amd64/arm64 矩阵做发布构建，并用 `tools/pecheck` 读回校验图标、版本与 DPI 声明确实已链入产物。发版走的是同一套检查（`verify.yml`），不会比平时松 |
+| CI | GitHub Actions（windows-latest）：gofmt / go vet / `go test -race` / 依赖漏洞扫描（govulncheck）/ go build + 前端格式检查（`npm run format:check`，Prettier 的 `--check` 非改写模式）+ 前端类型检查（`npm run typecheck`，src 与 test 两份配置）+ 前端单测（`npm test`）+ 前端产物漂移检查 + 版本同步检查 + build.ps1 的 BOM 检查；另按 amd64/arm64 矩阵做发布构建，并用 `tools/pecheck` 读回校验图标、版本与 DPI 声明确实已链入产物。发版走的是同一套检查（`verify.yml`），不会比平时松 |
 | 发布 | 打 `v<版本>` 标签即由 GitHub Actions 自动发行：校验版本与发布说明一致 → 双架构构建 + 读回校验 → 打包 → 建 Release；说明文字取自入库的 `release-notes/v<版本>.md` |
 | Win32 API | SendInput（KEYEVENTF_UNICODE）+ WM_CHAR 文本直投（SendMessageTimeoutW 直投焦点窗口）+ 剪贴板（CF_UNICODETEXT、EnumClipboardFormats 全格式快照、RtlMoveMemory）+ 前台窗口检测（GetForegroundWindow）+ 单实例互斥体（CreateMutexW） |
 | 图标 | 圆角多尺寸 ICO（uv + Pillow 生成，`tools/gen-icon/gen_icon.py` 字节级可复现） |
@@ -133,7 +134,8 @@ Type/
 │   ├── win32_instance.go    ← 单实例守卫 (具名互斥体)
 │   ├── win32_msgbox.go      ← 原生提示框 (MessageBoxW, 不依赖 WebView2)
 │   ├── win32_webview2.go    ← WebView2 运行时预检与启动提示
-│   └── win32_test.go        ← 平台用例 (真剪贴板快照/真建窗口读回类图标索引/单实例判定)
+│   ├── win32_test.go        ← 平台用例 (真剪贴板快照/真建窗口读回类图标索引/单实例判定)
+│   └── win32_inject_readback_test.go ← 注入读回: 真建 EDIT 控件, 整串打进去再逐字节读回比对
 ├── internal/web/            ← go:embed 前端产物包
 │   ├── web.go               ← IndexHTML 嵌入声明 (供 cmd/type 经 SetHtml 加载)
 │   └── dist/index.html      ← Vite 构建产物: 自包含单文件 (入库)

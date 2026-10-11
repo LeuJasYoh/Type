@@ -1,0 +1,13 @@
+# 依赖与构建产物不参与格式化
+node_modules/
+../internal/web/dist/
+../Type.exe
+
+# package-lock.json 由 npm 自己写, 交给他: 让 prettier 重写它会在下次 npm install
+# 时被改回, 于是"格式化了没"永远是个会来回摆的问题
+package-lock.json
+
+# index.html 不格式化: 里面那段定主题的内联脚本必须排在入口脚本之前(挪进 Vue
+# 就等于首帧闪白, 见 docs/invariants.md「主题的首帧接线有三处约定」), 原本刻意压成
+# 一行。格式化它不影响执行, 但收益近乎为零而代价是动到了首帧路径 —— 不值得
+index.html

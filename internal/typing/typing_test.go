@@ -1372,6 +1372,33 @@ func TestEmptyTextRejectedByStart(t *testing.T) {
 	}
 }
 
+// 秒数的取值区间同样在后端守住: 前端滑块限制在 1~9, 但那只是省一次往返, 界面
+// 能改、能被绕过。放行 0 秒等于不给聚焦的时间(倒计时结束即刻注入), 放行超大值
+// 等于一个除了取消键没有退出口的等待
+func TestCountdownSecondsOutOfRangeRejectedByStart(t *testing.T) {
+	for _, sec := range []int{0, -1, 10, 9999} {
+		inj := newFakeInjector()
+		svc := newTestService(inj, &fakeClipboard{}, noSleep)
+		if _, err := svc.Start("hello", sec, false, false); err == nil {
+			t.Fatalf("Start(delay=%d) 应被拒绝", sec)
+		} else if err.Error() != msgDelayOutOfRange {
+			t.Errorf("Start(delay=%d) 的错误文案 = %q, want %q", sec, err.Error(), msgDelayOutOfRange)
+		}
+		// 与空文本同款: 拒绝发生在写状态之前, 也不占任务槽
+		if st := svc.Status(); st.Phase != PhaseIdle || st.Message != "" {
+			t.Errorf("Start(delay=%d) 被拒后状态 = %s/%q, 不该写倒计时", sec, st.Phase, st.Message)
+		}
+		if calls := inj.calls(); len(calls) != 0 {
+			t.Errorf("Start(delay=%d) 被拒后不应注入, got %v", sec, calls)
+		}
+		// 被拒之后还能正常启动: 说明任务槽没被占住
+		if _, err := svc.Start("hello", 1, false, false); err != nil {
+			t.Errorf("Start(delay=%d) 被拒后紧接着的合法启动失败: %v", sec, err)
+		}
+		waitTerminal(t, svc)
+	}
+}
+
 // 只含空白(空格/Tab/换行)的文本是合法的输入内容: 空格真的敲得出去, 一个换行
 // 就是一次回车。前端曾用 text.trim() 把它连同空文本一起拦掉, 两层结论不一致
 func TestWhitespaceOnlyTextIsTyped(t *testing.T) {

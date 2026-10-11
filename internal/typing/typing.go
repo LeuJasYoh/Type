@@ -136,6 +136,10 @@ const (
 	msgProgressFormat = "正在逐字符输入 %d / %d ..."
 	// 剪贴板路径的开工提示
 	msgClipboardStart = "检测到中文，正在操作剪贴板..."
+	// msgClipboardStartNonCJK 走剪贴板的那段文本里没有中日韩字符时说的那句。
+	// 触发这条路径的判据是"含非 ASCII"(见 runInjection), 而 emoji、西里尔字母、
+	// 带音符的拉丁字母同样是非 ASCII, 对它们说"检测到中文"是句假话
+	msgClipboardStartNonCJK = "检测到非英文字符，正在操作剪贴板..."
 	// 终态
 	msgDone              = "输入完成"
 	msgNothingToType     = "无内容可输入"
@@ -145,10 +149,23 @@ const (
 	msgPreviousTaskStuck = "启动失败：上一任务未能及时退出"
 	// 焦点仍在 Type 自身: 与"漂移"不同, 这是一开始就没切过去
 	msgFocusStayedOnSelf = "未切换到目标窗口：倒计时结束时焦点仍在 Type，请重新启动后聚焦目标窗口"
+	// msgDelayOutOfRange 倒计时秒数不在 1~9 区间内: 与"无内容可输入"一样在
+	// Start 里当场拒绝, 不写倒计时、不占任务槽
+	msgDelayOutOfRange = "倒计时秒数需在 1~9 秒之间"
 )
 
 // countdownMessage 倒计时文案
 func countdownMessage(sec int) string { return fmt.Sprintf(msgCountdownFormat, sec) }
+
+// clipboardStartMessage 剪贴板路径的开工提示: 按文本里有没有中日韩字符选一句。
+// 走这条路径的判据是"含非 ASCII", 而"非 ASCII"与"中文"不是一回事 ——
+// 判据见 containsCJK, 两句的分工见 docs/behavior-contract.md「行为契约」
+func clipboardStartMessage(text string) string {
+	if containsCJK(text) {
+		return msgClipboardStart
+	}
+	return msgClipboardStartNonCJK
+}
 
 // progressMessage 逐字符进度文案
 func progressMessage(done, total int) string { return fmt.Sprintf(msgProgressFormat, done, total) }
@@ -159,6 +176,12 @@ func progressMessage(done, total int) string { return fmt.Sprintf(msgProgressFor
 // 同值不同义的不要合并: 100ms 在倒计时节拍与剪贴板稳定等待上各出现一次,
 // 两处可以独立调整
 const (
+	// 倒计时秒数的取值区间, 由 Start 当场拒绝区间外的取值。
+	// 前端滑块限制在同一个区间, 但界面能改、能被绕过, 判据必须在后端 ——
+	// 与"无内容可输入"同一条理由, 见 docs/behavior-contract.md「行为契约」
+	minCountdownSec = 1
+	maxCountdownSec = 9
+
 	// countdownTick 倒计时节拍(100ms 一拍): 取消与切窗的响应缩到一拍内 ——
 	// 见 docs/invariants.md「焦点锁定与漂移防护」
 	countdownTick = 100 * time.Millisecond
@@ -256,12 +279,20 @@ func (s *TypingService) storeStatus(gen uint64, st *TypingStatus) {
 // 见 docs/invariants.md「任务槽与并发启动」; 等上一任务让位仍异步, 否则最长
 // yieldDeadline 会把窗口冻住, 而用户此刻点得动取消按钮
 //
-// 无内容可输入的文本(剔除 \r 后为空)当场拒绝, 不写倒计时、不占任务槽:
-// 判据必须在后端 —— 见 docs/behavior-contract.md「行为契约（冻结，改动需双端同步）」
+// 无内容可输入的文本(剔除 \r 后为空)与区间外的秒数都当场拒绝, 不写倒计时、不占
+// 任务槽: 判据必须在后端 —— 见 docs/behavior-contract.md「行为契约（冻结，改动需双端同步）」
 func (s *TypingService) Start(text string, delay int, forceSendInput bool, textDirect bool) (string, error) {
 	// 与逐字符路径剔除 \r 的口径保持一致(见 runTypingTask), 免得"\r"被当成有内容
 	if strings.ReplaceAll(text, "\r", "") == "" {
 		return "", fmt.Errorf(msgNothingToType)
+	}
+
+	// 秒数的取值区间也在这里守住: 前端滑块限制在同一个区间, 但界面能改、能被绕过,
+	// 而放行一个区间外的秒数会让界面上的倒计时与滑块显示的不是同一个数(0 秒等于
+	// 不给聚焦的时间, 超大值等于一个取消键之外的退出口)。拒绝方式与上一处一致 ——
+	// 不写倒计时、不占任务槽
+	if delay < minCountdownSec || delay > maxCountdownSec {
+		return "", fmt.Errorf(msgDelayOutOfRange)
 	}
 
 	// 采样要在锁外做: 它是 Win32 调用, 目标进程无响应时回不来, 抓着锁做会把
@@ -440,6 +471,34 @@ func (s *TypingService) restoreClipboardSnapshot(snap []ClipboardFormat, injecte
 func containsNonASCII(s string) bool {
 	for _, r := range s {
 		if r > 0x7F {
+			return true
+		}
+	}
+	return false
+}
+
+// containsCJK 文本是否含中日韩字符: 汉字(基本区/扩展 A/兼容区)、日文假名、
+// 韩文音节、中日韩标点、以及全角与半角形式。
+//
+// 它决定剪贴板路径的开工提示说哪一句。走剪贴板的判据是"含非 ASCII"(见
+// runInjection), 而 emoji、西里尔字母、带音符的拉丁字母同样是非 ASCII:
+// 对它们沿用"检测到中文"是句假话, 因此按这里另起一句, 旧串一字不改。
+// 未收录的字: CJK 扩展 B 及更高平面的生僻字会落到"非英文字符"那句 ——
+// 那是句宽泛但不假的话, 比反过来谎称"检测到中文"更可接受
+func containsCJK(s string) bool {
+	for _, r := range s {
+		switch {
+		case isCJKPunct(r):
+			return true
+		case r >= 0x3040 && r <= 0x30FF: // 平假名与片假名
+			return true
+		case r >= 0xAC00 && r <= 0xD7AF: // 韩文音节
+			return true
+		case r >= 0xFF00 && r <= 0xFFEF: // 全角/半角形式, 含全角标点与全角拉丁
+			return true
+		case r >= 0x3400 && r <= 0x4DBF, // CJK 扩展 A
+			r >= 0x4E00 && r <= 0x9FFF, // CJK 基本区
+			r >= 0xF900 && r <= 0xFAFF: // 兼容表意文字
 			return true
 		}
 	}

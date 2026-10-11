@@ -83,6 +83,19 @@ jobs:
         run: npm ci
         working-directory: frontend
 
+      # 前端格式检查: 必须是 --check(非改写) —— 会改写命令等于没装闸门。
+      # index.html 被 .prettierignore 排除: 里面定主题的内联脚本刻意压成一行,
+      # 且必须排在入口脚本之前(见 docs/invariants.md「主题的首帧接线有三处约定」)
+      - name: 前端格式检查
+        run: npm --prefix frontend run format:check
+
+      # 前端类型检查: src 走 package.json 的 build 那条(vite build 前置), 这里再补
+      # test/ —— 它长期不在 tsconfig.json 的 include 里, 608 行测试是类型盲区。
+      # 两份配置分开是刻意的: 测试要用 node:test/node:assert 的类型, 而把 node 的
+      # 全局类型并进主配置会抢走浏览器侧 setTimeout 的返回值(NodeJS.Timeout vs number)
+      - name: 前端类型检查
+        run: npm --prefix frontend run typecheck
+
       # 前端单测: 轮询状态机(定时器 + IPC)靠打桩的 window/document 与假时钟驱动,
       # 不依赖 WebView2, 也不依赖真实时间。零新依赖 —— 用 Node 自带的测试跑器
       # 直接跑 TS(解析钩子见 frontend/test/ts-resolve.mjs)

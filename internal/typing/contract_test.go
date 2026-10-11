@@ -25,12 +25,20 @@ func TestFrozenMessages(t *testing.T) {
 		// 剪贴板路径
 		{"剪贴板操作失败", msgClipboardFailed, "剪贴板操作失败"},
 		{"检测到中文", msgClipboardStart, "检测到中文，正在操作剪贴板..."},
+		{"检测到非英文字符", msgClipboardStartNonCJK, "检测到非英文字符，正在操作剪贴板..."},
+		// 同一条剪贴板路径, 按文本里有没有中日韩字符说不同的话: 都是非 ASCII,
+		// 但 emoji 与俄文不是中文, 沿用"检测到中文"就是句假话
+		{"剪贴板开工(含汉字)", clipboardStartMessage("你好 world"), "检测到中文，正在操作剪贴板..."},
+		{"剪贴板开工(只有 emoji)", clipboardStartMessage("🎉🎉"), "检测到非英文字符，正在操作剪贴板..."},
+		{"剪贴板开工(西里尔)", clipboardStartMessage("Привет"), "检测到非英文字符，正在操作剪贴板..."},
+		{"剪贴板开工(全角标点)", clipboardStartMessage("ＡＢ、。"), "检测到中文，正在操作剪贴板..."},
 
 		// 终态
 		{"输入完成", msgDone, "输入完成"},
 		{"输入失败", msgGenericFailure, "输入失败"},
 		{"已取消", msgCancelled, "已取消"},
 		{"无内容可输入", msgNothingToType, "无内容可输入"},
+		{"秒数越界", msgDelayOutOfRange, "倒计时秒数需在 1~9 秒之间"},
 		{"剪贴板未恢复", msgClipboardNotRestored, "输入完成，但剪贴板未恢复，原内容可能已丢失"},
 		{"未切换到目标窗口", msgFocusStayedOnSelf, "未切换到目标窗口：倒计时结束时焦点仍在 Type，请重新启动后聚焦目标窗口"},
 

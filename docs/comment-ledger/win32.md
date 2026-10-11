@@ -1,5 +1,11 @@
 # internal/win32 注释台账（重写阶段 0）
 
+> **档案，不是现行契约。** 这是 2026-10 注释重写期的核对底稿，抽取日期 2026-10-04，
+> 反映的只是当时那一版代码。重写已收尾，此后代码继续演进，**本文件不再随代码更新**：
+> 行号必然漂移、事实可能已被后来的提交改写。查"现在为什么这样"请读
+> `docs/invariants.md` 与代码注释里的指针，本文件只用于追溯当年那次重写核对过什么。
+> 条数是闸门守着的下限（`cmd/type/comment_contract_test.go`），删行会让测试变红。
+
 - 区域：`internal/win32` —— `win32.go`、`win32_window.go`、`win32_clipboard.go`、`win32_keyboard.go`、`win32_instance.go`、`win32_msgbox.go`、`win32_webview2.go`、`win32_test.go`（测试文件只收解释判据的注释）。
 - 抽取日期 2026-10-04；抽取人：agent（ledger-win32）。
 - 判据与格式见 docs/comment-style.md：只收"只读代码加跑测试也推不出来"的事实；Win32 怪癖按 docs/invariants.md「其它不变量」的既有决定保留在实现内。

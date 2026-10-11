@@ -6,7 +6,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { REPORT_DELAY_MS, reportContentScale, startViewportReporting } from '../src/viewportReport.ts';
+import {
+  REPORT_DELAY_MS,
+  reportContentScale,
+  startViewportReporting,
+} from '../src/viewportReport.ts';
 
 test('① 报的是读到的 devicePixelRatio, 原样交给绑定', () => {
   const sent: number[] = [];
@@ -54,7 +58,12 @@ test('③ 读值抛错、绑定抛错、绑定 reject 都不许冒泡(普通浏�
       async () => {},
     ),
   );
-  assert.doesNotThrow(() => reportContentScale(() => 1.25, () => Promise.reject(new Error('rejected'))));
+  assert.doesNotThrow(() =>
+    reportContentScale(
+      () => 1.25,
+      () => Promise.reject(new Error('rejected')),
+    ),
+  );
 });
 
 test('④ 生产默认值真的发出两拍(不传任何注入, 只打桩 window 与 setTimeout)', () => {

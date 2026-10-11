@@ -21,7 +21,7 @@
 | 构建 / CI / 发版 / 版本号 | [docs/build-and-release.md](docs/build-and-release.md) |
 | 目录结构 / 分层 / 平台层导出面 / 工具链选型 | [docs/architecture.md](docs/architecture.md) |
 | README / 发布说明 / 界面文案 | [docs/writing-style.md](docs/writing-style.md) |
-| 写代码注释 / 注释重写 | [docs/comment-style.md](docs/comment-style.md)（三种形态 + 归置判据 + 重写台账与闸门基线） |
+| 写代码注释 / 注释重写 | [docs/comment-style.md](docs/comment-style.md)（三种形态 + 归置判据 + 重写台账与闸门基线）；[docs/comment-ledger/](docs/comment-ledger/progress.md) 是那次重写的**档案**（2026-10 抽取，不再随代码更新，只用于追溯；条数下限由闸门守着） |
 
 **代码注释里的「见 …」直接指向对应文件**；小节标题在拆分时原样保留，搜标题最快。
 本文件与 `docs/` 都随代码提交，改了哪一处的规矩就同步哪一份。
@@ -43,6 +43,9 @@ go test -count=1 -race ./...        # Windows 上竞态检测需要 cgo, 要 Min
 #   internal/win32 会操作真实剪贴板: 本机若有第三方剪贴板程序(桥接/同步类)占着,
 #   那两条真剪贴板用例会 SKIP 并写明读到什么; **CI 里同样情形一律红**(不许跳过掩盖
 #   写读链路的回归)
+#   win32_inject_readback_test.go 会把测试窗口顶到前台再注入, 顶不上时同样按上款
+#   口径跳过(焦点没确认就不注入: focusedHWND 取的是全局前台窗口, 认错了会把内容
+#   打进别的程序)。本机锁屏或前台被别的程序占着时会走到这条, 跑之前先腾出前台
 
 # 发布构建的读回校验: 图标/版本/DPI manifest 是否真的链进了 exe。
 # 资源缺失或架构不匹配时 go build 不报错, 只有读回才看得见 (CI 同款)
@@ -54,8 +57,20 @@ cd frontend; npm run dev            # 终端 1
 go build -tags dev -o Type-dev.exe ./cmd/type   # 终端 2
 .\Type-dev.exe                      # (-dev 参数或 TYPE_DEV_URL 指定端口)
 
-# 前端单测 (轮询状态机 / 内容缩放上报 / 状态栏取值 / 观感缩放; 零新依赖:
-# Node 自带测试跑器直接跑 TS, 打桩 window/document 与定时器, 不依赖 WebView2 与真实时间)
+# 前端格式检查 (Prettier)。CI 跑的是 --check(非改写), 本地改完顺手 npm run format
+# 两条除外: index.html(首帧定主题的内联脚本刻意压成一行) 与 package-lock.json
+# (由 npm 自己写)。src/ipc.ts 在 .prettierrc.json 里单独放宽了 printWidth ——
+# 那条 startTyping 声明是跨端契约按整行原文核对的, 折行就验不上签名了
+cd frontend; npm run format:check
+
+# 前端类型检查 (src 与 test 各一份 tsconfig; test/ 长期不在主配置的 include 里。
+# 分开两份是刻意的: node 的全局类型会抢走浏览器侧 setTimeout 的返回值,
+# 并进主配置会让 useTypingTask 的 pollTimer 与 NodeJS.Timeout 打架)
+cd frontend; npm run typecheck
+
+# 前端单测 (轮询状态机 / 内容缩放上报 / 状态栏取值 / 观感缩放; 跑器零新依赖:
+# Node 自带测试跑器直接跑 TS, 打桩 window/document 与定时器, 不依赖 WebView2 与真实时间。
+# 类型检查另需 @types/node（devDep, 不进发布产物)
 cd frontend; npm test
 
 # 图标资产再生成 (uv, 字节级可复现, 仅在更换 assets/icon.jpg 时需要。

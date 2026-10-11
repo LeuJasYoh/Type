@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"math"
 	"os"
+	"runtime"
 	"strconv"
 	"syscall"
 	"testing"
@@ -327,6 +328,11 @@ type testWindow struct {
 // newTestWindow 注册窗口类; tag 用于区分同类测试, 类名随进程与 tag 唯一
 func newTestWindow(t *testing.T, tag string) *testWindow {
 	t.Helper()
+	// **把整个用例锁在当前 OS 线程上**: 建窗与后续发消息必须是同一个线程。
+	// Go 协程会在线程间迁移, 一旦迁移, 同步 SendMessage 给"自己刚建的窗口"就会
+	// 阻塞等这个线程泵消息, 而这个线程已经回到运行时空闲、永不泵 —— 用例永久卡住。
+	// 根治放在这里而不是逐个用例补: 建窗的入口只有这一个
+	runtime.LockOSThread()
 	wndProc := syscall.NewCallback(func(hwnd, msg, wparam, lparam uintptr) uintptr {
 		ret, _, _ := procDefWindowProcW.Call(hwnd, msg, wparam, lparam)
 		return ret

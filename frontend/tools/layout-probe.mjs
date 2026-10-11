@@ -212,11 +212,27 @@ const COLLECTOR = `<script>(function(){
 })();</script>`;
 
 function parseArgs(argv) {
-  const opts = { sizes: DEFAULT_SIZES, shotSizes: DEFAULT_SHOT_SIZES, scenario: 'long', out: '', shot: false, edge: '', json: true };
+  const opts = {
+    sizes: DEFAULT_SIZES,
+    shotSizes: DEFAULT_SHOT_SIZES,
+    scenario: 'long',
+    out: '',
+    shot: false,
+    edge: '',
+    json: true,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
-    if (a === '--sizes') opts.sizes = argv[++i].split(',').map((s) => s.trim()).filter(Boolean);
-    else if (a === '--shot-sizes') opts.shotSizes = argv[++i].split(',').map((s) => s.trim()).filter(Boolean);
+    if (a === '--sizes')
+      opts.sizes = argv[++i]
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    else if (a === '--shot-sizes')
+      opts.shotSizes = argv[++i]
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
     else if (a === '--scenario') opts.scenario = argv[++i];
     else if (a === '--out') opts.out = argv[++i];
     else if (a === '--shot') opts.shot = true;
@@ -230,7 +246,11 @@ function parseArgs(argv) {
 function findEdge(explicit) {
   const list = explicit ? [explicit, ...EDGE_CANDIDATES] : EDGE_CANDIDATES;
   for (const p of list) {
-    try { if (fs.statSync(p).isFile()) return p; } catch { /* 继续找 */ }
+    try {
+      if (fs.statSync(p).isFile()) return p;
+    } catch {
+      /* 继续找 */
+    }
   }
   throw new Error('找不到 msedge.exe, 用 --edge <路径> 指定');
 }
@@ -262,9 +282,10 @@ function pngSize(file) {
 // 收尾: 只杀"命令行里带着本次运行那个唯一 profile 目录"的 msedge —— 用户自己的
 // 浏览器、以及并发的另一次探针运行都不受影响(路径经环境变量传入, 不插值进脚本)
 function killProfileProcesses(profileDir) {
-  const script = 'Get-CimInstance Win32_Process -Filter "Name=\'msedge.exe\'" | '
-    + 'Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:PROBE_PROFILE_DIR) } | '
-    + 'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }';
+  const script =
+    'Get-CimInstance Win32_Process -Filter "Name=\'msedge.exe\'" | ' +
+    'Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:PROBE_PROFILE_DIR) } | ' +
+    'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }';
   spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
     env: { ...process.env, PROBE_PROFILE_DIR: profileDir },
     stdio: 'ignore',
@@ -289,14 +310,28 @@ function runEdge(edge, args, stdoutFile, stderrFile, timeoutMs) {
       resolve(result);
     };
     const child = spawn(edge, args, { stdio: ['ignore', out, err], windowsHide: true });
-    const timer = setTimeout(() => { child.__timedOut = true; child.kill(); }, timeoutMs);
-    child.on('close', (code, signal) => { clearTimeout(timer); finish({ status: code, signal, timedOut: Boolean(child.__timedOut) }); });
-    child.on('error', (e) => { clearTimeout(timer); finish({ status: null, signal: null, error: e, timedOut: false }); });
+    const timer = setTimeout(() => {
+      child.__timedOut = true;
+      child.kill();
+    }, timeoutMs);
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      finish({ status: code, signal, timedOut: Boolean(child.__timedOut) });
+    });
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      finish({ status: null, signal: null, error: e, timedOut: false });
+    });
   });
 }
 
 function edgeFailure(r, stderrFile) {
-  const tail = fs.readFileSync(stderrFile, 'utf8').split(/\r?\n/).filter(Boolean).slice(-6).join('\n');
+  const tail = fs
+    .readFileSync(stderrFile, 'utf8')
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(-6)
+    .join('\n');
   return `status=${r.status} signal=${r.signal} timeout=${r.timedOut} error=${r.error ? r.error.message : ''}\n${tail}`;
 }
 
@@ -304,7 +339,13 @@ function readMetrics(stdoutFile) {
   const raw = fs.readFileSync(stdoutFile, 'utf8');
   const m = /<pre id="probe-metrics"[^>]*>([\s\S]*?)<\/pre>/.exec(raw);
   if (!m) throw new Error('DOM 里没有找到 #probe-metrics(页面可能没跑起来)');
-  return JSON.parse(m[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"'));
+  return JSON.parse(
+    m[1]
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"'),
+  );
 }
 
 // 逐档校准: 量一次视口, 把与目标的差额补进 --window-size 再量, 直到逐像素相等。
@@ -315,7 +356,8 @@ async function measureAtViewport(edge, common, baseUrl, outDir, opts, target, at
   const args = [...common, `--window-size=${target.winW},${target.winH}`, '--dump-dom', baseUrl];
   const r = await runEdge(edge, args, dumpFile, errFile, 60000);
   const m = readMetrics(dumpFile); // 超时被杀也照样解析: DOM 可能已经写完了
-  if (r.status !== 0 && !r.timedOut) throw new Error(`Edge 在 ${target.label} 档未正常退出: ${edgeFailure(r, errFile)}`);
+  if (r.status !== 0 && !r.timedOut)
+    throw new Error(`Edge 在 ${target.label} 档未正常退出: ${edgeFailure(r, errFile)}`);
   m.windowSize = { w: target.winW, h: target.winH };
   m.viewportTarget = { w: target.width, h: target.height };
   m.calibrationTries = attempt;
@@ -332,8 +374,10 @@ async function measureCalibrated(edge, common, baseUrl, outDir, opts, target) {
     target.winW += dw;
     target.winH += dh;
   }
-  throw new Error(`${target.label} 档四次校准后视口仍是 ${m.viewport.clientWidth}×${m.viewport.clientHeight}`
-    + `(目标 ${target.width}×${target.height}; 窗口有系统最小尺寸, 太小的档位到不了)`);
+  throw new Error(
+    `${target.label} 档四次校准后视口仍是 ${m.viewport.clientWidth}×${m.viewport.clientHeight}` +
+      `(目标 ${target.width}×${target.height}; 窗口有系统最小尺寸, 太小的档位到不了)`,
+  );
 }
 
 async function main() {
@@ -350,7 +394,10 @@ async function main() {
   fs.writeFileSync(pageFile, buildPage(), 'utf8');
 
   const server = http.createServer((req, res) => {
-    if (req.url === '/favicon.ico') { res.writeHead(204).end(); return; }
+    if (req.url === '/favicon.ico') {
+      res.writeHead(204).end();
+      return;
+    }
     const body = fs.readFileSync(pageFile);
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
     res.end(body);
@@ -390,7 +437,10 @@ async function main() {
         rows.push({ label: `${target.width}×${target.height}`, viewport: '到不了: ' + e.message });
         continue;
       }
-      windowChrome = { dw: m.windowSize.w - m.viewport.clientWidth, dh: m.windowSize.h - m.viewport.clientHeight };
+      windowChrome = {
+        dw: m.windowSize.w - m.viewport.clientWidth,
+        dh: m.windowSize.h - m.viewport.clientHeight,
+      };
       calibrated.set(label, m.windowSize);
       rawMetrics.push(m);
       rows.push({
@@ -412,8 +462,10 @@ async function main() {
     }
 
     console.log(`\n场景 scenario=${opts.scenario}  页面=${pageFile}`);
-    console.log('视口已逐像素校准(window 外框 → 视口 的差额: '
-      + (windowChrome ? `+${windowChrome.dw}×+${windowChrome.dh}` : '未测到'));
+    console.log(
+      '视口已逐像素校准(window 外框 → 视口 的差额: ' +
+        (windowChrome ? `+${windowChrome.dw}×+${windowChrome.dh}` : '未测到'),
+    );
     console.table(rows);
     if (opts.json) {
       const jsonFile = path.join(outDir, `metrics-${opts.scenario}.json`);
@@ -428,13 +480,30 @@ async function main() {
       for (const label of opts.shotSizes) {
         const target = parseSize(label);
         const png = path.join(outDir, `type-${opts.scenario}-${label}.png`);
-        const args = [...common, '--force-device-scale-factor=2', `--window-size=${target.width},${target.height}`, `--screenshot=${png}`, baseUrl];
-        const r = await runEdge(edge, args, path.join(outDir, 'edge-shot.log'), path.join(outDir, 'edge-shot.err'), 60000);
-        if (r.status !== 0 && !r.timedOut) throw new Error(`截图在 ${label} 档失败: ${edgeFailure(r, path.join(outDir, 'edge-shot.err'))}`);
+        const args = [
+          ...common,
+          '--force-device-scale-factor=2',
+          `--window-size=${target.width},${target.height}`,
+          `--screenshot=${png}`,
+          baseUrl,
+        ];
+        const r = await runEdge(
+          edge,
+          args,
+          path.join(outDir, 'edge-shot.log'),
+          path.join(outDir, 'edge-shot.err'),
+          60000,
+        );
+        if (r.status !== 0 && !r.timedOut)
+          throw new Error(
+            `截图在 ${label} 档失败: ${edgeFailure(r, path.join(outDir, 'edge-shot.err'))}`,
+          );
         if (!fs.existsSync(png)) throw new Error(`截图 ${png} 没落盘`);
         const size = pngSize(png);
         if (size.w !== target.width * 2 || size.h !== target.height * 2) {
-          throw new Error(`截图 ${png} 是 ${size.w}×${size.h}, 期望 ${target.width * 2}×${target.height * 2}(说明截图视口 ≠ 窗口尺寸)`);
+          throw new Error(
+            `截图 ${png} 是 ${size.w}×${size.h}, 期望 ${target.width * 2}×${target.height * 2}(说明截图视口 ≠ 窗口尺寸)`,
+          );
         }
         console.log(`截图: ${png} (${size.w}×${size.h}, ${fs.statSync(png).size} 字节)`);
       }

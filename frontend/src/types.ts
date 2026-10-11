@@ -2,13 +2,7 @@
 // main.go 中 TypingPhase / TypingStatus 的镜像, 修改须双端同步。
 
 /** 输入流程阶段 */
-export type TypingPhase =
-  | 'idle'
-  | 'countdown'
-  | 'typing'
-  | 'success'
-  | 'error'
-  | 'cancel';
+export type TypingPhase = 'idle' | 'countdown' | 'typing' | 'success' | 'error' | 'cancel';
 
 /** 输入状态 (Go 端序列化无 omitempty, 字段恒存在) */
 export interface TypingStatus {

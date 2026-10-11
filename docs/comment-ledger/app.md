@@ -1,8 +1,15 @@
 # 台账 A：cmd/type + frontend + tools 的不可推导事实
 
+> **档案，不是现行契约。** 这是 2026-10 注释重写期的核对底稿，抽取日期 2026-10-04，
+> 反映的只是当时那一版代码。重写已收尾，此后代码继续演进，**本文件不再随代码更新**：
+> 行号必然漂移、事实可能已被后来的提交改写。查"现在为什么这样"请读
+> `docs/invariants.md` 与代码注释里的指针，本文件只用于追溯当年那次重写核对过什么。
+> 条数是闸门守着的下限（`cmd/type/comment_contract_test.go`），删行会让测试变红。
+
 - 区域：`cmd/type/`（main.go、devserver_prod.go、devserver_dev.go、contract_test.go、build_contract_test.go）、`frontend/src/`、`frontend/test/`、`frontend/tools/`、`tools/equivcheck/`。
   **2026-10 补记（阶段 2 第 1 批核验发现）**：抽取时漏了 `tools/mkres/` 与 `tools/pecheck/`，
-  补了 A-041/A-042 两条；其余删除都逐条追过下落（见 `batch1-verification.md`）。日期 2026-10-04；抽取人 agent `ledger-app`。
+  补了 A-041/A-042 两条；其余删除都逐条追过下落（明细曾记在 `batch1-verification.md`，
+  现按 2026-10 归档一并收进 `progress.md`，原始文字在 git 历史里）。日期 2026-10-04；抽取人 agent `ledger-app`。
 - 判据：只登记"只读代码 + 跑一遍测试也重新得不到"的事实（实测数据、被否决的方案、跨文件时序约定）；能被断言表达的标 `转测试`。
 - 复述代码的形态约束（`codeLines` 只剥整行 `//`、`scripts/build.ps1` 的 UTF-8 BOM、版本号四处同款等）已逐字落在 `docs/comment-style.md` 与 `docs/invariants.md`，不重复登记。
 - 本文件重写完成后不必删，留着备查；仍有效的长期内容沉进 `docs/invariants.md`。

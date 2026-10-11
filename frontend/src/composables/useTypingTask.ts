@@ -10,7 +10,9 @@ function isTerminal(phase: TypingPhase): boolean {
   return phase === 'success' || phase === 'error' || phase === 'cancel';
 }
 
-const statusOf = (s: Partial<TypingStatus> & Pick<TypingStatus, 'phase' | 'message' | 'progress'>): TypingStatus => ({
+const statusOf = (
+  s: Partial<TypingStatus> & Pick<TypingStatus, 'phase' | 'message' | 'progress'>,
+): TypingStatus => ({
   secondsLeft: 0,
   targetWindow: '',
   ...s,
@@ -67,7 +69,12 @@ export function useTypingTask() {
     pollTimer = window.setTimeout(() => void tick(), 0);
   }
 
-  async function start(text: string, delay: number, forceRaw: boolean, textDirect: boolean): Promise<void> {
+  async function start(
+    text: string,
+    delay: number,
+    forceRaw: boolean,
+    textDirect: boolean,
+  ): Promise<void> {
     if (isRunning.value) return;
 
     // 只拦真正的空文本。空格与换行是合法的输入内容(打一次回车就是按一下回车),

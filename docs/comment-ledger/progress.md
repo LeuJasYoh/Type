@@ -4,8 +4,14 @@
 重写收尾后本目录（含本文件）不必删，留着即可；仍有效的长期内容已沉进 `docs/`。
 
 台账（不可推导事实清单）：`typing.md` 43 条 / `win32.md` 43 条 / `app.md` 42 条 = **128 条**。
-独立核验报告：`batch1-verification.md`、`batch2-verification.md`、`batch3-verification.md`、
-`batch4-verification.md`、`gate-verification.md`（闸门三轮）与 `batch1-verification.md`。
+
+**本目录是 2026-10 注释重写的档案，不是现行契约。** 三份台账与核验报告的抽取日期都是
+2026-10-04，此后再未随代码更新：行号必然漂移、个别事实可能已被后来的提交改写。
+查"现在为什么这样"请读 `docs/invariants.md` 与代码注释里的指针。
+
+- 四份逐批核验报告已于 2026-10 归档成指针文件（`batch1..4-verification.md`），
+  结论与数字并入下面的总览表，逐文件明细在 git 历史里取回。
+- `gate-verification.md`（闸门三轮独立核验）仍是原始长度，同一性质的一次性产物。
 
 ## 总览（2026-10-04）
 

@@ -181,7 +181,7 @@ func (s *TypingService) runInjection(r *taskRun) (aborted bool) {
 // 逐字符, 失败后不再退 —— 见 docs/invariants.md「其它不变量」
 func (s *TypingService) runClipboardPath(r *taskRun) dispatchResult {
 	s.storeStatus(r.gen, &TypingStatus{
-		Phase: PhaseTyping, Message: msgClipboardStart, Progress: -1,
+		Phase: PhaseTyping, Message: clipboardStartMessage(r.text), Progress: -1,
 		TargetWindow: r.target,
 	})
 	snap := s.clipboard.Snapshot()
