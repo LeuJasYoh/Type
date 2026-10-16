@@ -48,7 +48,6 @@ func (s ClipboardSnapshot) UnsafeToRestore() bool {
 // Clipboard 剪贴板能力
 type Clipboard interface {
 	SetText(text string) bool
-	GetText() string
 	// HoldsText 剪贴板当前文本是否就是 text, 以及这次比对有没有得出结论。
 	// 第二个返回值不许省, 两种情形的处置相反 —— 见 docs/invariants.md「其它不变量」
 	HoldsText(text string) (holds bool, known bool)
@@ -154,7 +153,6 @@ const (
 	msgDelayOutOfRange = "倒计时秒数需在 1~9 秒之间"
 )
 
-// countdownMessage 倒计时文案
 func countdownMessage(sec int) string { return fmt.Sprintf(msgCountdownFormat, sec) }
 
 // clipboardStartMessage 剪贴板路径的开工提示: 按文本里有没有中日韩字符选一句。
@@ -167,7 +165,6 @@ func clipboardStartMessage(text string) string {
 	return msgClipboardStartNonCJK
 }
 
-// progressMessage 逐字符进度文案
 func progressMessage(done, total int) string { return fmt.Sprintf(msgProgressFormat, done, total) }
 
 // ─── 输入任务时序(调参集中处) ─────────────────────────
@@ -184,8 +181,7 @@ const (
 
 	// countdownTick 倒计时节拍(100ms 一拍): 取消与切窗的响应缩到一拍内 ——
 	// 见 docs/invariants.md「焦点锁定与漂移防护」
-	countdownTick = 100 * time.Millisecond
-	// countdownTicksPerSec 每秒拍数, 由节拍推出
+	countdownTick        = 100 * time.Millisecond
 	countdownTicksPerSec = int(time.Second / countdownTick)
 
 	// lockSettleWait 倒计时结束到采样并锁定目标之间的稳定等待

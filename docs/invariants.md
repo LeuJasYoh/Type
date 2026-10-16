@@ -272,7 +272,10 @@
   处置（三层，改动前后都别只做一半）：
   ① 前端启动时把 `devicePixelRatio` 经 `reportViewport` 报给宿主（立刻一拍 + 400ms 一拍，
   覆盖创建初期读数不稳），宿主用 `WindowClientForScale` 按"设计逻辑尺寸 × 该比值"重设客户区
-  并在工作区内重新居中，最多校正 2 次（同一个比值只处理一次，防来回摆）；
+  并在工作区内重新居中，最多校正 2 次（同一个比值只处理一次，防来回摆）。**次数与
+  "摆不下就不记账"这条节流规则在 `internal/viewfit`**（上限仍是装配层传入的
+  `maxViewportFixes`），规则本身有单测、改坏了会红 —— 以前它住在 `cmd/type/main.go`
+  的内联闭包里，测不到；
   ② 按该比值算出的窗口装不进工作区时不校正，由前端兜底：`.section` 的下限 217px
   （标签 16 + gap 6 + 输入框下限 195，三个数都不参与 `--ui-scale`）与
   `.options-row/.actions-row/.status-block` 的 `flex-shrink: 0`，让"放不下"表现成滚动条，

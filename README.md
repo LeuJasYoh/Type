@@ -117,9 +117,14 @@ Type/
 ├── Type.exe                 ← 可执行文件 (构建产物, 输出于根目录, 不入库)
 ├── cmd/type/                ← 装配层: 开窗、绑定与开发开关
 │   ├── main.go              ← webview 装配与 Bind 绑定 (平台能力在此注入)
-│   ├── contract_test.go     ← 跨端契约: 绑定名与签名, 并核对前端 ipc.ts 的镜像
 │   ├── devserver_prod.go    ← 正式构建: 加载嵌入页面, WebView2 调试能力(DevTools/右键菜单)一律关闭
-│   └── devserver_dev.go     ← dev 构建 (`-tags dev`): 指向 Vite dev server, 并打开 DevTools 与右键菜单
+│   ├── devserver_dev.go     ← dev 构建 (`-tags dev`): 指向 Vite dev server, 并打开 DevTools 与右键菜单
+│   ├── contract_test.go     ← 跨端契约: 绑定名与签名, 并核对前端 ipc.ts 的镜像
+│   ├── build_contract_test.go   ← 构建链: 四处版本号正则与发布命令行同款, build.ps1 的 BOM
+│   ├── comment_contract_test.go ← 注释契约: 块长度 / 指针格式 / 台账 (规范见 docs/comment-style.md)
+│   ├── probe_contract_test.go   ← 探针闸门: wmcharprobe 的直投分支与产品保持一致
+│   ├── readme_contract_test.go  ← README 结构树与真实目录的双向核对
+│   └── relnote_contract_test.go ← 发版闸门: 版本号与 release-notes 一致
 ├── internal/typing/         ← 业务层: 输入状态机 (平台无关, 在任意系统上都能编译并跑测试)
 │   ├── typing.go            ← TypingService 输入状态机 + 平台能力接口 + 时序常量
 │   ├── taskrun.go           ← 一次任务怎么走完: 五个阶段 (收尾/前置/倒计时/注入/终态)
@@ -143,6 +148,9 @@ Type/
 ├── internal/web/            ← go:embed 前端产物包
 │   ├── web.go               ← IndexHTML 嵌入声明 (供 cmd/type 经 SetHtml 加载)
 │   └── dist/index.html      ← Vite 构建产物: 自包含单文件 (入库)
+├── internal/viewfit/        ← 内容缩放校正的节流器 (与平台无关, 只认"该不该再校正一次")
+│   ├── viewfit.go           ← Fitter: 同一比值只处理一次 / 装不下不记账 / 上限内才动窗口
+│   └── viewfit_test.go      ← 节流规则的单测 (不带构建约束, 任何系统上都能跑)
 ├── frontend/                ← Vue 前端 (自包含 Vite 项目)
 │   ├── package.json / package-lock.json ← npm 定义 (vue / vite / vue-tsc 等)
 │   ├── vite.config.ts       ← Vite 配置 (单文件打包, 产物输出 ../internal/web/dist)

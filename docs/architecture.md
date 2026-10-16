@@ -5,7 +5,8 @@
 
 ## 布局与单一来源
 
-- 分三层三包，依赖方向单向：平台层 → 业务层，装配层 → 两者
+- 分三层四个包，依赖方向单向：平台层 → 业务层，装配层 → 两者
+  （`internal/viewfit` 是与平台无关的第四个包，只承接"该不该再校正一次"这条规则）
   - `internal/typing/`：业务层，TypingService 输入状态机 + 平台能力接口（消费方定义）
     + 时序常量区；刻意不带构建约束，与平台无关，任何系统上都能 `go test ./internal/typing`。
     **一次任务占住槽之后怎么走完，在 `taskrun.go`**（五个阶段：收尾、开工前置、倒计时与
@@ -21,6 +22,10 @@
     （devServerURL）与 WebView2 调试模式（devMode，决定 DevTools 与右键菜单），正式构建里两者都关；
     启动预检与提示框在 internal/win32 的 win32_webview2.go 与 win32_msgbox.go，两者都不经过
     WebView2（界面起不来时，系统自己的对话框是唯一还能用的通道）
+- `internal/viewfit/`：内容缩放校正的节流器。只认"这个比值该不该再摆一次窗口"，
+  **不含任何 Win32 调用**，因此刻意不带构建约束（与 `internal/typing` 同一条理由）；
+  怎么摆窗口由装配层传入 —— 放进 `internal/win32` 换不来自包含，反倒会让它的单测
+  只能在 Windows 上跑
 - `internal/web/`：go:embed 前端产物包（dist/index.html 入库，免 Node 亦可 go build/test）
 - `frontend/`：自包含 Vite 项目（package.json / node_modules 都在这里，不在仓库根）。
   `test/` 是前端单测：用 Node 自带的测试跑器（`npm test`），零新依赖，不引测试框架；

@@ -456,7 +456,9 @@ func TestScaledByDPIRoundsToNearest(t *testing.T) {
 // 宽度按 6:5 推出, 小屏/workH 偏矮时按工作区收窄
 func TestInitialWindowSize(t *testing.T) {
 	cases := []struct {
-		name  string
+		name string
+		// workW 不再传给 initialWindowSize(尺寸只由高度决定); 留着这一列是为了让
+		// "超宽屏不会把窗口变高"这条仍有对照输入可看
 		workW int
 		workH int
 		wantW int
@@ -473,10 +475,10 @@ func TestInitialWindowSize(t *testing.T) {
 		{"工作区偏矮", 1024, 440, 540, 440},
 	}
 	for _, c := range cases {
-		w, h := initialWindowSize(c.workW, c.workH)
+		w, h := initialWindowSize(c.workH)
 		if w != c.wantW || h != c.wantH {
-			t.Errorf("%s: initialWindowSize(%d,%d) = (%d,%d), want (%d,%d)",
-				c.name, c.workW, c.workH, w, h, c.wantW, c.wantH)
+			t.Errorf("%s: initialWindowSize(%d) = (%d,%d), want (%d,%d)",
+				c.name, c.workH, w, h, c.wantW, c.wantH)
 		}
 		if w < MinWindowW || w > maxWindowW {
 			t.Errorf("%s: 宽度 %d 越界 [%d,%d]", c.name, w, MinWindowW, maxWindowW)

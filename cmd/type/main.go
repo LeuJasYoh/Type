@@ -6,10 +6,10 @@
 package main
 
 import (
-	"sync"
 	"sync/atomic"
 
 	"github.com/LeuJasYoh/type/internal/typing"
+	"github.com/LeuJasYoh/type/internal/viewfit"
 	"github.com/LeuJasYoh/type/internal/web"
 	"github.com/LeuJasYoh/type/internal/win32"
 
@@ -56,9 +56,8 @@ func main() {
 	// (manifest 声明了 PerMonitorV2, 见 internal/win32 的 ScaledForDPI)
 	hw := uintptr(w.Window())
 
-	// 尺寸与位置只在启动时算一次, 之后固定: 按窗口所在显示器的工作区定尺寸(内置
-	// 540×480 ~ 648×540 的上下限, 见 internal/win32 的 initialWindowSize), 4K 上不会
-	// 缩成一张邮票; 位置在该工作区内居中
+	// 尺寸与位置只在启动时算一次, 之后固定: 按该显示器的工作区定尺寸并在其中居中
+	// (上下限与取舍见 docs/invariants.md「其它不变量」)
 
 	// 刻意不做的两件事, 别顺手加回来:
 	//   ① 不响应 WM_DPICHANGED(把窗口拖到缩放比例不同的显示器上重新适配)。用户明确
@@ -85,15 +84,13 @@ func main() {
 		w.SetSize(cw, ch, webview2.HintFixed)
 	}
 
-	// 设置窗口图标（首次 + 延迟重试）
 	win32.RetrySetIcon(hw)
 
-	// 业务服务: 平台能力以接口注入, Win32 实现见 internal/win32;
-	// 前台探测带上自身窗口句柄, 用于目标窗口的"非自身"判定
+	// 平台能力以接口注入(Win32 实现见 internal/win32); 前台探测带上自身窗口句柄,
+	// 用于目标窗口的"非自身"判定
 	svc := typing.NewTypingService(win32.Injector{}, win32.Clipboard{}, win32.Foreground{HWND: hw})
 
-	// 绑定 Go 函数到 JS
-	// (须在加载页面前完成: 绑定的注入脚本对随后创建的文档生效)
+	// 绑定须在加载页面前完成: 注入脚本只对随后创建的文档生效
 	w.Bind("startTyping", svc.Start)
 	w.Bind("cancelTyping", svc.Cancel)
 
@@ -116,30 +113,22 @@ func main() {
 
 	// CSS 视口 = 客户区物理像素 ÷ 内容缩放; 内容缩放由 WebView2 自己定、不等于窗口 DPI 缩放,
 	// 实测 125% 那台机器上内容按约 1.75 倍渲染、视口缩到 411×343, 输入框(195px 下限)压住选项行。
+	// "该不该再校正一次"的规则在 internal/viewfit, 这里只把"怎么摆窗口"接上去
 	// 见 docs/invariants.md「其它不变量」
-	var (
-		vpMu      sync.Mutex
-		vpSeen    float64
-		vpApplied int
-	)
+	viewportFit := viewfit.NewFitter(maxViewportFixes)
 	w.Bind("reportViewport", func(dpr float64) error {
-		vpMu.Lock()
-		defer vpMu.Unlock()
-		// 同一个比值只处理一次; 值变了(创建初期可能先报一个错的)允许再校正一次
-		if vpApplied >= maxViewportFixes || dpr == vpSeen {
-			return nil
-		}
-		cw, ch, x, y, ok := win32.WindowClientForScale(hw, lw, lh, dpr)
-		if !ok {
-			// 比值非法, 或按它算出的窗口装不进工作区: 保持原尺寸, 由前端滚动兜底。
-			// 这里刻意不记账(不写 vpSeen): 同一个值以后可能就装得下了(工作区变了),
-			// 记账会把那次机会吃掉
-			return nil
-		}
-		vpSeen = dpr
-		vpApplied++
-		w.SetSize(cw, ch, webview2.HintFixed)
-		win32.SetWindowClientRect(hw, x, y, cw, ch)
+		viewportFit.Report(dpr, func() bool {
+			cw, ch, x, y, ok := win32.WindowClientForScale(hw, lw, lh, dpr)
+			if !ok {
+				// 比值非法, 或按它算出的窗口装不进工作区: 保持原尺寸, 由前端滚动兜底。
+				// 返回 false 即"没摆成", 节流器据此不记账 —— 同一个值以后可能就
+				// 装得下了(工作区变了), 记账会把那次机会吃掉
+				return false
+			}
+			w.SetSize(cw, ch, webview2.HintFixed)
+			win32.SetWindowClientRect(hw, x, y, cw, ch)
+			return true
+		})
 		return nil
 	})
 

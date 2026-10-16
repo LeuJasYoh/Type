@@ -19,11 +19,7 @@ const monitorDefaultToPrimary = 1
 // 进程的 DPI 感知由 manifest 声明, 声明之后窗口坐标一律按物理像素解释: 不换算
 // 的话固定尺寸窗口在 125% 显示器上会小两成。见 docs/invariants.md「其它不变量」
 func ScaledForDPI(hwnd uintptr, w, h int) (int, int) {
-	dpi, _, _ := procGetDpiForWindow.Call(hwnd)
-	if dpi < 96 {
-		dpi = 96 // 调用失败(0)或异常值: 按 100% 处理
-	}
-	return scaledByDPI(w, h, int(dpi))
+	return scaledByDPI(w, h, dpiForWindow(hwnd))
 }
 
 // scaledByDPI 逻辑尺寸 → 物理像素的纯换算(不碰窗口, 可单测)。
@@ -82,11 +78,10 @@ const (
 	maxWindowH = 540
 )
 
-// initialWindowSize 按显示器可用工作区(逻辑像素)算窗口尺寸(逻辑像素)。
-// workW 刻意不用(宽度由高度推出); 只有工作区比下限还矮(小屏 / 横屏少见情形)
-// 才据它收窄, 不让窗口高过屏幕
-func initialWindowSize(workW, workH int) (w, h int) {
-	_ = workW // 宽度由高度推出; 保留参数是为了将来要按工作区宽度兜底时有处可加
+// initialWindowSize 按显示器可用工作区高度(逻辑像素)算窗口尺寸(逻辑像素)。
+// 宽度完全由高度按 6:5 推出, 工作区宽度不参与(超宽屏不会把窗口变高); 只有工作区
+// 比下限还矮(小屏 / 横屏少见情形)才据高度收窄, 不让窗口高过屏幕
+func initialWindowSize(workH int) (w, h int) {
 	h = workH * 49 / 100
 	if h < MinWindowH {
 		h = MinWindowH
@@ -162,9 +157,8 @@ func PlanForDisplay(hwnd uintptr) (WindowPlan, bool) {
 	dpi := dpiForWindow(hwnd)
 	// 工作区是物理像素, 先折回逻辑像素再算尺寸, 最后统一换算回物理像素:
 	// 全程只经过一次四舍五入, 不会出现两次取整叠加的漂移
-	workW := int(work.Right-work.Left) * 96 / dpi
 	workH := int(work.Bottom-work.Top) * 96 / dpi
-	lw, lh := initialWindowSize(workW, workH)
+	lw, lh := initialWindowSize(workH)
 	cw, ch := scaledByDPI(lw, lh, dpi)
 
 	plan := WindowPlan{
