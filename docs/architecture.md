@@ -12,7 +12,8 @@
     锁定、分流注入、终态；2026-10 从 256 行/9 参的 `runTypingTask` 拆出来，判定顺序与
     守卫位置一字未改，见 invariants.md 的「任务槽与并发启动」）
   - `internal/win32/`：平台层，三个接口的 Win32 实现。win32.go 是 DLL 入口清单页；
-    win32_keyboard/clipboard/window/instance/msgbox/webview2 各管一摊；实现与业务层接口的
+    win32_size/window/icon/foreground/keyboard/clipboard/instance/msgbox/webview2 各管一摊
+    （尺寸与 DPI、置顶、图标、前台窗口探测各自独立成文件）；实现与业务层接口的
     绑定在 win32.go 末尾以 `var _ typing.X = ...` 编译期核对，签名漂移直接构建失败。
     **业务层不得反向依赖本包**（当前无此依赖，编译器会拒绝任何反向引用）
   - `cmd/type/`：装配层，main.go 开窗与 Bind 绑定（平台能力在此注入）。`devserver_prod.go` /

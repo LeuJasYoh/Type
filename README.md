@@ -130,11 +130,15 @@ Type/
 │   ├── win32.go             ← Win32 清单页: DLL 与 API 入口集中声明
 │   ├── win32_keyboard.go    ← 键盘注入 (SendInput / WM_CHAR 全角标点绕行)
 │   ├── win32_clipboard.go   ← 剪贴板全格式快照/恢复
-│   ├── win32_window.go      ← 置顶 / 图标 / 前台窗口探测
+│   ├── win32_size.go        ← 尺寸与 DPI 换算 / 按显示器定尺寸 / 内容缩放校正
+│   ├── win32_window.go      ← 窗口置顶
+│   ├── win32_icon.go        ← 窗口图标 (从 exe 自身提取, 首设 + 延迟重试)
+│   ├── win32_foreground.go  ← 前台窗口探测与焦点子窗口定位
 │   ├── win32_instance.go    ← 单实例守卫 (具名互斥体)
 │   ├── win32_msgbox.go      ← 原生提示框 (MessageBoxW, 不依赖 WebView2)
 │   ├── win32_webview2.go    ← WebView2 运行时预检与启动提示
 │   ├── win32_test.go        ← 平台用例 (真剪贴板快照/真建窗口读回类图标索引/单实例判定)
+│   ├── win32_forensics_test.go ← 窗口取证手段 (读回样式位 + WM_NCHITTEST 命中测试, 仅用例使用)
 │   └── win32_inject_readback_test.go ← 注入读回: 真建 EDIT 控件, 整串打进去再逐字节读回比对
 ├── internal/web/            ← go:embed 前端产物包
 │   ├── web.go               ← IndexHTML 嵌入声明 (供 cmd/type 经 SetHtml 加载)
