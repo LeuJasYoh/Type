@@ -20,8 +20,15 @@ var treeFileExts = map[string]bool{
 	".css": true, ".html": true, ".json": true, ".ps1": true,
 }
 
+// normalizeNewlines 归一换行: 仓库里存 LF, 而 `* text=auto` 会让 Windows 上的检出
+// 变成 CRLF(CI 的 runner 就是), 拿 "\n" 去匹配多行字面量在那里一律落空
+func normalizeNewlines(src string) string {
+	return strings.ReplaceAll(src, "\r\n", "\n")
+}
+
 // readmeTreeBlock 取 README 里那段目录树(以 "Type/" 开头的围栏代码块)
 func readmeTreeBlock(src string) string {
+	src = normalizeNewlines(src)
 	head := "```\nType/\n"
 	i := strings.Index(src, head)
 	if i < 0 {
@@ -84,6 +91,19 @@ func repoBaseNames(t *testing.T) map[string]bool {
 		t.Fatalf("遍历仓库失败: %v", err)
 	}
 	return have
+}
+
+// 归一换行不能去掉: 本地(仓库存 LF)跑得过的解析器, 在 CI 的 CRLF 检出下会一条
+// 条目都解析不出来 —— 2026-10 的 CI 失败就是这么来的(两个测试同时红)
+func TestTreeBlockParserHandlesCRLF(t *testing.T) {
+	const block = "```\nType/\n├── cmd/type/\n│   ├── main.go   ← 装配\n│   └── contract_test.go\n```"
+	if got := len(treeEntryNames(readmeTreeBlock(block))); got != 3 {
+		t.Errorf("LF 下解析出 %d 条, want 3", got)
+	}
+	crlf := strings.ReplaceAll(block, "\n", "\r\n")
+	if got := len(treeEntryNames(readmeTreeBlock(crlf))); got != 3 {
+		t.Errorf("CRLF 下解析出 %d 条, want 3: 换行没归一", got)
+	}
 }
 
 // 树上写着的每个文件都得真有: 文件改名或删掉之后, 树上的那行就成了谎话

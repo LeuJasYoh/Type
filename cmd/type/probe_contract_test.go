@@ -15,6 +15,8 @@ import (
 
 // probeDirectBody 取探针里 sendDirect 的函数体: 从 func 那行起, 到行首的 } 为止
 func probeDirectBody(src string) string {
+	// 归一换行: Windows 上的检出是 CRLF, 拿 "\n}\n" 去找函数体末尾会落空
+	src = strings.ReplaceAll(src, "\r\n", "\n")
 	i := strings.Index(src, "func sendDirect(")
 	if i < 0 {
 		return ""
