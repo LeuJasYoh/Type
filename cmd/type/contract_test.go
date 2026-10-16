@@ -378,6 +378,61 @@ func TestFrontendCountdownMessageMirrorsGo(t *testing.T) {
 	}
 }
 
+// 倒计时秒数的取值区间两端各存一份: 后端 Start 当场拒绝区间外的值, 前端滑块把区间
+// 限制成同一个。只改一端时两边的编译与测试都不会失败, 界面却会递上一个后端拒收的
+// 秒数(白等一个倒计时再看到报错)。见 docs/behavior-contract.md「行为契约（冻结，改动需双端同步）」
+func TestCountdownRangeMirrorsGo(t *testing.T) {
+	tag := regexp.MustCompile(`<input[^>]*type="range"[^>]*>`).FindString(repoFile(t, "frontend", "src", "App.vue"))
+	if tag == "" {
+		t.Fatal("App.vue 里找不到延迟滑块(type=\"range\")")
+	}
+	min := regexp.MustCompile(`\bmin="(\d+)"`).FindStringSubmatch(tag)
+	max := regexp.MustCompile(`\bmax="(\d+)"`).FindStringSubmatch(tag)
+	if min == nil || max == nil {
+		t.Fatalf("延迟滑块缺 min/max: %s", tag)
+	}
+	src := packageGoSource(t, "internal", "typing")
+	// 两侧都要求"恰好一处": 出现两处时取到的值不可信, 宁可红也不猜
+	goMin := regexp.MustCompile(`(?m)^\s*minCountdownSec\s*=\s*(\d+)`).FindAllStringSubmatch(src, -1)
+	goMax := regexp.MustCompile(`(?m)^\s*maxCountdownSec\s*=\s*(\d+)`).FindAllStringSubmatch(src, -1)
+	if len(goMin) != 1 || len(goMax) != 1 {
+		t.Fatalf("internal/typing 里 min/maxCountdownSec 应各恰好 1 处, 实际 %d/%d 处", len(goMin), len(goMax))
+	}
+	if min[1] != goMin[0][1] || max[1] != goMax[0][1] {
+		t.Errorf("前端滑块区间 = %s~%s, 后端拒绝区间 = %s~%s: 两者必须一致",
+			min[1], max[1], goMin[0][1], goMax[0][1])
+	}
+}
+
+// "已取消"前端也有一份(取消时先给即时反馈), 后端 msgCancelled 才是权威。两份走散时
+// 界面上一处说"已取消"、回读到的终态又是别的字, 而这种漂移没有任何编译器拦得住。
+// 见 docs/behavior-contract.md「行为契约（冻结，改动需双端同步）」
+func TestFrontendCancelMessageMirrorsGo(t *testing.T) {
+	src := repoFile(t, "frontend", "src", "composables", "useTypingTask.ts")
+	m := regexp.MustCompile(`phase: 'cancel', message: '([^']*)'`).FindStringSubmatch(src)
+	if m == nil {
+		t.Fatal("useTypingTask.ts 里找不到 cancel 那句的文案")
+	}
+	wants := regexp.MustCompile(`(?m)^\s*msgCancelled\s*=\s*"([^"]*)"`).
+		FindAllStringSubmatch(packageGoSource(t, "internal", "typing"), -1)
+	if len(wants) != 1 {
+		t.Fatalf("internal/typing 里 msgCancelled 的字面量应恰好 1 处, 实际 %d 处: 取到的值不可信", len(wants))
+	}
+	if m[1] != wants[0][1] {
+		t.Errorf("前端取消文案 = %q, 后端 msgCancelled = %q: 两者必须一致", m[1], wants[0][1])
+	}
+}
+
+// 标题栏置顶按钮的标签同属冻结文案, 而它只在前端出现 —— 没有后端常量可比对, 所以
+// 这里用字面量钉住, 理由与 internal/typing 那份冻结文案逐字表相同。
+// 见 docs/behavior-contract.md「行为契约（冻结，改动需双端同步）」
+func TestFrontendPinLabelsFrozen(t *testing.T) {
+	want := "pinned ? '取消置顶' : '置顶'"
+	if vue := repoFile(t, "frontend", "src", "App.vue"); !strings.Contains(vue, want) {
+		t.Errorf("App.vue 的置顶标签已漂移, 冻结写法是 %q", want)
+	}
+}
+
 // 主题的存储键写在两处(首帧内联脚本读、useTheme 写), 走散症状是"切换过主题、重启又
 // 变回系统主题"; 内联脚本还必须排在入口脚本之前, 挪进 Vue 就等于首帧闪白。判定只许
 // 有一处: useTheme 再算一遍(读存储 + 跟随系统)就多出一份会走散的逻辑。

@@ -204,14 +204,6 @@ var (
 	docRefStrictRE = regexp.MustCompile(`见[ \t\x{3000}]+(docs/[A-Za-z0-9._/-]+\.md)「([^」]+)」`)
 )
 
-// bareDocRefBudget 允许"不带「小节」"的裸引用数, 现状基线, 只减不增。
-// 阶段 2 完成后全数为 0: 四条裸引用要么改成了冻结格式, 要么随文件重写消失
-var bareDocRefBudget = map[string]int{
-	"internal/typing/contract_test.go":          0,
-	"internal/win32/win32_webview2.go":          0,
-	"frontend/src/components/statusBarState.ts": 0,
-}
-
 // TestDocRefFormatFrozen 指针必须是冻结格式, 且指向的文档真的存在。
 //
 // 旧闸门只认冻结格式的引用, 所以裸引用不是"宽松"而是**整条逃检**; 而"只数个数"
@@ -222,7 +214,6 @@ var bareDocRefBudget = map[string]int{
 // 自己; 示例用中文占位(与 build_contract_test.go 同一个坑)
 func TestDocRefFormatFrozen(t *testing.T) {
 	root := filepath.Join("..", "..")
-	seen := make(map[string]bool)
 	for rel, src := range commentFiles(t) {
 		for _, m := range docRefAnyRE.FindAllStringSubmatch(src, -1) {
 			if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(m[1]))); err != nil {
@@ -231,20 +222,11 @@ func TestDocRefFormatFrozen(t *testing.T) {
 		}
 		all := len(docRefAnyRE.FindAllString(src, -1))
 		strict := len(docRefStrictRE.FindAllString(src, -1))
-		if all == strict {
-			continue
-		}
-		bare := all - strict
-		seen[rel] = true
-		if want := bareDocRefBudget[rel]; bare > want {
-			t.Errorf("%s 有 %d 条裸引用(基线 %d): 改写成「见 docs/某文档.md「某小节」」这种格式", rel, bare, want)
-		} else if bare < want {
-			t.Logf("%s 裸引用降到 %d(基线 %d): 可以把基线调下来", rel, bare, want)
-		}
-	}
-	for rel := range bareDocRefBudget {
-		if !seen[rel] {
-			t.Logf("基线里的 %s 已经没有裸引用了: 从裸引用基线里删除", rel)
+		// 裸引用一律不接受。旧版给每个文件留了一份"允许几条"的基线, 阶段 2 四批
+		// 重写后已全数归零; 常量留着只会让每次 go test 为每个基线文件打一条
+		// "可以把基线调下来"的日志 —— 常驻噪声会把真正的告警淹掉
+		if bare := all - strict; bare > 0 {
+			t.Errorf("%s 有 %d 条裸引用: 改写成「见 docs/某文档.md「某小节」」这种格式", rel, bare)
 		}
 	}
 }
