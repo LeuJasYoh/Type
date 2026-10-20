@@ -130,9 +130,11 @@ export function useTypingTask() {
   }
 
   // WebView2 在窗口退到后台时会挂起页面定时器: 恢复可见/焦点时, 只要任务
-  // 仍在跑就无条件重启轮询链(链条可能处于任意状态: 待触发被丢失、挂起中),
-  // 保证回到窗口立即可读到最新状态
+  // 仍在跑就重启轮询链(链条可能处于任意状态: 待触发被丢失、挂起中),
+  // 保证回到窗口立即可读到最新状态。页面转入后台的那次 visibilitychange 不重启:
+  // 定时器随后就会被挂起, 白重建一次链
   function healPolling(): void {
+    if (document.visibilityState === 'hidden') return;
     if (isRunning.value) startPolling();
   }
   document.addEventListener('visibilitychange', healPolling);

@@ -91,7 +91,7 @@ jobs:
         run: npm --prefix frontend run format:check
 
       # 前端类型检查: src 走 package.json 的 build 那条(vite build 前置), 这里再补
-      # test/ —— 它长期不在 tsconfig.json 的 include 里, 608 行测试是类型盲区。
+      # test/ —— 它不在 tsconfig.json 的 include 里, 测试长期是类型盲区。
       # 两份配置分开是刻意的: 测试要用 node:test/node:assert 的类型, 而把 node 的
       # 全局类型并进主配置会抢走浏览器侧 setTimeout 的返回值(NodeJS.Timeout vs number)
       - name: 前端类型检查

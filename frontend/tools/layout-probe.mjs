@@ -72,6 +72,9 @@ const STUB = `<script>(function(){
   window.toggleTopmost = function () { return Promise.resolve(false); };
   window.getTopmost = function () { return Promise.resolve(false); };
   window.getTypingStatus = function () { return Promise.resolve(status); };
+  // 第 6 个绑定: 本探针不量缩放校正, 但没有它页面调用时会抛错。清单以
+  // frontend/src/ipc.ts 为准, Bind 改名时这里要同步
+  window.reportViewport = function () { return Promise.resolve(); };
 })();</script>`;
 
 const COLLECTOR = `<script>(function(){

@@ -174,7 +174,6 @@ Type/
 │       ├── ipc.ts           ← webview Bind 全局绑定的类型化封装
 │       ├── types.ts         ← TypingStatus/TypingPhase (与 Go 端结构对应)
 │       ├── viewportReport.ts ← 内容缩放上报 (立刻一拍 + 400ms 一拍)
-│       ├── env.d.ts         ← Vite 环境类型声明
 │       ├── composables/
 │       │   ├── useTypingTask.ts ← 输入任务状态机 + 状态轮询
 │       │   ├── useUiScale.ts    ← --ui-scale 观感缩放 (基准宽度与宿主 MinWindowW 一致)

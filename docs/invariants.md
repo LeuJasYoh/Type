@@ -11,8 +11,8 @@
   倒计时结束焦点仍在 Type 自身时报错并零注入。
 - **前端轮询是自续链条**：`startPolling` 必须以定时器点火（`setTimeout(0)`），不能直接调用
   `tick`——tick 末尾用 `pollTimer !== null` 判断链条继续，而它只在受保护的分支里赋值，
-  直接调用会让首拍后断裂（症状：预览不跟随、完成后启动键卡死）。恢复可见/焦点时无条件重启链条，
-  作为 WebView2 挂起定时器的兜底。
+  直接调用会让首拍后断裂（症状：预览不跟随、完成后启动键卡死）。恢复可见/焦点时重启链条（页面隐藏的那次
+  visibilitychange 不重启），作为 WebView2 挂起定时器的兜底。
 - **链条身份靠代数令牌，不靠 `pollTimer` 是否为空**：`stopPolling` 递增 `chain`，旧那拍回来
   先比 `my !== chain` 就返回；旧代的响应一律不写状态、不续链条。回归用例在
   `frontend/test/typingTask.test.ts`。

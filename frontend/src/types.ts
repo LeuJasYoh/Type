@@ -1,5 +1,5 @@
 // ─── 与 Go 端共享的状态契约 ───────────────────────────
-// main.go 中 TypingPhase / TypingStatus 的镜像, 修改须双端同步。
+// internal/typing/typing.go 中 TypingPhase / TypingStatus 的镜像, 修改须双端同步。
 
 /** 输入流程阶段 */
 export type TypingPhase = 'idle' | 'countdown' | 'typing' | 'success' | 'error' | 'cancel';
