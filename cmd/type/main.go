@@ -91,32 +91,33 @@ func main() {
 	svc := typing.NewTypingService(win32.Injector{}, win32.Clipboard{}, win32.Foreground{HWND: hw})
 
 	// 绑定须在加载页面前完成: 注入脚本只对随后创建的文档生效
-	w.Bind("startTyping", svc.Start)
-	w.Bind("cancelTyping", svc.Cancel)
+	mustBind(w, "startTyping", svc.Start)
+	mustBind(w, "cancelTyping", svc.Cancel)
 
-	w.Bind("toggleTopmost", func() (bool, error) {
+	mustBind(w, "toggleTopmost", func() (bool, error) {
 		on := !topmostFlag.Load()
-		topmostFlag.Store(on)
-		if hw != 0 {
-			win32.SetTopmost(hw, on)
+		if hw != 0 && !win32.SetTopmost(hw, on) {
+			// 置顶失败: 保持原来的状态, 别让按钮与窗口实际状态相反
+			return topmostFlag.Load(), nil
 		}
+		topmostFlag.Store(on)
 		return on, nil
 	})
 
 	// 读回当前置顶状态。窗口的置顶不随页面重载复位, 而按钮每次都从"未置顶"起:
 	// 不读回来的话, 重载后(Ctrl+R、渲染进程崩溃后自动重载)按钮显示"置顶"而窗口
 	// 仍钉在最上层, 用户点一下反而是把置顶取消, 按钮与窗口正好相反
-	w.Bind("getTopmost", func() (bool, error) { return topmostFlag.Load(), nil })
+	mustBind(w, "getTopmost", func() (bool, error) { return topmostFlag.Load(), nil })
 
 	// 前端轮询读取当前输入状态
-	w.Bind("getTypingStatus", svc.Status)
+	mustBind(w, "getTypingStatus", svc.Status)
 
 	// CSS 视口 = 客户区物理像素 ÷ 内容缩放; 内容缩放由 WebView2 自己定、不等于窗口 DPI 缩放,
 	// 实测 125% 那台机器上内容按约 1.75 倍渲染、视口缩到 411×343, 输入框(195px 下限)压住选项行。
 	// "该不该再校正一次"的规则在 internal/viewfit, 这里只把"怎么摆窗口"接上去
 	// 见 docs/invariants.md「其它不变量」
 	viewportFit := viewfit.NewFitter(maxViewportFixes)
-	w.Bind("reportViewport", func(dpr float64) error {
+	mustBind(w, "reportViewport", func(dpr float64) error {
 		viewportFit.Report(dpr, func() bool {
 			cw, ch, x, y, ok := win32.WindowClientForScale(hw, lw, lh, dpr)
 			if !ok {
@@ -154,4 +155,13 @@ func createWebView2() (w webview2.WebView) {
 		}
 	}()
 	return webview2.NewWithOptions(webview2.WebViewOptions{Debug: devMode()})
+}
+
+// mustBind 注册一个前端可调用的绑定, 失败就走启动提示框退出。
+// Bind 的 error 以前被丢弃: 失败时前端拿到的是 undefined, 按钮点了没反应, 而 GUI
+// 子系统没有控制台, 用户与日志都看不到任何线索。go vet 不含 errcheck, 也抓不到。
+func mustBind(w webview2.WebView, name string, fn interface{}) {
+	if err := w.Bind(name, fn); err != nil {
+		win32.PromptWebView2Unusable(win32.MsgBindFailed)
+	}
 }

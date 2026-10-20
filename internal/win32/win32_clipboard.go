@@ -88,7 +88,9 @@ func (Clipboard) SetText(text string) bool {
 		return false
 	}
 	defer procCloseClipboard.Call()
-	procEmptyClipboard.Call()
+	if ret, _, _ := procEmptyClipboard.Call(); ret == 0 {
+		return false // 清空失败: 接下来的写入只会留下半份内容
+	}
 
 	encoded := encodedText(text)
 	size := len(encoded)
@@ -211,8 +213,10 @@ func skippableFormat(fmt uint32) bool {
 
 // Snapshot 复制当前剪贴板的全部内存块型格式(文本 / CF_DIB / CF_HDROP / HTML Format)。
 // Complete 的唯一含义是"这份快照能不能拿去恢复": 恢复会先清空剪贴板, 拿残缺快照
-// 去恢复等于把没抄到的格式永久销毁。跳过的格式不计入 Complete, 取舍见 skippableFormat;
-// 打开失败与"一个格式都没读到"为何同样算不完整, 见 docs/invariants.md「其它不变量」
+// 去恢复等于把没抄到的格式永久销毁。跳过的格式不计入 Complete, 取舍见 skippableFormat。
+// 剪贴板为空时返回**非 nil 空切片 + Complete**(表示"原本为空", 可恢复成空); 打开失败、
+// 有格式没抄到、或只枚举到被跳过的格式时返回 nil(原状态未知, 不许碰剪贴板)。
+// 见 docs/invariants.md「剪贴板快照与恢复」
 func (Clipboard) Snapshot() typing.ClipboardSnapshot {
 	if !openClipboardWithRetry() {
 		return typing.ClipboardSnapshot{} // 原状态未知, 无从恢复
@@ -221,6 +225,7 @@ func (Clipboard) Snapshot() typing.ClipboardSnapshot {
 
 	snap := make([]typing.ClipboardFormat, 0, 8)
 	complete := true
+	sawSkippable := false
 	for fmt := uint32(0); ; {
 		next, _, _ := procEnumClipboardFormats.Call(uintptr(fmt))
 		if next == 0 {
@@ -228,6 +233,9 @@ func (Clipboard) Snapshot() typing.ClipboardSnapshot {
 		}
 		fmt = uint32(next)
 		if skippableFormat(fmt) {
+			// 记下"枚举到过不抄的格式": 这种剪贴板不能当成空剪贴板, 否则恢复时会
+			// 先清空, 把用户的位图/文件永久清掉
+			sawSkippable = true
 			continue
 		}
 		data, ok := readClipboardFormat(fmt)
@@ -239,8 +247,12 @@ func (Clipboard) Snapshot() typing.ClipboardSnapshot {
 		snap = append(snap, typing.ClipboardFormat{Fmt: fmt, Data: data})
 	}
 	if len(snap) == 0 {
-		// 一个格式都没读到: 分不清"剪贴板本来就空"与"全部读失败",
-		// 按无从恢复处理, 免得把没能照抄的内容当成空剪贴板清掉
+		// 打开成功、枚举到 0 个格式、也没有被跳过的格式: 剪贴板确实为空。
+		// 用非 nil 空切片表达"原本为空"(可恢复成空), 与 nil 的"原状态未知"区分;
+		// 其余情况(没抄到 / 只有被跳过的格式)一律按无从恢复处理。
+		if complete && !sawSkippable {
+			return typing.ClipboardSnapshot{Formats: make([]typing.ClipboardFormat, 0), Complete: true}
+		}
 		return typing.ClipboardSnapshot{}
 	}
 	return typing.ClipboardSnapshot{Formats: snap, Complete: complete}

@@ -23,12 +23,13 @@ const (
 )
 
 // messageBox 显示置顶提示框, 返回被按下的按钮 ID(IDYES/IDOK 等)。
-// 标题或正文转换失败时不显示、返回 0: 提示框自身出问题不该拖住主流程
+// 标题或正文转换失败时不显示、返回 -1: 提示框自身出问题不该拖住主流程, 但 -1 与
+// 任何真实按钮 ID 都区分得开, 调用方不必靠巧合判断
 func messageBox(title, text string, flags uintptr) int {
 	titlePtr, err1 := syscall.UTF16PtrFromString(title)
 	textPtr, err2 := syscall.UTF16PtrFromString(text)
 	if err1 != nil || err2 != nil {
-		return 0
+		return -1
 	}
 	ret, _, _ := procMessageBoxW.Call(0,
 		uintptr(unsafe.Pointer(textPtr)),

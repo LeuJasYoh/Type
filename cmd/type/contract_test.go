@@ -22,12 +22,12 @@ import (
 var contractBindNames = []string{"startTyping", "cancelTyping", "toggleTopmost", "getTopmost", "getTypingStatus", "reportViewport"}
 
 var (
-	bindCallRE  = regexp.MustCompile(`w\.Bind\("([A-Za-z]+)"`)
+	bindCallRE  = regexp.MustCompile(`mustBind\(w, "([A-Za-z]+)"`)
 	ipcExportRE = regexp.MustCompile(`(?m)^export const ([A-Za-z]+) = \(([^)]*)\)`)
 	// reportViewport 是匿名闭包, 反射够不着, 只能在源码上钉: 它只收一个 float64
 	// (devicePixelRatio), 参数个数或类型一变, 内容缩放校正就静默失效 ——
 	// 界面回到"输入框压住选项行"的样子, 而没有任何环节会报错
-	reportViewportRE = regexp.MustCompile(`w\.Bind\("reportViewport",\s*func\((\w+) float64\) error`)
+	reportViewportRE = regexp.MustCompile(`mustBind\(w, "reportViewport",\s*func\((\w+) float64\) error`)
 )
 
 // mainSource 读装配层源码: 绑定名与前端镜像都要对着它核
@@ -82,8 +82,8 @@ func TestStartSignatureFrozen(t *testing.T) {
 	t.Log("startTyping(text string, delay int, forceSendInput bool, textDirect bool)")
 }
 
-// 另外几个绑定的签名: cancelTyping() / toggleTopmost() bool / getTopmost() bool /
-// getTypingStatus() *TypingStatus
+// Cancel / Status 的签名用反射钉。toggleTopmost / getTopmost 是 main.go 里的匿名闭包,
+// 反射够不着, 由 TestToggleTopmostSignaturesFrozen 用源码正则钉住 (bool, error) 的返回。
 func TestOtherSignaturesFrozen(t *testing.T) {
 	typeOf := reflect.TypeOf(typing.NewTypingService(nil, nil, nil))
 
@@ -114,10 +114,29 @@ func TestOtherSignaturesFrozen(t *testing.T) {
 	}
 }
 
+// TestToggleTopmostSignaturesFrozen toggleTopmost / getTopmost 的返回签名必须冻结。
+// 以前只钉了绑定名: 把返回类型改成 string 时 Go 编译、vue-tsc、契约测试全绿, 而
+// App.vue 的置顶按钮会拿到非布尔值、状态静默错乱。
+func TestToggleTopmostSignaturesFrozen(t *testing.T) {
+	src := mainSource(t)
+	cases := []struct {
+		name string
+		re   string
+	}{
+		{"toggleTopmost", `mustBind\(w, "toggleTopmost", func\(\) \(bool, error\)`},
+		{"getTopmost", `mustBind\(w, "getTopmost", func\(\) \(bool, error\)`},
+	}
+	for _, c := range cases {
+		if n := regexp.MustCompile(c.re).FindAllString(src, -1); len(n) != 1 {
+			t.Errorf("main.go 里 %s 的绑定形式匹配到 %d 处, want 1: 需要 func() (bool, error)", c.name, len(n))
+		}
+	}
+}
+
 // reportViewportBody 取 main.go 里 reportViewport 回调体的源码: 从绑定那行起, 到该行
 // 收尾的 "\n\t})" 为止。用它钉"回调真的去校正了", 光钉签名是不够的
 func reportViewportBody(src string) string {
-	i := strings.Index(src, `w.Bind("reportViewport"`)
+	i := strings.Index(src, `mustBind(w, "reportViewport"`)
 	if i < 0 {
 		return ""
 	}
@@ -135,7 +154,7 @@ func reportViewportBody(src string) string {
 func TestReportViewportSignatureFrozen(t *testing.T) {
 	src := mainSource(t)
 	if n := len(reportViewportRE.FindAllStringSubmatch(src, -1)); n != 1 {
-		t.Fatalf("main.go 里 reportViewport 的绑定形式匹配到 %d 处, want 1: 需要 `w.Bind(\"reportViewport\", func(dpr float64) error`", n)
+		t.Fatalf("main.go 里 reportViewport 的绑定形式匹配到 %d 处, want 1: 需要 `mustBind(w, \"reportViewport\", func(dpr float64) error`", n)
 	}
 	body := reportViewportBody(src)
 	for _, need := range []string{"win32.WindowClientForScale(", "win32.SetWindowClientRect("} {
@@ -288,9 +307,13 @@ func TestFrontendTypesStatusFields(t *testing.T) {
 	rt := reflect.TypeOf(typing.TypingStatus{})
 	want := map[string]bool{}
 	for i := 0; i < rt.NumField(); i++ {
-		name, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
+		tag := rt.Field(i).Tag.Get("json")
+		name, opts, hasOpts := strings.Cut(tag, ",")
 		if name == "" || name == "-" {
 			t.Fatalf("TypingStatus.%s 缺少 json tag", rt.Field(i).Name)
+		}
+		if hasOpts && opts != "" {
+			t.Errorf("TypingStatus.%s 的 json tag = %q 带了选项: 前端假定字段恒存在(无 omitempty)", rt.Field(i).Name, tag)
 		}
 		want[name] = true
 	}
@@ -436,7 +459,7 @@ func TestFrontendPinLabelsFrozen(t *testing.T) {
 // 主题的存储键写在两处(首帧内联脚本读、useTheme 写), 走散症状是"切换过主题、重启又
 // 变回系统主题"; 内联脚本还必须排在入口脚本之前, 挪进 Vue 就等于首帧闪白。判定只许
 // 有一处: useTheme 再算一遍(读存储 + 跟随系统)就多出一份会走散的逻辑。
-// 见 docs/invariants.md「其它不变量」
+// 见 docs/invariants.md「启动与单实例」
 func TestThemeBootScriptKeepsKeyAndOrder(t *testing.T) {
 	ts := repoFile(t, "frontend", "src", "composables", "useTheme.ts")
 	m := regexp.MustCompile(`THEME_KEY = '([^']+)'`).FindStringSubmatch(ts)
@@ -469,7 +492,7 @@ func TestThemeBootScriptKeepsKeyAndOrder(t *testing.T) {
 // 前端 --ui-scale 的基准宽度必须等于宿主窗口的宽度下限: 宿主把窗口下限定在 540
 // (internal/win32 的 MinWindowW), 前端说到 540 为止不缩放; 只改一处时两边都不报错,
 // 界面要么开始缩放要么不再缩放(这类"跨端同一个数字"此前漂移过: 旧的 480/720)。
-// 见 docs/invariants.md「其它不变量」
+// 见 docs/invariants.md「内容缩放与界面几何」
 func TestUiScaleBaseMatchesWindowFloor(t *testing.T) {
 	ts := repoFile(t, "frontend", "src", "composables", "useUiScale.ts")
 	m := regexp.MustCompile(`BASE_WIDTH\s*=\s*(\d+)`).FindStringSubmatch(ts)

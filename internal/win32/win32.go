@@ -53,7 +53,6 @@ var (
 	// 客户区会差十几个物理像素(客户区同时决定 WebView2 的渲染表面大小)
 	procAdjustWindowRectExForDpi = user32.NewProc("AdjustWindowRectExForDpi")
 	procGetWindowLongPtrW        = user32.NewProc("GetWindowLongPtrW")
-	procSendMessageW             = user32.NewProc("SendMessageW")
 	procGlobalFree               = kernel32.NewProc("GlobalFree")
 	procRegisterClipboardFormatW = user32.NewProc("RegisterClipboardFormatW")
 	procSetWindowPos             = user32.NewProc("SetWindowPos")

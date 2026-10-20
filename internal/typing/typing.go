@@ -117,6 +117,9 @@ const (
 	msgTargetSwitchedPasted = "输入中断：目标窗口已切换，粘贴结果无法确认"
 	// msgClipboardNotRestored 已送达但剪贴板没换回原内容(两个都成立的事实)
 	msgClipboardNotRestored = "输入完成，但剪贴板未恢复，原内容可能已丢失"
+	// msgClipboardLostSuffix 注入失败且剪贴板恢复也失败时, 追加在具体原因后面。
+	// 与 msgClipboardNotRestored 分开: 那句以"输入完成"开头, 失败路径用不得
+	msgClipboardLostSuffix = "剪贴板未恢复，原内容可能已丢失"
 )
 
 // msgTargetSwitchedTyped 逐字符路径中途检测到目标窗口切换。已注入的部分
@@ -234,8 +237,12 @@ type TypingService struct {
 	typingStatus atomic.Value // 存 *TypingStatus
 
 	// 倒计时/逐字符/粘贴的等待, 测试可注入假时钟;
-	// 等上一任务让位走的是它自己的 taskSlot.done, 刻意保持真实时钟
+	// 等上一任务让位走的是它自己的 taskSlot.done, 时钟保持真实
 	sleep func(time.Duration)
+
+	// yieldTimeout 等上一任务让位的上限; 零值用 yieldDeadline 常量。字段化只为让
+	// 测试注入小值, 生产路径不设置
+	yieldTimeout time.Duration
 }
 
 func NewTypingService(inj TextInjector, cb Clipboard, fg Foreground) *TypingService {
@@ -345,12 +352,16 @@ func (s *TypingService) Start(text string, delay int, forceSendInput bool, textD
 
 // waitPreviousTask 等上一任务停手, 返回是否等到: 等的是它自己的收尾信号而不是
 // 共享标志(那早被本任务改过, 拿它判断等于在等自己) ——
-// 见 docs/invariants.md「任务槽与并发启动」; 上界是 yieldDeadline
+// 见 docs/invariants.md「任务槽与并发启动」; 上界是 yieldDeadline(测试可注入更小值)
 func (s *TypingService) waitPreviousTask(prev *taskSlot) bool {
+	timeout := s.yieldTimeout
+	if timeout <= 0 {
+		timeout = yieldDeadline
+	}
 	select {
 	case <-prev.done:
 		return true
-	case <-time.After(yieldDeadline):
+	case <-time.After(timeout):
 		return false
 	}
 }

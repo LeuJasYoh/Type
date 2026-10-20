@@ -7,8 +7,8 @@ package viewfit
 
 import "sync"
 
-// Fitter 校正节流器。它只认"该不该再校正一次", 不含任何平台调用 —— 刻意不带构建
-// 约束, 任何系统上都能 go test(与 internal/typing 同一条理由)
+// Fitter 校正节流器。它只认"该不该再校正一次", 不含平台依赖(怎么摆窗口由回调注入)
+// —— 刻意不带构建约束, 任何系统上都能 go test(与 internal/typing 同一条理由)
 type Fitter struct {
 	mu       sync.Mutex
 	maxFixes int

@@ -5,7 +5,7 @@
 // docs/invariants.md「文本直投」长期标着"未实测"的问题: 全角标点走 SendInput
 // 会不会重复或吞字。
 // 实测结论、它的边界, 以及这夹具踩过的四条坑(锁线程/WS_VISIBLE/泵到读出来/
-// 消息号别传错)都在 docs/invariants.md「注入通道的进程内读回（2026-10，从"未实测"变成实测结论）」
+// 消息号别传错)都在 docs/invariants.md「注入通道的进程内读回（2026-10 实测）」
 
 package win32
 
@@ -120,10 +120,9 @@ func focusEdit(t *testing.T, edit uintptr) {
 		pumpInput(25 * time.Millisecond)
 	}
 	if cur, _, _ := procGetForegroundWindow.Call(); cur != top {
-		// 与 TestClipboardSnapshotRoundtrip 同一口径: 真系统资源用不了就写明读到什么
-		// 再跳过。本机锁屏或有别的程序占着前台时会走到这里, 而 CI 上不容许停留在这个
-		// 分支: 这组用例存在的理由就是守住这条读写链路的回归
-		t.Skipf("测试窗口没当上前台窗口(读到 %#x, 期望 %#x): 无法做注入读回", cur, top)
+		// 与 TestClipboardSnapshotRoundtrip 同一口径: 真系统资源用不了就写明情况再跳过,
+		// 但 CI 上必须红 —— 这组用例存在的理由就是守住这条读写链路的回归
+		skipOrFailInCI(t, "测试窗口没当上前台窗口, 无法做注入读回(焦点没确认就不注入)")
 	}
 	injectSetFocus.Call(edit)
 	pumpInput(50 * time.Millisecond)

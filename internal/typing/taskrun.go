@@ -195,6 +195,9 @@ func (s *TypingService) runClipboardPath(r *taskRun) dispatchResult {
 	r.outcome.success = success
 	r.outcome.delivered = success // 粘贴按键被接受即内容已送达
 	r.outcome.clipboardKept = clipboardKept
+	// 入口漂移守卫失败时剪贴板一个字都没碰(原内容还在), 其余失败都要认"碰过":
+	// 失败分支据此决定要不要把"原内容可能已丢失"一起说出来
+	r.outcome.touchedClipboard = failMsg != msgTargetSwitchedIdle
 	if success {
 		r.outcome.touchedClipboard = true // 剪贴板确实被本任务动过了, 终态要认这个事实
 		return dispatchDone
@@ -317,6 +320,11 @@ func (s *TypingService) reportOutcome(r *taskRun) {
 			st.Message = r.outcome.reason
 		} else {
 			st.Message = msgGenericFailure
+		}
+		// 失败 + 剪贴板恢复也失败: 原内容可能已丢, 必须和具体原因一起说,
+		// 不能只报"粘贴未生效"而让用户以为剪贴板没事
+		if !r.outcome.clipboardKept && r.outcome.touchedClipboard {
+			st.Message += "；" + msgClipboardLostSuffix
 		}
 	}
 	s.storeStatus(r.gen, st)

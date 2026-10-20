@@ -54,6 +54,17 @@ func clipboardExclusive(t *testing.T, cb Clipboard, why string) {
 	}
 }
 
+// skipOrFailInCI 环境前提不成立时的统一口径: 本机跳过并写明原因, CI 里必须红。
+// runner 是干净环境, 那里的"环境不成立"要么是真回归、要么是环境真坏了, 都不能被
+// 一个 SKIP 掩盖。真剪贴板用例与注入读回用例共用这一条。
+func skipOrFailInCI(t *testing.T, why string) {
+	t.Helper()
+	if os.Getenv("CI") != "" {
+		t.Fatalf("CI 环境里环境前提不成立: %s —— 不许跳过, 先查是回归还是环境", why)
+	}
+	t.Skipf("%s —— 前提不成立, 跳过而不是报假回归", why)
+}
+
 func TestUtf16Units(t *testing.T) {
 	cases := []struct {
 		r    rune
@@ -89,7 +100,7 @@ func TestClipboardSnapshotRoundtrip(t *testing.T) {
 	cb := Clipboard{}
 	orig := cb.Snapshot()
 	if orig.UnsafeToRestore() {
-		t.Skip("剪贴板被占用或读不全, 无法保存原始状态")
+		skipOrFailInCI(t, "剪贴板被占用或读不全, 无法保存原始状态")
 	}
 	defer cb.RestoreSnapshotRaw(orig.Formats)
 	clipboardExclusive(t, cb, "快照/恢复往返")
@@ -178,7 +189,7 @@ func TestClipboardHoldsTextNul(t *testing.T) {
 	cb := Clipboard{}
 	orig := cb.Snapshot()
 	if orig.UnsafeToRestore() {
-		t.Skip("剪贴板被占用或读不全, 无法保存原始状态")
+		skipOrFailInCI(t, "剪贴板被占用或读不全, 无法保存原始状态")
 	}
 	defer cb.RestoreSnapshotRaw(orig.Formats)
 	clipboardExclusive(t, cb, "内嵌 NUL 的 holdsText 比对")
@@ -500,7 +511,7 @@ func TestMonitorWorkArea(t *testing.T) {
 	hwnd := newTestWindow(t, "WorkArea").create(t, "TypeWorkAreaTest")
 	work, ok := monitorWorkArea(hwnd)
 	if !ok {
-		t.Skip("当前环境拿不到显示器工作区(无头会话?), 跳过")
+		skipOrFailInCI(t, "当前环境拿不到显示器工作区(无头会话?)")
 	}
 	if work.Right <= work.Left || work.Bottom <= work.Top {
 		t.Fatalf("工作区矩形非法: %+v", work)
@@ -589,7 +600,7 @@ func TestWindowClientForScale(t *testing.T) {
 	hwnd := newTestWindow(t, "ViewportScale").create(t, "TypeViewportScaleTest")
 	work, ok := monitorWorkArea(hwnd)
 	if !ok {
-		t.Skip("当前环境拿不到显示器工作区(无头会话?), 跳过")
+		skipOrFailInCI(t, "当前环境拿不到显示器工作区(无头会话?)")
 	}
 	workH := int(work.Bottom - work.Top)
 

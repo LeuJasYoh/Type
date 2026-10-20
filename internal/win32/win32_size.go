@@ -89,8 +89,9 @@ func initialWindowSize(workH int) (w, h int) {
 	if h > maxWindowH {
 		h = maxWindowH
 	}
-	// 工作区比下限还矮: 按工作区收窄, 不让窗口高过屏幕(此时会低于 MinWindowH,
-	// 这是"屏幕放不下"的现实, 不是配置错误)
+	// 工作区比下限还矮: 按工作区收窄客户区高度(此时会低于 MinWindowH, 这是"屏幕放不下"
+	// 的现实, 不是配置错误)。这里只夹客户区: 加上标题栏后整窗仍可能比工作区高一截,
+	// 极端小屏下属于已知边界, 断言与实际口径都以客户区为准
 	if workH > 0 && h > workH {
 		h = workH
 	}
