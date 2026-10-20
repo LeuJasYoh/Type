@@ -25,7 +25,7 @@ writing-style）、知识（invariants）、工具手册（tooling）、规划�
 | 版本号提取 | 1 处实现（scripts/version.ps1） | build.ps1 与三个 workflow 共用 |
 | CI | verify.yml 检查项唯一处；ci.yml 双架构发布构建 + amd64 跑 build.ps1 全链路 | 发版复用 verify.yml |
 | 文档 | 契约 5 篇 + 知识 1 篇 + 工具手册 1 篇 + 规划 1 篇 + 档案指针 1 篇 | 具体字节数以现场统计为准，不写死在文档里 |
-| 发布 | v1.7.1；25 个标签；release-notes 自 v1.5.3 起 11 份 | 更早版本说明见 GitHub Release/历史 |
+| 发布 | v1.7.2；26 个标签；release-notes 自 v1.5.3 起 12 份 | 更早版本说明见 GitHub Release/历史 |
 
 工程质量水位（按本仓库自己的标准）：依赖方向单向且编译期核对接口签名；发布走 release.yml
 且 needs: verify；版本号单一来源；每个踩过的坑写进 docs/invariants.md；失败路径不允许静默
@@ -41,7 +41,7 @@ writing-style）、知识（invariants）、工具手册（tooling）、规划�
 4. **闸门守能机检的东西，内容正确性靠人工**：不要把"全绿"当成"文档写得对"；每轮改动后
    人工过一遍受影响的事实描述。
 
-## 四、当前窗口：v1.7.2（仓库治理批次）
+## 四、当前窗口：v1.7.2（仓库治理批次，2026-10-20 已发布）
 
 本批次没有新增用户可见功能；用户可感知的变化只有两处，且都属于修复：剪贴板为空时中文输入
 恢复走粘贴通道（设计原意）、失败终态在剪贴板恢复失败时多一句"原内容可能已丢失"。
@@ -62,11 +62,10 @@ writing-style）、知识（invariants）、工具手册（tooling）、规划�
   toggleTopmost/getTopmost 返回签名与 TypingStatus json tag 选项进闸门；删除与 tsconfig 重复的
   src/env.d.ts 并重建入库产物。
 
-发版建议：补丁号 v1.7.2（纯修复与内部治理）。发布说明必须覆盖上面两处用户可感知变化，
-按 docs/build-and-release.md 的流程：改版本号 → 写 release-notes/v1.7.2.md → 构建产物 →
-提交推送 → 打标签。
+发版记录：已按补丁号 v1.7.2 发布（2026-10-20），发布说明见 release-notes/v1.7.2.md；
+流程按 docs/build-and-release.md 执行（改版本号 → 写发布说明 → 构建产物 → 提交推送 → 打标签）。
 
-发布前验收：
+发布前验收（已通过）：
 
 - gofmt 空、go vet 全绿、go test -race ./... 全绿（含 tools/repo-check 与 win32 真实用例）；
 - 前端 typecheck / format:check / test 全绿；scripts/build.ps1 在本机与 CI 都绿；
@@ -128,3 +127,4 @@ writing-style）、知识（invariants）、工具手册（tooling）、规划�
 |---|---|
 | 2026-10-18 | 初稿（基于三份侦察与一次对抗式审校，未入库） |
 | 2026-10-20 | 重写：治理批次落地后的现状、v1.7.2 发版建议、维护期 backlog 与明确不做清单 |
+| 2026-10-20 | v1.7.2 按补丁号发布（纯修复与内部治理，无新增功能） |
