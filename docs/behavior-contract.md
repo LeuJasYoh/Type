@@ -19,7 +19,7 @@
 - webview Bind 函数名：`startTyping` / `cancelTyping` / `toggleTopmost` / `getTopmost` /
   `getTypingStatus` / `reportViewport`
   （`startTyping` 参数：text, delay, forceRaw, textDirect（`forceRaw` 是前端与冻结契约的名字，Go 侧 `Start` 的同位参数叫 `forceSendInput`）；`reportViewport` 参数：dpr，
-  前端启动时报上来的真实内容缩放，宿主据此让窗口适配内容，见 invariants.md 的「其它不变量」）
+  前端启动时报上来的真实内容缩放，宿主据此让窗口适配内容，见 docs/invariants.md「内容缩放与界面几何」）
 - `TypingStatus` JSON 字段与 phase 枚举值（`frontend/src/types.ts` 是其镜像）
 - 状态机用户可见文案逐字符保持，它们是发布语言的一部分
 - 已冻结文案清单：`剩余 N 秒 — 请聚焦目标窗口...` / `检测到中文，正在操作剪贴板...` /
