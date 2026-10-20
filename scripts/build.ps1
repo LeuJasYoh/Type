@@ -12,18 +12,12 @@ $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $root
 
 # ── 1. 从 cmd/type/main.go 提取版本号 (单一来源) ──────
-# 版本可带预发布后缀(如 1.5.0-rc.1): 资源里的数字字段只允许数字, 取后缀前的
-# 数字部分; 完整字符串进 ProductVersion 与 package.json(semver 兼容)。
+# 提取逻辑只有一处实现: scripts/version.ps1 的 Get-TypeVersion (本脚本与三个 workflow
+# 共用; 改规则只改那一份)。版本可带预发布后缀(如 1.5.0-rc.1): 资源里的数字字段只允许
+# 数字, 取后缀前的数字部分; 完整字符串进 ProductVersion 与 package.json(semver 兼容)。
 # 数字形式在此独立算一遍, 供末尾读回 exe 比对(与被校验的工具不是同一份实现)
-# 模式必须锚定行首的 `var version =` 且大小写敏感: version 是个常见词, 无锚点的
-# 子串匹配会命中注释里的 `// version = "1.5.8"`, 或将来某个 `minXxxVersion = "…"`,
-# 取到的就是文件里第一个碰巧长得像的值。下游(标签闸门/资源/包名/package.json)
-# 全用这个提取值, 而没有任何环节比对"提取值 == 程序真正用的 version" —— 取错值
-# 会一路错到底。同款模式共四处: 本文件 / verify.yml / ci.yml / release.yml
-$m = @(Select-String -Path "cmd\type\main.go" -CaseSensitive `
-    -Pattern '(?m)^\s*var\s+version\s*=\s*"([\d.]+(?:-[0-9A-Za-z.]+)?)"')
-if ($m.Count -ne 1) { throw "cmd\type\main.go 里应恰好有一处 var version = ""x.y.z"" (实际 $($m.Count) 处)" }
-$ver = $m[0].Matches[0].Groups[1].Value
+. "$root\scripts\version.ps1"
+$ver = Get-TypeVersion -RepoRoot $root
 
 $base = $ver -replace '-.*$', ''
 $parts = @($base -split '\.')

@@ -35,16 +35,21 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # 版本号的单一来源是 cmd/type/main.go, 与 build.ps1 同款正则
+      # 本地唯一权威构建路径 scripts/build.ps1 也需要 Node 与前端依赖, 故只给 amd64 档装
+      - uses: actions/setup-node@v5
+        if: matrix.arch == 'amd64'
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # 版本号的单一来源是 cmd/type/main.go; 提取实现唯一处: scripts/version.ps1
       - name: 提取版本号
         shell: pwsh
         run: |
-          # 必须锚定行首的 `var version =` 且大小写敏感(与 build.ps1 同款): 无锚点的
-          # 子串匹配会命中注释里的 `// version = "x"` 或将来某个 `minXxxVersion = "…"`
-          $m = @(Select-String -Path cmd/type/main.go -CaseSensitive `
-            -Pattern '(?m)^\s*var\s+version\s*=\s*"([\d.]+(?:-[0-9A-Za-z.]+)?)"')
-          if ($m.Count -ne 1) { throw "cmd/type/main.go 里应恰好有一处 var version = ""x.y.z"" (实际 $($m.Count) 处)" }
-          Add-Content -Path $env:GITHUB_ENV -Value "version=$($m[0].Matches[0].Groups[1].Value)"
+          . ./scripts/version.ps1
+          $ver = Get-TypeVersion
+          Add-Content -Path $env:GITHUB_ENV -Value "version=$ver"
 
       # 资源只在这里生成(.syso 不入库, 见 .gitignore); mkres 两架构一并产出,
       # 后续 go build 按 GOARCH 各取所需, 故本步不能带 GOARCH
@@ -87,3 +92,10 @@ jobs:
             if ((Get-Item $out).Length -eq 0) { throw "$pkg 的测试二进制是空文件" }
           }
           Write-Host "三个包的 arm64 测试二进制均已产出并校验非空"
+
+      # build.ps1 是本地唯一权威构建路径(版本同步/前端/资源/go build/读回), 但以前 CI
+      # 只校验它的 BOM、从不执行, 里面的 Node 版本闸门与 lock 位置守卫没有任何自动验证。
+      # 放在 amd64 一档跑一次即可(它固定 GOARCH=amd64, 且会自己 npm ci)。
+      - name: 一键构建脚本全链路 (amd64)
+        if: matrix.arch == 'amd64'
+        run: powershell -ExecutionPolicy Bypass -File ./scripts/build.ps1

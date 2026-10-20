@@ -19,7 +19,8 @@
 |---|---|
 | 输入状态机 / 注入路径 / 并发 / 用户可见文案 | [docs/behavior-contract.md](docs/behavior-contract.md)（冻结清单）+ [docs/invariants.md](docs/invariants.md)（不变量与踩坑） |
 | 构建 / CI / 发版 / 版本号 | [docs/build-and-release.md](docs/build-and-release.md) |
-| 目录结构 / 分层 / 平台层导出面 / 工具链选型 | [docs/architecture.md](docs/architecture.md) |
+| 目录结构 / 分层 / 平台层导出面 / 工具链选型 / 单一来源 | [docs/architecture.md](docs/architecture.md) |
+| 截图复现 / 版式探针 / 注入探针 / 资产管线 / 语言统计 | [docs/tooling.md](docs/tooling.md)（操作手册） |
 | README / 发布说明 / 界面文案 | [docs/writing-style.md](docs/writing-style.md) |
 | 写代码注释 / 注释审查 | [docs/comment-style.md](docs/comment-style.md)（三种形态 + 归置判据 + 长度预算；闸门在 [tools/repo-check/](tools/repo-check/doc.go)）；注释重写档案已移出工作区，追溯指针见 [docs/comment-ledger/README.md](docs/comment-ledger/README.md) |
 | 决定下一步做什么 / 版本取舍 / 要不要做某个功能 | [docs/roadmap.md](docs/roadmap.md)（**规划，不是契约**；与 [docs/behavior-contract.md](docs/behavior-contract.md) 冲突时以契约为准） |

@@ -52,12 +52,9 @@ jobs:
         env:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
-          # 必须锚定行首的 `var version =` 且大小写敏感(与 build.ps1 同款): 无锚点的
-          # 子串匹配会命中注释里的 `// version = "x"` 或将来某个 `minXxxVersion = "…"`
-          $m = @(Select-String -Path cmd/type/main.go -CaseSensitive `
-            -Pattern '(?m)^\s*var\s+version\s*=\s*"([\d.]+(?:-[0-9A-Za-z.]+)?)"')
-          if ($m.Count -ne 1) { throw "cmd/type/main.go 里应恰好有一处 var version = ""x.y.z"" (实际 $($m.Count) 处)" }
-          $ver = $m[0].Matches[0].Groups[1].Value
+          # 版本提取只有一处实现: scripts/version.ps1 的 Get-TypeVersion
+          . ./scripts/version.ps1
+          $ver = Get-TypeVersion
 
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
             $tag = $env:GITHUB_REF_NAME

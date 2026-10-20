@@ -104,7 +104,7 @@
 | GUI | WebView2（Edge Chromium） |
 | 前端 | Vue 3 + TypeScript，Vite 构建为单文件 HTML（无其他运行时依赖） |
 | 构建 | vue-tsc 类型检查 + Vite（vite-plugin-singlefile）+ `go run ./tools/mkres` + `go build` |
-| CI | GitHub Actions（windows-latest）：gofmt / go vet / `go test -race` / 依赖漏洞扫描（govulncheck）/ go build + 前端格式检查（`npm run format:check`，Prettier 的 `--check` 非改写模式）+ 前端类型检查（`npm run typecheck`，src 与 test 两份配置）+ 前端单测（`npm test`）+ 前端产物漂移检查 + 版本同步检查 + build.ps1 的 BOM 检查；另按 amd64/arm64 矩阵做发布构建，并用 `tools/pecheck` 读回校验图标、版本与 DPI 声明确实已链入产物。发版走的是同一套检查（`verify.yml`），不会比平时松 |
+| CI | GitHub Actions（windows-latest）：gofmt / go vet / `go test -race`（含 `tools/repo-check` 的仓库治理闸门）/ 依赖漏洞扫描（govulncheck）/ go build + 前端格式检查（`npm run format:check`，Prettier 的 `--check` 非改写模式）+ 前端类型检查（`npm run typecheck`，src 与 test 两份配置）+ 前端单测（`npm test`）+ 前端产物漂移检查 + 版本同步检查 + build.ps1 的 BOM 检查；另按 amd64/arm64 矩阵做发布构建，并用 `tools/pecheck` 读回校验图标、版本与 DPI 声明确实已链入产物，amd64 一档还会跑一次完整的 `scripts/build.ps1`。发版走的是同一套检查（`verify.yml`），不会比平时松 |
 | 发布 | 打 `v<版本>` 标签即由 GitHub Actions 自动发行：校验版本与发布说明一致 → 双架构构建 + 读回校验 → 打包 → 建 Release；说明文字取自入库的 `release-notes/v<版本>.md` |
 | Win32 API | SendInput（KEYEVENTF_UNICODE）+ WM_CHAR 文本直投（SendMessageTimeoutW 直投焦点窗口）+ 剪贴板（CF_UNICODETEXT、EnumClipboardFormats 全格式快照、RtlMoveMemory）+ 前台窗口检测（GetForegroundWindow）+ 单实例互斥体（CreateMutexW） |
 | 图标 | 圆角多尺寸 ICO（uv + Pillow 生成，`tools/gen-icon/gen_icon.py` 字节级可复现） |

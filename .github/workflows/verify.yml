@@ -38,6 +38,7 @@ jobs:
         shell: pwsh
         run: |
           $bad = gofmt -l ./cmd ./internal ./tools
+          if ($LASTEXITCODE -ne 0) { throw "gofmt 进程本身失败 (exit $LASTEXITCODE)" }
           if ($bad) { Write-Host "以下文件未格式化:"; $bad; exit 1 }
 
       - name: go vet
@@ -129,15 +130,11 @@ jobs:
       - name: 版本同步检查
         shell: pwsh
         run: |
-          # 与 build.ps1 同款正则: 版本可带预发布后缀(如 1.5.0-rc.1)
-          # 用 ConvertFrom-Json 取字段本身, 而不是在文本里找子串:
-          # 子串匹配在版本号恰好出现在别处时会漏判
-          # 必须锚定行首的 `var version =` 且大小写敏感(与 build.ps1 同款): 无锚点的
-          # 子串匹配会命中注释里的 `// version = "x"` 或将来某个 `minXxxVersion = "…"`
-          $m = @(Select-String -Path cmd/type/main.go -CaseSensitive `
-            -Pattern '(?m)^\s*var\s+version\s*=\s*"([\d.]+(?:-[0-9A-Za-z.]+)?)"')
-          if ($m.Count -ne 1) { throw "cmd/type/main.go 里应恰好有一处 var version = ""x.y.z"" (实际 $($m.Count) 处)" }
-          $ver = $m[0].Matches[0].Groups[1].Value
+          # 版本提取只有一处实现: scripts/version.ps1 的 Get-TypeVersion(build.ps1 与
+          # 三个 workflow 共用); 这里只负责比对 package.json / package-lock.json。
+          # 用 ConvertFrom-Json 取字段本身, 而不是在文本里找子串。
+          . ./scripts/version.ps1
+          $ver = Get-TypeVersion
           $f = 'frontend/package.json'
           $pkg = Get-Content -Raw $f | ConvertFrom-Json
           if ($pkg.version -ne $ver) {
