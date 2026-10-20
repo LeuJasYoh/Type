@@ -21,7 +21,8 @@
 | 构建 / CI / 发版 / 版本号 | [docs/build-and-release.md](docs/build-and-release.md) |
 | 目录结构 / 分层 / 平台层导出面 / 工具链选型 | [docs/architecture.md](docs/architecture.md) |
 | README / 发布说明 / 界面文案 | [docs/writing-style.md](docs/writing-style.md) |
-| 写代码注释 / 注释重写 | [docs/comment-style.md](docs/comment-style.md)（三种形态 + 归置判据 + 重写台账与闸门基线）；[docs/comment-ledger/](docs/comment-ledger/progress.md) 是那次重写的**档案**（2026-10 抽取，不再随代码更新，只用于追溯；条数下限由闸门守着） |
+| 写代码注释 / 注释审查 | [docs/comment-style.md](docs/comment-style.md)（三种形态 + 归置判据 + 长度预算；闸门在 [tools/repo-check/](tools/repo-check/doc.go)）；注释重写档案已移出工作区，追溯指针见 [docs/comment-ledger/README.md](docs/comment-ledger/README.md) |
+| 决定下一步做什么 / 版本取舍 / 要不要做某个功能 | [docs/roadmap.md](docs/roadmap.md)（**规划，不是契约**；与 [docs/behavior-contract.md](docs/behavior-contract.md) 冲突时以契约为准） |
 
 **代码注释里的「见 …」直接指向对应文件**；小节标题在拆分时原样保留，搜标题最快。
 本文件与 `docs/` 都随代码提交，改了哪一处的规矩就同步哪一份。
@@ -40,6 +41,8 @@ $env:GOARCH = "arm64"; go build -trimpath -ldflags="-H windowsgui -s -w" -o Type
 gofmt -l ./cmd ./internal ./tools   # 应输出为空
 go vet ./...
 go test -count=1 -race ./...        # Windows 上竞态检测需要 cgo, 要 MinGW 的 gcc
+#   仓库治理闸门(注释形态 / README 树 / 发布说明 / 文档指针与链接)在 tools/repo-check,
+#   go test ./... 会一并跑到; 它与产品行为无关, 所以不寄生在 cmd/type 的测试里
 #   internal/win32 会操作真实剪贴板: 本机若有第三方剪贴板程序(桥接/同步类)占着,
 #   那两条真剪贴板用例会 SKIP 并写明读到什么; **CI 里同样情形一律红**(不许跳过掩盖
 #   写读链路的回归)
@@ -96,7 +99,7 @@ go run ./tools/equivcheck <旧rev> <新rev> [--renamed] [--old-file <路径>]
 | 用户可见行为 / 功能 / 限制 | README.md：功能、使用步骤、已知限制 |
 | 新增或修改用户可见文案 | docs/behavior-contract.md 的文案清单 |
 | CI 步骤 / 检查项 / 发布方式 | README.md 技术栈与项目结构的 CI 行 + docs/architecture.md / docs/build-and-release.md |
-| 命令 / 构建流程 / 目录结构 | 本文件「常用命令」+ docs/architecture.md + README「自行编译」；新增测试或工具目录时，确认 `.gitattributes` 的语言构成排除规则覆盖到（语言条只统计产品代码）。**README 的项目结构树不必手工同步**：`cmd/type/readme_contract_test.go` 双向核对（树上的文件要真有、产品目录里的文件都要在树上），漏补会直接红 |
+| 命令 / 构建流程 / 目录结构 | 本文件「常用命令」+ docs/architecture.md + README「自行编译」；新增测试或工具目录时，确认 `.gitattributes` 的语言构成排除规则覆盖到（语言条只统计产品代码）。**README 的项目结构树不必手工同步**：`tools/repo-check` 的 README 树闸门双向核对（树上的文件要真有、产品目录与 frontend 根配置里的文件都要在树上），漏补会直接红 |
 | 非显而易见的新约定 / 踩坑结论 | docs/invariants.md 对应章节（如「焦点锁定与漂移防护」） |
 | 版本号 | 只改 cmd/type/main.go；package.json 与 package-lock.json 交给 build.ps1，资源版本由 tools/mkres 构建期生成 |
 | 发版 | docs/build-and-release.md + 新增/更新 `release-notes/v<版本>.md`（与代码同一次提交） |

@@ -124,7 +124,7 @@
   一起改）：`version` 是常见词，无锚点的子串匹配会命中注释里的 `// version = "1.5.8"`
   或将来某个 `minXxxVersion = "…"`，而下游（标签闸门、资源、包名）全用这个提取值 ——
   取错值会一路错到底，且没有任何环节比对"提取值 == 程序真正用的 version"（v1.5.7 修）
-- **"必须多处同款"的东西有本地闸门**（2026-10 补）：`cmd/type/build_contract_test.go` 在
+- **"必须多处同款"的东西有本地闸门**（2026-10 补）：`tools/repo-check` 的构建契约测试在
   `go test` 里钉着三件事 —— 四处版本号正则逐字相同且都带 `-CaseSensitive` 与"恰好一处"
   断言、三处发布构建命令行都含 `-trimpath` 与 `-ldflags="-H windowsgui -s -w"` 且指向
   `./cmd/type`、`build.ps1` 首三字节仍是 BOM。断言只看**非注释行**：否则把真命令里的

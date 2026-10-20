@@ -1,6 +1,6 @@
 # AI 中文写作特征实测
 
-中文 | [English](RESEARCH.en.md)
+中文（英文版未随仓库提供，规则与实测数据以本文件为准）
 
 这份文档记录每一条规则的**预设与实测结果**，包括被推翻的预设。规则的依据是句式形态可定位，数字只用来决定某个句式够不够格立为规则。
 
@@ -281,4 +281,4 @@ python3 scripts/check-translationese.py <AI 语料目录...>
 
 ---
 
-**English** [RESEARCH.en.md](./RESEARCH.en.md) · **规则集** [SKILL.md](./SKILL.md) · **概览** [README.md](./README.md)
+**规则集** [SKILL.md](./SKILL.md) · **概览** [README.md](./README.md)
