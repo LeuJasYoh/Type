@@ -25,7 +25,7 @@ writing-style）、知识（invariants）、工具手册（tooling）、规划�
 | 版本号提取 | 1 处实现（scripts/version.ps1） | build.ps1 与三个 workflow 共用 |
 | CI | verify.yml 检查项唯一处；ci.yml 双架构发布构建 + amd64 跑 build.ps1 全链路 | 发版复用 verify.yml |
 | 文档 | 契约 5 篇 + 知识 1 篇 + 工具手册 1 篇 + 规划 1 篇 + 档案指针 1 篇 | 具体字节数以现场统计为准，不写死在文档里 |
-| 发布 | v1.7.2；26 个标签；release-notes 自 v1.5.3 起 12 份 | 更早版本说明见 GitHub Release/历史 |
+| 发布 | v1.7.3；27 个标签；release-notes 自 v1.5.3 起 13 份 | 更早版本说明见 GitHub Release/历史 |
 
 工程质量水位（按本仓库自己的标准）：依赖方向单向且编译期核对接口签名；发布走 release.yml
 且 needs: verify；版本号单一来源；每个踩过的坑写进 docs/invariants.md；失败路径不允许静默
@@ -64,6 +64,8 @@ writing-style）、知识（invariants）、工具手册（tooling）、规划�
 
 发版记录：已按补丁号 v1.7.2 发布（2026-10-20），发布说明见 release-notes/v1.7.2.md；
 流程按 docs/build-and-release.md 执行（改版本号 → 写发布说明 → 构建产物 → 提交推送 → 打标签）。
+补丁跟进：v1.7.3（2026-10-21）只恢复 v1.7.2 批次中误删的 11 条状态机用例并补 1 条失败路径用例，
+程序行为与 v1.7.2 完全一致，发布说明见 release-notes/v1.7.3.md。
 
 发布前验收（已通过）：
 
@@ -128,3 +130,4 @@ writing-style）、知识（invariants）、工具手册（tooling）、规划�
 | 2026-10-18 | 初稿（基于三份侦察与一次对抗式审校，未入库） |
 | 2026-10-20 | 重写：治理批次落地后的现状、v1.7.2 发版建议、维护期 backlog 与明确不做清单 |
 | 2026-10-20 | v1.7.2 按补丁号发布（纯修复与内部治理，无新增功能） |
+| 2026-10-21 | v1.7.3 发布：恢复误删的 11 条状态机用例（程序行为与 v1.7.2 一致） |
