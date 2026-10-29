@@ -203,8 +203,8 @@
   nil。**别把 recover 当多余兜底删掉**：GUI 子系统没有控制台，不接住就是"双击之后窗口一闪就没了"。
 - **宿主进程完整性级别偏低时 WebView2 拒绝创建控制器**：给 exe 所在目录打 Low 完整性标签
   （`icacls <目录> /setintegritylevel Low`）后必崩、拷到别处就正常。排查先看 `icacls` 输出；
-  修复是在普通终端执行 `icacls <exe> /setintegritylevel Medium`，或把 exe 放到普通目录
-  （代理沙箱可能无权重设标签，此时改在用户自己的终端执行）。
+  修复是在用户自己的终端执行 `icacls <目录> /setintegritylevel Medium`，让目录与之后的
+  构建产物都继承 Medium（代理沙箱的受限 token 可能无权修改，需由用户执行）。
 - 复现"机器上没有 WebView2"：把 `WEBVIEW2_BROWSER_EXECUTABLE_FOLDER` 指向不存在的目录再启动；
   期望弹出「Type 无法启动」提示框，进程停在框上，stderr 为空。
 - **单实例守卫认两个错误码**：`CreateMutexW` 对"名字已被占用"有两种回报——有权打开时报

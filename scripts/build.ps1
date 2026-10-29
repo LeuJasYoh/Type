@@ -124,19 +124,3 @@ try {
     $env:GOARCH = $prevGOARCH
     $env:GOFLAGS = $prevGOFLAGS
 }
-
-# ── 7. 本地可运行副本 ─────────────────────────────────
-# 沙箱工作区可能给目录/产物打 Low 完整性标签, 从仓库直接启动会被 WebView2 拒绝。
-# 非 GitHub Actions 构建时复制一份到普通目录并设为 Medium; 失败只警告, 不影响产物。
-if (-not $env:GITHUB_ACTIONS) {
-    try {
-        $localDir = Join-Path $env:LOCALAPPDATA "Programs\Type"
-        New-Item -ItemType Directory -Force $localDir | Out-Null
-        $localExe = Join-Path $localDir "Type.exe"
-        Copy-Item "Type.exe" $localExe -Force
-        icacls $localExe /setintegritylevel Medium | Out-Null
-        Write-Host "本地可运行副本: $localExe"
-    } catch {
-        Write-Warning "无法生成本地可运行副本: $($_.Exception.Message)"
-    }
-}

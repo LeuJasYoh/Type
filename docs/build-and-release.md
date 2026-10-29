@@ -52,10 +52,3 @@
 **文档必须先于发版落地**（用户明确要求）：README / AGENTS / 发布说明要在**打标签之前**已经
 提交到远端，否则 Release 页面与仓库文档对不上，而 Release 正文是用户唯一会读的那份说明。
 顺序固定为：改代码 → 同步文档与发布说明 → 构建产物 → 提交推送 → 打标签。
-
-## 本地构建的可运行副本
-
-`scripts/build.ps1` 在非 GitHub Actions 环境下会在末尾把 `Type.exe` 复制到
-`%LOCALAPPDATA%\Programs\Type\Type.exe` 并设为 Medium 完整性。原因是当前沙箱工作区可能给
-目录和产物打 Low 标签，从仓库直接启动会被 WebView2 拒绝（见 docs/invariants.md「启动与单实例」）。
-CI 跳过这一步；发布产物不受影响。
