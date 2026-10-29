@@ -275,6 +275,10 @@ go build -tags dev -o Type-dev.exe ./cmd/type   # 终端 2: 带 dev 标签构建
 
 `testdata/completion-guard.html` 复刻"禁粘贴 + 关键词候选补全 + 括号自动配对"的在线编程编辑器：弹窗开着时回车/空格/Tab 是否"接受候选"、是否自动配对由页内开关决定，`Esc` 关闭弹窗；内置逐键事件日志与预期文本对比，用于验证"文本直投"的效果。页面 title 携带统计摘要（字符数/键盘事件/无键输入/自动配对/接受候选），配合 `tools/wmcharprobe` 可自动化验证注入通道（详见该工具头部注释）。
 
+### 后续计划（TODO）
+
+- **用 Wails 托管窗口，继续保留现有 WebView2 UI**：当前由 `go-webview2` 直接装配原生窗口与 WebView2；后续评估改用 Wails 作为窗口与应用壳，Vue 3 + Vite 的单文件界面保持不变。Wails 在 Windows 上也使用 WebView2，因此这是技术栈与壳层演进，不改变 WebView2 的运行时和完整性要求；迁移时同步重做构建、发版与 pecheck 流程。
+
 ---
 
 ## 反馈
