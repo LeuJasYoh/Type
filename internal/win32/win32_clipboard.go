@@ -83,35 +83,43 @@ func encodedText(text string) []byte {
 	return out
 }
 
-func (Clipboard) SetText(text string) bool {
+func (Clipboard) SetText(text string, snap []typing.ClipboardFormat) (written bool, preserved bool) {
+	hMem := prepareClipboardData(encodedText(text))
+	if hMem == 0 {
+		return false, true
+	}
+	defer func() {
+		if hMem != 0 {
+			procGlobalFree.Call(hMem)
+		}
+	}()
 	if !openClipboardWithRetry() {
-		return false
+		return false, true
 	}
 	defer procCloseClipboard.Call()
 	if ret, _, _ := procEmptyClipboard.Call(); ret == 0 {
-		return false // 清空失败: 接下来的写入只会留下半份内容
+		return false, true
 	}
+	if ret, _, _ := procSetClipboardData.Call(cfUnicodeText, hMem); ret == 0 {
+		return false, restoreClipboardFormats(snap)
+	}
+	hMem = 0 // SetClipboardData 成功后, 内存所有权归系统。
+	return true, true
+}
 
-	encoded := encodedText(text)
-	size := len(encoded)
-	hMem, _, _ := procGlobalAlloc.Call(ghnd, uintptr(size))
+func prepareClipboardData(data []byte) uintptr {
+	hMem, _, _ := procGlobalAlloc.Call(ghnd, uintptr(len(data)))
 	if hMem == 0 {
-		return false
+		return 0
 	}
 	ptr, _, _ := procGlobalLock.Call(hMem)
 	if ptr == 0 {
-		procGlobalFree.Call(hMem) // 加锁失败必须释放, 否则泄漏
-		return false
+		procGlobalFree.Call(hMem)
+		return 0
 	}
-	// RtlMoveMemory 批量拷贝: 源为 Go 切片指针 (Pointer->uintptr 单向转换, vet 认可),
-	// 目标为 Windows 返回的 uintptr 直接传入, 避免 uintptr->unsafe.Pointer 转换
-	procRtlMoveMemory.Call(ptr, uintptr(unsafe.Pointer(unsafe.SliceData(encoded))), uintptr(size))
+	procRtlMoveMemory.Call(ptr, uintptr(unsafe.Pointer(unsafe.SliceData(data))), uintptr(len(data)))
 	procGlobalUnlock.Call(hMem)
-	ret, _, _ := procSetClipboardData.Call(cfUnicodeText, hMem)
-	if ret == 0 {
-		procGlobalFree.Call(hMem) // 系统未接管所有权时由调用方释放
-	}
-	return ret != 0
+	return hMem
 }
 
 func (Clipboard) GetText() string {
@@ -144,16 +152,8 @@ func (Clipboard) GetText() string {
 	return string(utf16.Decode(buf[:n]))
 }
 
-// HoldsText 判断剪贴板当前文本是否就是 text, 并回报这次比对有没有得出结论。
-// 按原始字节比对而非 GetText 的字符串: CF_UNICODETEXT 内嵌 NUL 时字符串比较会在
-// NUL 处截断, 误判成"用户已改动"而跳过恢复。
-// (holds, known) 两个返回值的分工、三个落点各是什么事实、旧签名把歧义解到了哪一边,
-// 见 docs/invariants.md「其它不变量」
-func (Clipboard) HoldsText(text string) (holds bool, known bool) {
-	if !openClipboardWithRetry() {
-		return false, false
-	}
-	defer procCloseClipboard.Call()
+// clipboardHoldsText 在已打开的剪贴板内逐字节比较, 不截断内嵌 NUL。
+func clipboardHoldsText(text string) (holds bool, known bool) {
 	hMem, _, _ := procGetClipboardData.Call(cfUnicodeText)
 	if hMem == 0 {
 		// 我们自己 SetClipboardData 过 CF_UNICODETEXT, 取不到即说明剪贴板已被重写
@@ -174,16 +174,6 @@ func (Clipboard) HoldsText(text string) (holds bool, known bool) {
 	procRtlMoveMemory.Call(uintptr(unsafe.Pointer(unsafe.SliceData(buf))), ptr, uintptr(len(buf)))
 	procGlobalUnlock.Call(hMem)
 	return bytes.Equal(buf, encodedText(text)), true
-}
-
-// clipboardClear 清空剪贴板内容
-func clipboardClear() bool {
-	if !openClipboardWithRetry() {
-		return false
-	}
-	defer procCloseClipboard.Call()
-	ret, _, _ := procEmptyClipboard.Call()
-	return ret != 0
 }
 
 // handleFormats: GetClipboardData 返回 GDI 句柄而非 HGLOBAL 内存块的标准格式,
@@ -284,19 +274,11 @@ func readClipboardFormat(fmt uint32) ([]byte, bool) {
 func writeClipboardFormats(snap []typing.ClipboardFormat) bool {
 	all := true
 	for _, cf := range snap {
-		hMem, _, _ := procGlobalAlloc.Call(ghnd, uintptr(len(cf.Data)))
+		hMem := prepareClipboardData(cf.Data)
 		if hMem == 0 {
 			all = false
 			continue
 		}
-		ptr, _, _ := procGlobalLock.Call(hMem)
-		if ptr == 0 {
-			procGlobalFree.Call(hMem)
-			all = false
-			continue
-		}
-		procRtlMoveMemory.Call(ptr, uintptr(unsafe.Pointer(unsafe.SliceData(cf.Data))), uintptr(len(cf.Data)))
-		procGlobalUnlock.Call(hMem)
 		if ret, _, _ := procSetClipboardData.Call(uintptr(cf.Fmt), hMem); ret == 0 {
 			procGlobalFree.Call(hMem) // 系统未接管所有权时由调用方释放
 			all = false
@@ -305,21 +287,41 @@ func writeClipboardFormats(snap []typing.ClipboardFormat) bool {
 	return all
 }
 
-// RestoreSnapshotRaw 无条件写回快照(调用方需确认剪贴板未被用户改动), 返回剪贴板
-// 是否真的回到了快照状态(nil 是"原状态未知": 不碰剪贴板并返回 false; 空切片是
-// "本来就空", 走 clipboardClear)。恢复用比读写更耐心的重试档位: 失败意味着用户
-// 原本的内容丢失, 值得多等一会儿
-func (Clipboard) RestoreSnapshotRaw(snap []typing.ClipboardFormat) bool {
+func (Clipboard) RestoreSnapshot(snap []typing.ClipboardFormat, injected string) bool {
 	if snap == nil {
-		return false // 快照失败, 原状态未知, 不动剪贴板(也没恢复成任何东西)
-	}
-	if len(snap) == 0 {
-		return clipboardClear()
+		return false
 	}
 	if !openClipboardRestoreRetry() {
 		return false
 	}
 	defer procCloseClipboard.Call()
+	holds, known := clipboardHoldsText(injected)
+	if !known {
+		return false
+	}
+	if !holds {
+		return true
+	}
+	return restoreClipboardFormats(snap)
+}
+
+// RestoreSnapshotRaw 无条件写回快照, 调用方须确保期间没有别人改动剪贴板。
+func (Clipboard) RestoreSnapshotRaw(snap []typing.ClipboardFormat) bool {
+	if snap == nil {
+		return false
+	}
+	if !openClipboardRestoreRetry() {
+		return false
+	}
+	defer procCloseClipboard.Call()
+	return restoreClipboardFormats(snap)
+}
+
+// restoreClipboardFormats 只在持有剪贴板期间调用, 回滚前不释放给其他程序。
+func restoreClipboardFormats(snap []typing.ClipboardFormat) bool {
+	if snap == nil {
+		return false
+	}
 	if ret, _, _ := procEmptyClipboard.Call(); ret == 0 {
 		return false
 	}

@@ -12,6 +12,12 @@ const props = defineProps<{
 
 const barClass = computed(() => statusBarClass(props.phase));
 
+// 后端 idle 的 message 是空串；空状态栏没有信息量，这里显示「就绪」占位。
+// 新增文案已登记在 docs/behavior-contract.md，不改 TypingStatus 的任何取值
+const displayMessage = computed(() =>
+  props.phase === 'idle' && props.message === '' ? '就绪' : props.message,
+);
+
 const progressActive = computed(() => progressVisible(props.progress));
 const barWidth = computed(() => progressWidth(props.progress));
 </script>
@@ -21,7 +27,8 @@ const barWidth = computed(() => progressWidth(props.progress));
        避免收起时的进度条仍占据一个 gap 槽 -->
   <div class="status-block">
     <div :class="barClass">
-      <div class="status-text">{{ message }}</div>
+      <span class="status-dot" aria-hidden="true"></span>
+      <div class="status-text">{{ displayMessage }}</div>
     </div>
     <!-- 进度条：运行时平滑长出 -->
     <div class="progress-wrap" :class="{ active: progressActive }">

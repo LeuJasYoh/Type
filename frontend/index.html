@@ -9,8 +9,8 @@
      localStorage 会抛 SecurityError（2026-09 实测），于是正式版每次启动都退回系统
      深浅色；useTheme.ts 只负责切换与写入，不再自己判一遍。 -->
 <script>try{var t=localStorage.getItem('type-theme');if(t==='dark'||(t===null&&matchMedia('(prefers-color-scheme: dark)').matches))document.documentElement.classList.add('dark')}catch(e){if(matchMedia('(prefers-color-scheme: dark)').matches)document.documentElement.classList.add('dark')}</script>
-<!-- favicon：纸底墨字衬线 T，与界面配色一致 -->
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='10' fill='%23f4f0e6'/%3E%3Ctext x='24' y='33' font-family='Georgia,serif' font-size='28' font-weight='600' fill='%23272420' text-anchor='middle'%3ET%3C/text%3E%3C/svg%3E">
+<!-- favicon：深底青字 T，与界面配色一致 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%230f1720'/%3E%3Ctext x='24' y='33' font-family='Segoe UI,sans-serif' font-size='28' font-weight='600' fill='%2338bdf8' text-anchor='middle'%3ET%3C/text%3E%3C/svg%3E">
 </head>
 <body>
 <div id="app"></div>

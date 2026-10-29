@@ -72,13 +72,14 @@ func (f *fakeInjector) clear() {
 // held 是"读回来的内容", 用来模拟用户在注入期间改动剪贴板: text 是
 // 程序写进去的, held 是下次读取时看到的
 type fakeClipboard struct {
-	mu          sync.Mutex
-	text        string
-	held        string
-	setFail     bool
-	restoreFail bool // 恢复失败: 模拟剪贴板被别的程序占着, 原内容就此丢失
-	snapFail    bool // 剪贴板打开失败: 原状态未知
-	incomplete  bool // 有的格式没能照抄下来: 快照不完整, 不该拿去覆盖剪贴板
+	mu             sync.Mutex
+	text           string
+	held           string
+	setFail        bool
+	setPartialFail bool
+	restoreFail    bool // 恢复失败: 模拟剪贴板被别的程序占着, 原内容就此丢失
+	snapFail       bool // 剪贴板打开失败: 原状态未知
+	incomplete     bool // 有的格式没能照抄下来: 快照不完整, 不该拿去覆盖剪贴板
 	// holdsUnreadable: 比对时读不到剪贴板(打开失败/GlobalLock 失败)。它与
 	// "内容被用户改过"是两回事, 处置相反: 前者必须报"没恢复", 后者跳过恢复
 	holdsUnreadable bool
@@ -90,16 +91,20 @@ type fakeClipboard struct {
 // 同值; 业务层只把它当作不透明的格式标识, 不解释内容
 const cfUnicodeText = 13
 
-func (f *fakeClipboard) SetText(text string) bool {
+func (f *fakeClipboard) SetText(text string, snap []ClipboardFormat) (bool, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.events = append(f.events, "set")
 	if f.setFail {
-		return false
+		return false, true
+	}
+	if f.setPartialFail {
+		f.text, f.held = "", ""
+		return false, f.restoreSnapshotLocked(snap)
 	}
 	f.text = text
 	f.held = text // 写进去的内容就是下次读回来的内容, 除非测试另行改动 held
-	return true
+	return true, true
 }
 
 func (f *fakeClipboard) GetText() string {
@@ -108,15 +113,16 @@ func (f *fakeClipboard) GetText() string {
 	return f.text
 }
 
-// HoldsText 第二个返回值模拟"这次比对有没有得出结论": holdsUnreadable 置位时
-// 是读不到剪贴板(known=false), 而不是"内容被用户改过"
-func (f *fakeClipboard) HoldsText(text string) (bool, bool) {
+func (f *fakeClipboard) RestoreSnapshot(snap []ClipboardFormat, injected string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.holdsUnreadable {
-		return false, false
+	if snap == nil || f.holdsUnreadable {
+		return false
 	}
-	return f.held == text, true
+	if f.held != injected {
+		return true
+	}
+	return f.restoreSnapshotLocked(snap)
 }
 
 func (f *fakeClipboard) Snapshot() ClipboardSnapshot {
@@ -141,11 +147,9 @@ func (f *fakeClipboard) Snapshot() ClipboardSnapshot {
 	}
 }
 
-func (f *fakeClipboard) RestoreSnapshotRaw(snap []ClipboardFormat) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+func (f *fakeClipboard) restoreSnapshotLocked(snap []ClipboardFormat) bool {
 	f.events = append(f.events, "restore")
-	if f.restoreFail {
+	if snap == nil || f.restoreFail {
 		return false // 剪贴板被占用: 一个字节都没写回去
 	}
 	if len(snap) == 0 {
@@ -334,11 +338,11 @@ func TestServiceClipboardGuard(t *testing.T) {
 	snap := cb.Snapshot().Formats // 快照内容: 用户原文本
 
 	// 剪贴板仍是注入文本 → 守卫放行, 恢复原内容
-	if !cb.SetText("注入文本") {
+	if written, _ := cb.SetText("注入文本", snap); !written {
 		t.Fatal("SetText 失败")
 	}
 	opsBefore := len(cb.ops())
-	if !svc.restoreClipboardSnapshot(snap, "注入文本") {
+	if !svc.clipboard.RestoreSnapshot(snap, "注入文本") {
 		t.Error("守卫放行且恢复成功时应返回 true")
 	}
 	if got := cb.GetText(); got != "用户原文本" {
@@ -350,11 +354,11 @@ func TestServiceClipboardGuard(t *testing.T) {
 
 	// 用户在注入期间复制了新内容 → 守卫拦截, 不覆盖。剪贴板此刻归用户所有,
 	// 正是想要的结果, 因此不算"未恢复"
-	if !cb.SetText("用户新复制的内容") {
+	if written, _ := cb.SetText("用户新复制的内容", snap); !written {
 		t.Fatal("SetText 失败")
 	}
 	opsBefore = len(cb.ops())
-	if !svc.restoreClipboardSnapshot(snap, "注入文本") {
+	if !svc.clipboard.RestoreSnapshot(snap, "注入文本") {
 		t.Error("用户已接管剪贴板时应返回 true(剪贴板内容没丢)")
 	}
 	if got := cb.GetText(); got != "用户新复制的内容" {
@@ -366,7 +370,7 @@ func TestServiceClipboardGuard(t *testing.T) {
 
 	// 快照失败(nil) → 原状态未知, 不动剪贴板, 且必须报"没恢复"
 	opsBefore = len(cb.ops())
-	if svc.restoreClipboardSnapshot(nil, "用户新复制的内容") {
+	if svc.clipboard.RestoreSnapshot(nil, "用户新复制的内容") {
 		t.Error("快照缺失时无从恢复, 应返回 false")
 	}
 	if got := cb.GetText(); got != "用户新复制的内容" {
@@ -382,7 +386,7 @@ func TestServiceClipboardGuard(t *testing.T) {
 	// 用户刚复制的东西
 	cb.holdsUnreadable = true
 	opsBefore = len(cb.ops())
-	if svc.restoreClipboardSnapshot(snap, "用户新复制的内容") {
+	if svc.clipboard.RestoreSnapshot(snap, "用户新复制的内容") {
 		t.Error("读不到剪贴板时应按未恢复上报(false), 不能当成用户已改动")
 	}
 	if got := cb.GetText(); got != "用户新复制的内容" {
@@ -1305,34 +1309,94 @@ func TestSnapshotOpenFailureFallsBackToTyping(t *testing.T) {
 	}
 }
 
-// 剪贴板写入失败: 恢复未落盘的快照, 报"剪贴板操作失败", 不粘贴
 func TestClipboardSetFailureNoInjection(t *testing.T) {
-	inj := newFakeInjector()
-	cb := &fakeClipboard{text: "原内容", setFail: true}
-	seedSnapshot(cb, "原内容")
-	svc := newTestService(inj, cb, noSleep)
+	cases := []struct {
+		name        string
+		current     string
+		partial     bool
+		restoreFail bool
+		emptySnap   bool
+		wantText    string
+		wantMessage string
+	}{
+		{"未改动", "原内容", false, false, false, "原内容", "剪贴板操作失败"},
+		{"未改动时保留新复制", "用户新复制的内容", false, false, false, "用户新复制的内容", "剪贴板操作失败"},
+		{"未改动时不尝试失败的恢复", "原内容", false, true, false, "原内容", "剪贴板操作失败"},
+		{"清空后写入失败并回滚", "原内容", true, false, false, "原内容", "剪贴板操作失败"},
+		{"清空后回滚失败", "原内容", true, true, false, "", "剪贴板操作失败；剪贴板未恢复，原内容可能已丢失"},
+		{"回滚到空剪贴板", "", true, false, true, "", "剪贴板操作失败"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inj := newFakeInjector()
+			cb := &fakeClipboard{
+				text: tc.current, setFail: !tc.partial,
+				setPartialFail: tc.partial, restoreFail: tc.restoreFail,
+			}
+			seedSnapshot(cb, "原内容")
+			if tc.emptySnap {
+				cb.snap = []ClipboardFormat{}
+			}
+			svc := newTestService(inj, cb, noSleep)
+			if _, err := svc.Start("中文", 1, false, false); err != nil {
+				t.Fatalf("Start 失败: %v", err)
+			}
+			st := waitTerminal(t, svc)
+			if st.Phase != PhaseError || st.Message != tc.wantMessage {
+				t.Fatalf("终态 = %s/%q, want error/%q", st.Phase, st.Message, tc.wantMessage)
+			}
+			if calls := inj.calls(); len(calls) != 0 {
+				t.Errorf("SetText 失败后不应粘贴或改走逐字符, got %v", calls)
+			}
+			wantOps := []string{"snap", "set"}
+			if tc.partial {
+				wantOps = append(wantOps, "restore")
+			}
+			if got := cb.ops(); !reflect.DeepEqual(got, wantOps) {
+				t.Errorf("剪贴板操作序列 = %v, want %v", got, wantOps)
+			}
+			if got := cb.GetText(); got != tc.wantText {
+				t.Errorf("剪贴板文本 = %q, want %q", got, tc.wantText)
+			}
+		})
+	}
+}
 
-	if _, err := svc.Start("中文", 1, false, false); err != nil {
-		t.Fatalf("Start 失败: %v", err)
-	}
-	st := waitTerminal(t, svc)
-	if st.Phase != PhaseError || st.Message != msgClipboardFailed {
-		t.Fatalf("终态 = %s/%q, want error/%q", st.Phase, st.Message, msgClipboardFailed)
-	}
-	if calls := inj.calls(); len(calls) != 0 {
-		t.Errorf("SetText 失败不应粘贴, got %v", calls)
-	}
-	// set 也会被尝试一次(失败), 记录在案才能证明"试过但没成"
-	if got, want := cb.ops(), []string{"snap", "set", "restore"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("剪贴板操作序列 = %v, want %v", got, want)
-	}
-	if got := cb.GetText(); got != "原内容" {
-		t.Errorf("恢复后文本 = %q, want %q", got, "原内容")
+func TestClipboardKeepsNewCopyAfterPaste(t *testing.T) {
+	for _, copied := range []string{"用户新复制的内容", ""} {
+		t.Run(copied, func(t *testing.T) {
+			inj := newFakeInjector()
+			cb := &fakeClipboard{text: "原内容"}
+			inj.onInject = func(event string) {
+				if event == "V" {
+					cb.mu.Lock()
+					cb.text, cb.held = copied, copied
+					cb.mu.Unlock()
+				}
+			}
+			svc := newTestService(inj, cb, noSleep)
+			if _, err := svc.Start("中文", 1, false, false); err != nil {
+				t.Fatal(err)
+			}
+			st := waitTerminal(t, svc)
+			if st.Phase != PhaseSuccess || st.Message != msgDone {
+				t.Fatalf("终态 = %s/%q, want success/%q", st.Phase, st.Message, msgDone)
+			}
+			if got := cb.GetText(); got != copied {
+				t.Errorf("新内容被覆盖: got %q, want %q", got, copied)
+			}
+			if got, want := cb.ops(), []string{"snap", "set"}; !reflect.DeepEqual(got, want) {
+				t.Errorf("用户改动后不应写回快照: got %v, want %v", got, want)
+			}
+			if got, want := inj.calls(), []string{"V"}; !reflect.DeepEqual(got, want) {
+				t.Errorf("注入序列 = %v, want %v", got, want)
+			}
+		})
 	}
 }
 
 // 守卫按原始字节比对: held 变化即视为用户改动, 跳过恢复
-func TestRestoreGuardUsesHoldsText(t *testing.T) {
+func TestRestoreGuardUsesCurrentText(t *testing.T) {
 	// text 是程序写进去的, held 是读回来的: 这里模拟"写进去之后用户又复制了别的"
 	cb := &fakeClipboard{text: "注入文本", held: "用户新复制的内容"}
 	svc := newTestService(newFakeInjector(), cb, noSleep)
@@ -1340,14 +1404,14 @@ func TestRestoreGuardUsesHoldsText(t *testing.T) {
 
 	// 读回来的与注入文本不同 → 拦截
 	opsBefore := len(cb.ops())
-	svc.restoreClipboardSnapshot(snap, "注入文本")
+	svc.clipboard.RestoreSnapshot(snap, "注入文本")
 	if len(cb.ops()) != opsBefore {
 		t.Errorf("held 已变化时不应恢复, 操作数 %d → %d", opsBefore, len(cb.ops()))
 	}
 
 	// 恢复快照后读回来的就是注入文本 → 放行
 	opsBefore = len(cb.ops())
-	svc.restoreClipboardSnapshot(snap, "用户新复制的内容")
+	svc.clipboard.RestoreSnapshot(snap, "用户新复制的内容")
 	if len(cb.ops()) != opsBefore+1 {
 		t.Errorf("held 与参数一致时应恢复, 操作数 %d → %d", opsBefore, len(cb.ops()))
 	}

@@ -5,7 +5,7 @@
 import type { TypingPhase } from '../types';
 
 /**
- * 状态栏的类名: idle 不加相位类(纸面), 其余相位各自一套配色(见 style.css 的
+ * 状态栏的类名: idle 不加相位类(素底), 其余相位各自一套配色(见 style.css 的
  * .status-bar.<phase>)。空串是刻意保留的 —— 它渲染成 class="status-bar ",
  * 与改动前逐字一致
  */

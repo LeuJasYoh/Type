@@ -1,125 +1,89 @@
-/* ═══ 设计 Token：书卷纸感 ═══════════════════════════════
-   纸色(paper)做底、墨色(ink)做字与边、朱砂(seal)做唯一强调色；
-   竹绿(moss)仅用于成功态。标题/品牌字用衬线，数据数字用 tabular-nums。
-   暗色换算律：降亮度保色相——浅色实色晕染 → 暗色同色低透明度。
-   离线工具，不引入任何 web font，衬线落到系统字体栈。 */
+/* ═══ 设计 Token：冷调液态玻璃 ═══════════════════════
+   中性冷底 + 单一青色强调 + 半透明玻璃。浅色在 :root、暗色在 .dark；
+   玻璃只在页面内部（backdrop-filter + 窗口内环境层），不依赖宿主窗口透明，
+   也不引任何 web font。细则见 docs/invariants.md「界面玻璃与主题」。 */
 :root {
-  /* 让浏览器按当前主题画原生部件(滚动条槽、光标、表单默认色): 下面这些
-     token 只管我们自己画的盒子, 画不到 UA 自己那层 */
   color-scheme: light;
-  /* 纸：全部带黄相，越深越像牛皮纸 */
-  --paper-50: #fbf9f4;
-  --paper-100: #f4f0e6;
-  --paper-200: #eae4d4;
-  --paper-300: #dbd2bc;
-  /* 墨：暖黑，ink-800 ≈ 研碎的墨而不是 #000 */
-  --ink-50: #f3f1ea;
-  --ink-100: #e6e2d6;
-  --ink-200: #c9c3b2;
-  --ink-300: #a8a190;
-  --ink-400: #7d7666;
-  --ink-500: #5c564a;
-  --ink-600: #453f35;
-  --ink-700: #332f27;
-  --ink-800: #272420;
-  --ink-900: #1e1b17;
-  --ink-950: #15130f;
-  /* 朱砂：唯一强调色，500/600 实色，50/100 是「盖章留在纸上的晕染」 */
-  --seal-50: #fbf1ec;
-  --seal-100: #f6dfd5;
-  --seal-200: #eebfae;
-  --seal-300: #e29880;
-  --seal-400: #d4705a;
-  --seal-500: #bc4a31;
-  --seal-600: #a53c26;
-  --seal-700: #8a3220;
-  --seal-800: #6f291b;
-  /* 竹绿：只给成功态 */
-  --moss-50: #f1f5ef;
-  --moss-100: #dfe8db;
-  --moss-500: #5c7a5e;
-  --moss-700: #3f5644;
-
-  /* ── 语义层 ── */
-  --bg: var(--paper-100);
-  --surface: var(--paper-50);
-  --surface-hover: var(--ink-50);
-  --border: rgba(201, 195, 178, 0.7);
-  --border-strong: var(--ink-300);
-  --text-title: var(--ink-900);
-  --text-primary: var(--ink-800);
-  --text-secondary: var(--ink-500);
-  --text-muted: var(--ink-400);
-  --accent: var(--seal-600);
-  --accent-hover: var(--seal-700);
-  --accent-soft: var(--seal-50);
-  --accent-text: var(--seal-700);
-  --ring: rgba(188, 74, 49, 0.15);
-  --success-bg: var(--moss-50);
-  --success-border: var(--moss-100);
-  --success-text: var(--moss-700);
-  --error-bg: var(--seal-50);
-  --error-border: var(--seal-200);
-  --error-text: var(--seal-700);
-  /* 运行态(倒计时/键入中)：低饱和灰蓝，与强调色、错误色区分 */
-  --info-bg: #eef1f5;
-  --info-border: #d9e0e8;
-  --info-text: #3f5e7e;
-  --scrollbar: rgba(168, 161, 144, 0.7);
-  --progress-track: rgba(201, 195, 178, 0.7);
-  /* 连影子都是墨色的 */
-  --shadow-card: 0 1px 2px rgba(28, 25, 18, 0.04);
-  --radius: 6px;
-  --radius-sm: 4px;
+  --bg: oklch(96.5% 0.014 250);
+  --surface: oklch(100% 0 0);
+  --surface-2: oklch(96.5% 0.005 250);
+  --border: oklch(91% 0.006 250);
+  --border-strong: oklch(84% 0.01 250);
+  --text-title: oklch(23% 0.015 250);
+  --text-primary: oklch(23% 0.015 250);
+  --text-secondary: oklch(45% 0.01 250);
+  --text-muted: oklch(57% 0.01 250);
+  --accent: oklch(62% 0.13 230);
+  --accent-hover: oklch(56% 0.13 230);
+  --accent-soft: color-mix(in oklab, var(--accent) 9%, transparent);
+  --accent-line: color-mix(in oklab, var(--accent) 28%, transparent);
+  --accent-text: oklch(48% 0.12 230);
+  --accent-fg: oklch(99% 0.003 250);
+  --ring: color-mix(in oklab, var(--accent) 16%, transparent);
+  --success: oklch(55% 0.11 165);
+  --success-text: oklch(42% 0.1 165);
+  --success-soft: color-mix(in oklab, var(--success) 7%, transparent);
+  --success-line: color-mix(in oklab, var(--success) 22%, transparent);
+  --danger: oklch(56% 0.16 25);
+  --danger-text: oklch(46% 0.15 25);
+  --danger-soft: color-mix(in oklab, var(--danger) 6%, transparent);
+  --danger-line: color-mix(in oklab, var(--danger) 24%, transparent);
+  --track: oklch(90% 0.006 250);
+  --scrollbar: oklch(80% 0.01 250);
+  --progress-track: oklch(90% 0.006 250);
+  --glass: color-mix(in oklab, var(--surface) 40%, transparent);
+  --glass-border: color-mix(in oklab, var(--border) 72%, transparent);
+  --glass-highlight: oklch(100% 0 0 / 0.9);
+  --glass-bottom: oklch(20% 0.03 250 / 0.05);
+  --glass-shadow: 0 14px 32px -26px oklch(20% 0.03 250 / 0.45);
+  --radius: 12px;
+  --radius-sm: 5px;
   --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   /* 观感缩放: 窗口内宽 / 540, 夹在 1~1.25, 由 useUiScale 写到根元素上。
-     默认值必须是 1: 没注入时(以及内宽 540 的默认档)与改动前的渲染逐像素一致。
-     只缩放"细节尺寸"——内边距、间距、圆角、控件高度、图标边长; 窗口本身
-     480~720 宽, 固定细节在大窗口里会显单薄, 这是它唯一的用途, 任何布局判据
-     都不许依赖它。永不参与的取值各有理由:
-     · 所有 border-width: 缩放后的小数像素边框会被渲染成深浅不一的虚边;
-     · 所有 font-size: 字号是布局的输入, 跟着缩放会把输入区高度、状态栏高度、
-       字数徽标全部变成联动量;
-     · letter-spacing 与 --transition 时长: 前者与字号同属排版, 后者是时间不是尺寸。
-     只由宽度驱动, 不读 devicePixelRatio —— 同一台显示器上不该出现两种结果 */
+     只缩放数值型细节（内边距、间距、圆角、控件高度、图标边长）；border-width、
+     font-size、letter-spacing 与 transition 时长永不参与——理由与边界见
+     docs/invariants.md「其它不变量」。默认值必须是 1。 */
   --ui-scale: 1;
-  --font-serif:
-    Georgia, 'Palatino Linotype', 'Source Han Serif SC', 'Noto Serif SC', 'Songti SC', STZhongsong,
-    STSong, SimSun, serif;
   --font-sans:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
 }
 
-/* 暗色：墨底纸字，红与绿都降亮度保色相 */
+/* 暗色：中性炭底，青色提亮一档；语义色降饱和，避免与强调色抢 */
 .dark {
   color-scheme: dark;
-  --bg: var(--ink-950);
-  --surface: var(--ink-900);
-  --surface-hover: var(--ink-800);
-  --border: var(--ink-800);
-  --border-strong: var(--ink-600);
-  --text-title: var(--paper-100);
-  --text-primary: var(--ink-100);
-  --text-secondary: var(--ink-300);
-  --text-muted: var(--ink-400);
-  --accent: var(--seal-500);
-  --accent-hover: var(--seal-400);
-  --accent-soft: rgba(188, 74, 49, 0.15);
-  --accent-text: var(--seal-300);
-  --ring: rgba(188, 74, 49, 0.25);
-  --success-bg: rgba(92, 122, 94, 0.2);
-  --success-border: rgba(92, 122, 94, 0.35);
-  --success-text: var(--moss-100);
-  --error-bg: rgba(188, 74, 49, 0.15);
-  --error-border: rgba(188, 74, 49, 0.3);
-  --error-text: var(--seal-300);
-  --info-bg: #22303f;
-  --info-border: #32445a;
-  --info-text: #9cc0e0;
-  --scrollbar: var(--ink-700);
-  --progress-track: var(--ink-800);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --bg: oklch(16.5% 0.008 250);
+  --surface: oklch(20.5% 0.01 250);
+  --surface-2: oklch(24.5% 0.01 250);
+  --border: oklch(29% 0.01 250);
+  --border-strong: oklch(38% 0.014 250);
+  --text-title: oklch(96% 0.004 250);
+  --text-primary: oklch(96% 0.004 250);
+  --text-secondary: oklch(77% 0.008 250);
+  --text-muted: oklch(65% 0.008 250);
+  --accent: oklch(74% 0.13 230);
+  --accent-hover: oklch(79% 0.12 230);
+  --accent-soft: color-mix(in oklab, var(--accent) 10%, transparent);
+  --accent-line: color-mix(in oklab, var(--accent) 30%, transparent);
+  --accent-text: oklch(78% 0.12 230);
+  --accent-fg: oklch(15% 0.015 250);
+  --ring: color-mix(in oklab, var(--accent) 20%, transparent);
+  --success: oklch(70% 0.12 165);
+  --success-text: oklch(80% 0.1 165);
+  --success-soft: color-mix(in oklab, var(--success) 7%, transparent);
+  --success-line: color-mix(in oklab, var(--success) 22%, transparent);
+  --danger: oklch(63% 0.17 25);
+  --danger-text: oklch(76% 0.12 25);
+  --danger-soft: color-mix(in oklab, var(--danger) 6%, transparent);
+  --danger-line: color-mix(in oklab, var(--danger) 24%, transparent);
+  --track: oklch(24.5% 0.01 250);
+  --scrollbar: oklch(35% 0.01 250);
+  --progress-track: oklch(24.5% 0.01 250);
+  --glass: color-mix(in oklab, var(--surface) 40%, transparent);
+  --glass-border: color-mix(in oklab, oklch(100% 0 0) 13%, transparent);
+  --glass-highlight: oklch(100% 0 0 / 0.11);
+  --glass-bottom: oklch(0% 0 0 / 0.16);
+  --glass-shadow: 0 18px 40px -26px oklch(0% 0 0 / 0.85);
 }
 
 /* ── Reset & Base ── */
@@ -135,10 +99,11 @@ body {
   height: 100%;
   overflow: hidden;
 }
-/* Vue 挂载容器: 补齐高度链(html→body→#app)并充当纵向 flex 容器,
-   标题栏占固定 34px, 内容区用 flex:1 吃下剩余高度(窗口高由宿主按显示器
-   算一次, 可能是 480~600, 这里不再写死任何一档) */
+/* Vue 挂载容器: 补齐高度链并充当纵向 flex 容器; 标题栏固定 42px, 内容区吃下
+   剩余高度。窗口高度由宿主按显示器算一次, 这里不写死任何一档 */
 #app {
+  position: relative;
+  isolation: isolate;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -150,8 +115,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 /* 主题切换过渡：切换瞬间挂到 <html>，所有元素颜色同步渐变，
-   避免「只有 body 渐变、其余元素瞬切」造成的不同步刺眼（暗→亮尤其明显）。
-   300ms 后由 useTheme 摘除，不干扰日常交互过渡 */
+   300ms 后由 useTheme 摘除。渐变背景不在过渡范围，属刻意取舍 */
 .theme-fade,
 .theme-fade *,
 .theme-fade *::before,
@@ -164,11 +128,9 @@ body {
     fill 0.25s ease,
     stroke 0.25s ease !important;
 }
-/* 选中文字的「荧光笔」：朱砂 20% 透明 */
 ::selection {
-  background: rgba(188, 74, 49, 0.2);
+  background: color-mix(in oklab, var(--accent) 22%, transparent);
 }
-/* 细墨条滚动条，不用浏览器默认的灰色大块 */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -181,22 +143,85 @@ body {
   background: transparent;
 }
 
-/* ── 标题栏：衬线字标，左上角，操作按钮靠右 ── */
+/* ── 环境层：给玻璃一点可被模糊的东西 ──
+   冷光 + 极淡等高线 + 很慢的漂移；纯页面内实现，不引外部资源，也不改宿主
+   窗口透明度。减动效时只停漂移，光晕本身仍在 */
+.ambient {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.ambient::before {
+  content: '';
+  position: absolute;
+  inset: -14% -14% auto;
+  height: 92%;
+  background:
+    radial-gradient(
+      58% 52% at 26% 28%,
+      color-mix(in oklab, var(--accent) 18%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      48% 44% at 84% 34%,
+      color-mix(in oklab, oklch(70% 0.1 200) 11%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      40% 36% at 58% 10%,
+      color-mix(in oklab, oklch(72% 0.07 280) 9%, transparent),
+      transparent 70%
+    );
+  filter: blur(18px);
+  animation: ambient-drift 26s ease-in-out infinite alternate;
+}
+.ambient svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  color: var(--accent);
+  opacity: 0.38;
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 48%, transparent 78%);
+  mask-image: linear-gradient(180deg, #000 0%, #000 48%, transparent 78%);
+}
+.ambient path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+}
+@keyframes ambient-drift {
+  from {
+    transform: translate3d(-3%, -2%, 0) scale(1);
+  }
+  to {
+    transform: translate3d(3%, 2%, 0) scale(1.08);
+  }
+}
+
+/* ── 标题栏：一条玻璃带；按钮区不能拖窗 ── */
 .window-caption {
   position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: flex-start;
+  flex-shrink: 0;
+  height: 42px;
+  padding: 0 14px 0 18px;
+  background: color-mix(in oklab, var(--surface) 30%, transparent);
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
+  backdrop-filter: blur(22px) saturate(1.25);
+  -webkit-backdrop-filter: blur(22px) saturate(1.25);
   -webkit-app-region: drag;
-  padding: 8px 16px 0 20px;
-  height: 34px;
   user-select: none;
 }
 .caption-title {
-  font-family: var(--font-serif);
   font-size: 14px;
   font-weight: 600;
-  letter-spacing: 0.5px;
+  letter-spacing: -0.2px;
   color: var(--text-title);
 }
 .caption-actions {
@@ -213,48 +238,74 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: calc(24px * var(--ui-scale));
+  width: calc(28px * var(--ui-scale));
+  height: calc(28px * var(--ui-scale));
   padding: 0;
-  border: 1px solid transparent;
-  border-radius: 5px;
+  border: 0;
+  border-radius: calc(8px * var(--ui-scale));
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
   transition: all var(--transition);
 }
 .icon-btn:hover {
-  border-color: var(--border);
-  background: var(--surface-hover);
+  background: color-mix(in oklab, var(--surface) 42%, transparent);
   color: var(--text-secondary);
 }
 .icon-btn:focus-visible,
-.pin-btn:focus-visible {
+.pin-btn:focus-visible,
+.pill-toggle:focus-visible,
+.btn:focus-visible,
+.slider:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: 2px;
+}
+/* ── 置顶：玻璃 chip，激活时青色晕染 ── */
+.pin-btn {
+  display: flex;
+  align-items: center;
+  height: calc(24px * var(--ui-scale));
+  padding: calc(0px * var(--ui-scale)) calc(9px * var(--ui-scale));
+  border: 1px solid var(--glass-border);
+  border-radius: calc(7px * var(--ui-scale));
+  background: color-mix(in oklab, var(--surface) 26%, transparent);
+  backdrop-filter: blur(12px) saturate(1.2);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  line-height: 1;
+  transition: all var(--transition);
+}
+.pin-btn:hover {
+  border-color: var(--accent-line);
+  color: var(--accent-text);
+}
+.pin-btn.active {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent-text);
 }
 
 /* ── 主容器 ──
-   标题栏以下的全部空间都归它(flex:1), 高度不再写死; 内容真放不下时纵向
-   滚动 —— 宁可滚动也不裁字。min-height:0 不可省: flex 项默认 min-height:auto
-   会被内容顶到自然高度, 那样容器不会溢出, 滚动条就永远出不来 */
+   标题栏以下的全部空间都归它; 内容真放不下时纵向滚动。min-height:0 不可省:
+   flex 项默认 min-height:auto 会被内容顶到自然高度, 滚动条就出不来 */
 .app-container {
+  position: relative;
+  z-index: 1;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: calc(12px * var(--ui-scale)) calc(20px * var(--ui-scale));
+  padding: calc(10px * var(--ui-scale)) calc(16px * var(--ui-scale)) calc(14px * var(--ui-scale));
   display: flex;
   flex-direction: column;
   gap: calc(10px * var(--ui-scale));
 }
-/* 输入区块: 与 .input-wrap 一起吃掉窗口多出来的高度 —— 父级不生长的话,
-   子级的 flex:1 长不起来, 余量会全部落到状态块上方的空白里。
-   下限 217px = 标签 16 + gap 6 + .input-wrap 下限 195, 三个数都不参与 --ui-scale
-   (标签高度由 12px 字号定、gap 与 195 写死), 所以它也是常量, 任何缩放档位都不必
-   跟着算。没这条下限时 flex 会把它压到 100 出头, 而里面的输入框有 195 的下限、
-   不会跟着缩, 于是溢出去盖住下面的选项行(实测 576×400 视口压住 5.5px, 越矮压得
-   越多); 溢出的部分又没超出 .app-container, 连滚动条都不出现, 用户只看到选项行
-   没了。兜住下限之后, 真放不下就轮到 .app-container 滚动 ── */
+/* 输入区块吃下窗口多出来的高度。下限 217px = 标签 16 + gap 6 + .input-wrap
+   下限 195，三个数都不参与 --ui-scale（字号与写死的 195 定死了它们），所以
+   任何缩放档位都不必跟着算。没这条下限时 flex 会把它压到 100 出头，输入框
+   溢出去盖住选项行，且不出现滚动条 */
 .section {
   display: flex;
   flex-direction: column;
@@ -264,61 +315,74 @@ body {
 }
 .section-label {
   font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
+  font-weight: 500;
   letter-spacing: 0.2px;
+  color: var(--text-secondary);
 }
 
-/* ── 文本框：边框在包裹层，聚焦 = 朱砂描边 + 光环。
-   高度 195px 是基准与下限(运行态高度, 输入框及其上方 UI 在任何状态下都不位移):
-   窗口高出来的那份由它吃下, 但再矮也不缩到 195 以下 —— 宁可让 .app-container
-   滚动, 也不把输入区压扁 ── */
+/* ── 输入卡片：玻璃主体。高度 195px 是基准与下限（运行态不位移） ── */
 .input-wrap {
   position: relative;
   display: flex;
   flex: 1 1 auto;
   min-height: 195px;
-  border: 1.5px solid var(--border);
+  border: 1px solid var(--glass-border);
   border-radius: calc(var(--radius) * var(--ui-scale));
-  background: var(--surface);
+  background-color: var(--glass);
+  background-image:
+    linear-gradient(135deg, oklch(100% 0 0 / 0.06) 0%, transparent 46%),
+    linear-gradient(300deg, oklch(70% 0.09 300 / 0.07) 0%, transparent 48%),
+    radial-gradient(
+      120% 100% at 10% 0%,
+      color-mix(in oklab, var(--accent) 7%, transparent),
+      transparent 60%
+    );
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    inset 0 -1px 0 var(--glass-bottom),
+    var(--glass-shadow);
   transition:
     border-color var(--transition),
     box-shadow var(--transition);
 }
 .input-wrap:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--ring);
+  border-color: color-mix(in oklab, var(--accent) 62%, transparent);
+  box-shadow:
+    0 0 0 3px var(--ring),
+    inset 0 1px 0 var(--glass-highlight),
+    var(--glass-shadow);
 }
 .text-input {
   width: 100%;
   flex: 1;
-  /* 底部留出字数徽标的高度: 徽标绝对定位在输入框右下角, 不留白的话正文最后
-     一行会从它底下穿过去(徽标带底色, 压住的那段字看不见)。30px = 徽标自身
-     约 17px + 底距 6px + 余量, 24px 时最后一行仍会被压住 */
+  /* 底部留出字数徽标的高度: 徽标绝对定位在右下角, 不留白的话正文最后一行
+     会从它底下穿过去。30px = 徽标约 17px + 底距 6px + 余量 */
   padding: 10px 12px 30px;
   border: none;
-  border-radius: var(--radius);
+  border-radius: calc(var(--radius) * var(--ui-scale));
   background: transparent;
   font: inherit;
   font-size: 14px;
   line-height: 1.6;
   color: var(--text-primary);
+  caret-color: var(--accent);
   resize: none;
   outline: none;
 }
 .text-input::placeholder {
-  color: var(--ink-300);
-}
-.dark .text-input::placeholder {
-  color: var(--ink-500);
+  color: var(--text-muted);
 }
 .char-count {
   position: absolute;
-  right: 8px;
-  bottom: 6px;
-  padding: 0 4px;
-  border-radius: var(--radius-sm);
-  background: var(--surface);
+  right: 9px;
+  bottom: 7px;
+  padding: 1px 6px;
+  border-radius: calc(var(--radius-sm) * var(--ui-scale));
+  background: color-mix(in oklab, var(--surface) 55%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   font-size: 11px;
   color: var(--text-muted);
   pointer-events: none;
@@ -330,21 +394,23 @@ body {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: calc(10px * var(--ui-scale));
 }
-/* 药丸切换（绕过粘贴检测 / 文本直投）：未选中墨边素底，选中朱砂晕染 + 状态点 */
+/* 药丸开关：玻璃底 + 状态点；选中时青色晕染 */
 .pill-toggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: calc(26px * var(--ui-scale));
-  padding: 0 calc(12px * var(--ui-scale));
-  border: 1px solid var(--border);
+  height: calc(28px * var(--ui-scale));
+  padding: 0 calc(11px * var(--ui-scale));
+  border: 1px solid var(--glass-border);
   border-radius: 9999px;
-  background: var(--surface);
+  background: color-mix(in oklab, var(--surface) 24%, transparent);
+  backdrop-filter: blur(14px) saturate(1.25);
+  -webkit-backdrop-filter: blur(14px) saturate(1.25);
   color: var(--text-secondary);
   font: inherit;
-  font-size: 12px;
+  font-size: 11.5px;
   cursor: pointer;
   user-select: none;
   flex-shrink: 0;
@@ -354,154 +420,242 @@ body {
   border-color: var(--border-strong);
   color: var(--text-primary);
 }
-.pill-toggle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
 .pill-toggle.on {
-  border-color: var(--seal-200);
+  border-color: var(--accent-line);
   background: var(--accent-soft);
   color: var(--accent-text);
-}
-.dark .pill-toggle.on {
-  border-color: rgba(188, 74, 49, 0.35);
 }
 .pill-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--ink-300);
-  transition: background-color var(--transition);
-}
-.dark .pill-dot {
-  background: var(--ink-500);
+  background: var(--text-muted);
+  transition:
+    background-color var(--transition),
+    box-shadow var(--transition);
 }
 .pill-toggle.on .pill-dot {
-  background: var(--seal-500);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 16%, transparent);
 }
 .delay-slider-row {
   display: flex;
   align-items: center;
-  gap: calc(12px * var(--ui-scale));
+  gap: calc(10px * var(--ui-scale));
   flex: 1;
 }
 .slider-label {
   font-size: 12px;
   color: var(--text-secondary);
-  font-weight: 600;
+  font-weight: 500;
   flex-shrink: 0;
 }
+/* 填充比例由 App.vue 的 --p 绑定给出（1→0%，9→100%） */
 .slider {
   flex: 1;
-  -webkit-appearance: none;
   appearance: none;
+  -webkit-appearance: none;
   height: 4px;
   border-radius: 2px;
-  background: var(--progress-track);
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--p, 50%),
+    var(--track) var(--p, 50%) 100%
+  );
   outline: none;
 }
 .slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
   appearance: none;
-  width: 18px;
-  height: 18px;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  border: 0;
   border-radius: 50%;
   background: var(--accent);
-  cursor: pointer;
-  box-shadow: 0 1px 4px rgba(188, 74, 49, 0.3);
+  box-shadow:
+    inset 0 1px 0 oklch(100% 0 0 / 0.35),
+    0 0 0 4px var(--bg),
+    0 0 0 5px var(--accent-line),
+    0 2px 8px oklch(0% 0 0 / 0.35);
   transition: transform var(--transition);
 }
 .slider::-webkit-slider-thumb:hover {
-  transform: scale(1.15);
+  transform: scale(1.12);
 }
 .slider:active::-webkit-slider-thumb {
-  transform: scale(0.95);
+  transform: scale(0.96);
+}
+.slider::-moz-range-thumb {
+  width: 15px;
+  height: 15px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow:
+    inset 0 1px 0 oklch(100% 0 0 / 0.35),
+    0 0 0 4px var(--bg),
+    0 0 0 5px var(--accent-line);
 }
 .delay-value {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--accent-text);
+  color: var(--text-primary);
   min-width: 42px;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
-/* ── 按钮 ── */
+/* ── 按钮行 ── */
 .actions-row {
   display: flex;
-  gap: 10px;
-  margin-top: 4px;
+  gap: calc(10px * var(--ui-scale));
+  flex-shrink: 0;
 }
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  height: calc(36px * var(--ui-scale));
-  padding: 0 calc(20px * var(--ui-scale));
+  gap: calc(7px * var(--ui-scale));
+  height: calc(38px * var(--ui-scale));
+  padding: 0 calc(18px * var(--ui-scale));
   border: none;
-  border-radius: calc(var(--radius) * var(--ui-scale));
+  border-radius: calc(10px * var(--ui-scale));
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   transition: all var(--transition);
   user-select: none;
 }
 .btn:disabled {
-  opacity: 0.45;
   cursor: not-allowed;
-}
-.btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 .btn svg {
   flex-shrink: 0;
 }
-/* 主操作：印章盖在纸上 */
+/* 主操作：青底深字 + 顶部高光；禁用时退成淡青玻璃，不再是灰块 */
 .btn-primary {
-  background: var(--accent);
-  color: var(--paper-50);
-  box-shadow: var(--shadow-card);
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--accent) 80%, oklch(100% 0 0)) 0%,
+    var(--accent) 55%,
+    color-mix(in oklab, var(--accent) 92%, oklch(0% 0 0)) 100%
+  );
+  color: var(--accent-fg);
+  box-shadow:
+    inset 0 1px 0 oklch(100% 0 0 / 0.28),
+    0 12px 28px -14px color-mix(in oklab, var(--accent) 70%, transparent);
 }
 .btn-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  filter: brightness(1.05);
 }
 .btn-primary:active:not(:disabled) {
-  transform: scale(0.98);
+  transform: scale(0.985);
   box-shadow: none;
 }
-/* 次操作：纸白底 + 墨边框，不抢戏 */
+.btn-primary:disabled {
+  background: color-mix(in oklab, var(--accent) 9%, var(--glass));
+  border: 1px solid color-mix(in oklab, var(--accent) 20%, transparent);
+  color: color-mix(in oklab, var(--accent-text) 50%, var(--text-muted));
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+/* 次操作：玻璃描边，不抢主操作 */
 .btn-secondary {
-  background: var(--surface);
+  border: 1px solid var(--glass-border);
+  background: color-mix(in oklab, var(--surface) 24%, transparent);
+  backdrop-filter: blur(14px) saturate(1.25);
+  -webkit-backdrop-filter: blur(14px) saturate(1.25);
   color: var(--text-secondary);
-  border: 1px solid var(--border);
 }
 .btn-secondary:hover:not(:disabled) {
   border-color: var(--border-strong);
+  background: color-mix(in oklab, var(--surface) 46%, transparent);
   color: var(--text-primary);
 }
 .btn-secondary:active:not(:disabled) {
-  transform: scale(0.98);
+  transform: scale(0.985);
+}
+.btn-secondary:disabled {
+  opacity: 0.45;
 }
 
-/* ── 状态栏：idle=纸面 success=竹绿 error=朱砂系 运行态=灰蓝 cancel=墨灰 ──
-   高度**写死**为一行(8px 内边距 + 13px 字号 × 1.5 行高 + 2px 边框 = 37.5px,
-   line-height 是 1.5 这个无单位值, 会随字号解析, 所以这里必须跟着写 1.5)。
-   为什么不让它自然撑高: 文案一旦折行, 状态块就变高, 上面的输入框跟着矮一截 ——
-   与进度条曾经的显隐位移是同一类毛病。实测官方尺寸(540~648 宽)下最长的那条
-   终态文案占一行、宽 446px, 可用 470px, 折行要到 ≤496 宽才出现。真遇到超长文案
-   时按省略号截断: 宁可少看几个字, 也不要整个界面跟着动一下 */
+/* ── 目标窗口：运行态才出现，中性玻璃行 + 青色圆点 ── */
+.target-row {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: calc(4px * var(--ui-scale)) calc(10px * var(--ui-scale));
+  border: 1px solid var(--glass-border);
+  border-radius: calc(8px * var(--ui-scale));
+  background: var(--glass);
+  backdrop-filter: blur(16px) saturate(1.3);
+  -webkit-backdrop-filter: blur(16px) saturate(1.3);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+  font-size: 12px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.target-row::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.target-row.active {
+  display: flex;
+  animation: target-in 0.2s ease both;
+}
+@keyframes target-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.target-label {
+  color: var(--accent-text);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.target-name {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 状态栏：圆点 + 语义底色；高度写死一行 ──
+   8px 内边距 ×2 + 13px × 1.5 行高 + 2px 边框 = 37.5px。不让它自然撑高：
+   文案一旦折行，状态块变高，上面的输入框就跟着矮一截。超长文案按省略号
+   截断，宁可少看几个字，也不要整个界面跟着动一下 */
 .status-bar {
   display: flex;
   align-items: center;
+  gap: 8px;
   height: calc(13px * 1.5 + 16px + 2px);
-  padding: 8px 14px;
-  background: var(--surface);
-  border-radius: calc(var(--radius) * var(--ui-scale));
-  border: 1px solid var(--border);
+  padding: 8px 12px;
+  background: var(--glass);
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  border-radius: calc(10px * var(--ui-scale));
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
   overflow: hidden;
+}
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+  transition:
+    background-color var(--transition),
+    box-shadow var(--transition);
 }
 .status-text {
   min-width: 0;
@@ -512,63 +666,81 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* 运行态（倒计时/键入中）共用一套青色；phase 枚举里没有 info，别再加回 */
+.status-bar.countdown,
+.status-bar.typing {
+  border-color: color-mix(in oklab, var(--accent) 20%, transparent);
+  background: color-mix(in oklab, var(--accent) 6%, var(--glass));
+}
+.status-bar.countdown .status-dot,
+.status-bar.typing .status-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 16%, transparent);
+}
+.status-bar.typing .status-dot {
+  animation: dot-pulse 1.8s ease-in-out infinite;
+}
+.status-bar.countdown .status-text,
+.status-bar.typing .status-text {
+  color: var(--text-primary);
+}
+@keyframes dot-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 16%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in oklab, var(--accent) 7%, transparent);
+  }
+}
 .status-bar.success {
-  border-color: var(--success-border);
-  background: var(--success-bg);
+  border-color: var(--success-line);
+  background: color-mix(in oklab, var(--success) 7%, var(--glass));
+}
+.status-bar.success .status-dot {
+  background: var(--success);
 }
 .status-bar.success .status-text {
   color: var(--success-text);
 }
 .status-bar.error {
-  border-color: var(--error-border);
-  background: var(--error-bg);
+  border-color: var(--danger-line);
+  background: color-mix(in oklab, var(--danger) 6%, var(--glass));
+}
+.status-bar.error .status-dot {
+  background: var(--danger);
 }
 .status-bar.error .status-text {
-  color: var(--error-text);
-}
-/* 运行态(倒计时/键入中)共用一套灰蓝。phase 枚举里没有 info, 别再加回 .status-bar.info */
-.status-bar.countdown,
-.status-bar.typing {
-  border-color: var(--info-border);
-  background: var(--info-bg);
-}
-.status-bar.countdown .status-text,
-.status-bar.typing .status-text {
-  color: var(--info-text);
+  color: var(--danger-text);
 }
 .status-bar.cancel {
-  border-color: var(--border);
-  background: var(--surface-hover);
+  border-color: var(--glass-border);
+  background: color-mix(in oklab, var(--surface) 42%, transparent);
 }
 .status-bar.cancel .status-text {
   color: var(--text-secondary);
 }
 
-/* ── 状态块：状态栏 + 进度条整体。margin-top:auto 把它推到内容区底部,
-   窗口比内容高时多余空间留在按钮行与状态块之间, 状态块始终贴底;
-   状态栏高度写死为一行(见上), 状态块整体高度因此恒定 ── */
+/* ── 状态块：状态栏 + 进度条整体。margin-top:auto 把它推到内容区底部，
+   窗口比内容高时多余空间留在按钮行与状态块之间 ── */
 .status-block {
   display: flex;
   flex-direction: column;
   margin-top: auto;
 }
-/* 选项行、按钮行、状态块一律不参与压缩: 视口比设计矮时, 该让位的是滚动条而不是
-   控件 —— 被压扁的行会被上面溢出的输入框盖住(见 .section 的下限)。
-   官方尺寸(540~648 宽、480~540 高)下余量由输入框吃下, 这三条不触发 ── */
+/* 选项行、按钮行、状态块一律不参与压缩: 视口比设计矮时，该让位的是滚动条
+   而不是控件 */
 .options-row,
 .actions-row,
 .status-block {
   flex-shrink: 0;
 }
-/* ── 进度条：轨道在空闲时**自己就是透明的**，填充朱砂 ──
-   显隐四道一起变: height(0↔10px, 保留"挤一下"的上下移动 + 让下方元素让位)、
-   opacity(淡入淡出)、visibility(hidden↔visible)、以及 track 自己的 background
-   (transparent↔轨道色)。
-   为什么连 track 的底色都要动: 真机抓图实测, 只写 .progress-wrap 的 opacity: 0 时,
-   客户区底部**仍然被画出一条 5 物理像素高的灰线**, 颜色正是 --progress-track, 而 DOM 里
-   computed opacity 明明是 0 —— 让某样东西看不见时, 不要假设不透明度等于"不渲染",
-   要让它自己也没有可画的东西。
-   注意 overflow: hidden 只用于收起过程(高度 0 时裁掉子元素) */
+/* ── 进度条：轨道空闲时自己就是透明的，填充青色 ──
+   显隐四道一起变: height(0↔10px)、opacity、visibility，以及 track 自己的
+   background(transparent↔轨道色)。为什么连 track 的底色都要动: 真机抓图实测，
+   只写 .progress-wrap 的 opacity: 0 时，客户区底部**仍然被画出一条 5 物理像素
+   高的灰线**，颜色正是轨道色，而 computed opacity 明明是 0 —— 让某样东西看不见
+   时，不要假设不透明度等于"不渲染"，要让它自己也没有可画的东西 */
 .progress-wrap {
   height: 0;
   opacity: 0;
@@ -598,68 +770,21 @@ body {
   transition: background-color var(--transition);
 }
 .progress-wrap.active .progress-track {
-  background: var(--progress-track);
+  background: color-mix(in oklab, var(--progress-track) 55%, transparent);
 }
-/* 宽度仍走 transition(它是纯填充矩形, 不影响任何兄弟元素的位置);
-   进度不再是"0 → 100 拉长", 而是随 progress 值一格一格长 */
 .progress-fill {
   height: 100%;
   background: var(--accent);
   border-radius: 2px;
+  box-shadow: 0 0 10px color-mix(in oklab, var(--accent) 45%, transparent);
   transition: width var(--transition);
 }
 
-/* ── 目标窗口预览：运行时动态出现(display 切换),
-   在按钮行与底部状态块之间的弹性空间里出入场 ── */
-.target-row {
-  display: none;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 14px;
-  background: var(--accent-soft);
-  border-radius: calc(var(--radius) * var(--ui-scale));
-  font-size: 12px;
-}
-.target-row.active {
-  display: flex;
-}
-.target-label {
-  color: var(--accent-text);
-  font-weight: 600;
-  flex-shrink: 0;
-}
-.target-name {
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* ── 置顶按钮：激活 = 朱砂实色 ── */
-.pin-btn {
-  display: flex;
-  align-items: center;
-  padding: calc(3px * var(--ui-scale)) calc(10px * var(--ui-scale));
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--bg);
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 11px;
-  font-family: inherit;
-  transition: all var(--transition);
-}
-.pin-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent-text);
-  background: var(--accent-soft);
-}
-.pin-btn.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--paper-50);
-}
-.pin-btn.active:hover {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
+/* ── 减动效：只停装饰性动画，不改变任何布局 ── */
+@media (prefers-reduced-motion: reduce) {
+  .ambient::before,
+  .status-bar.typing .status-dot,
+  .target-row.active {
+    animation: none;
+  }
 }

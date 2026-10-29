@@ -12,6 +12,10 @@ import (
 	"github.com/LeuJasYoh/type/internal/typing"
 )
 
+type procCaller interface {
+	Call(...uintptr) (uintptr, uintptr, error)
+}
+
 var (
 	user32   = syscall.NewLazyDLL("user32.dll")
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
@@ -22,14 +26,14 @@ var (
 	procSendInput                = user32.NewProc("SendInput")
 	procSendMessageTimeoutW      = user32.NewProc("SendMessageTimeoutW")
 	procPostMessageW             = user32.NewProc("PostMessageW")
-	procOpenClipboard            = user32.NewProc("OpenClipboard")
-	procCloseClipboard           = user32.NewProc("CloseClipboard")
-	procEmptyClipboard           = user32.NewProc("EmptyClipboard")
-	procSetClipboardData         = user32.NewProc("SetClipboardData")
-	procGetClipboardData         = user32.NewProc("GetClipboardData")
+	procOpenClipboard            = procCaller(user32.NewProc("OpenClipboard"))
+	procCloseClipboard           = procCaller(user32.NewProc("CloseClipboard"))
+	procEmptyClipboard           = procCaller(user32.NewProc("EmptyClipboard"))
+	procSetClipboardData         = procCaller(user32.NewProc("SetClipboardData"))
+	procGetClipboardData         = procCaller(user32.NewProc("GetClipboardData"))
 	procEnumClipboardFormats     = user32.NewProc("EnumClipboardFormats")
-	procGlobalAlloc              = kernel32.NewProc("GlobalAlloc")
-	procGlobalLock               = kernel32.NewProc("GlobalLock")
+	procGlobalAlloc              = procCaller(kernel32.NewProc("GlobalAlloc"))
+	procGlobalLock               = procCaller(kernel32.NewProc("GlobalLock"))
 	procGlobalUnlock             = kernel32.NewProc("GlobalUnlock")
 	procGlobalSize               = kernel32.NewProc("GlobalSize")
 	procRtlMoveMemory            = kernel32.NewProc("RtlMoveMemory")
@@ -53,7 +57,7 @@ var (
 	// 客户区会差十几个物理像素(客户区同时决定 WebView2 的渲染表面大小)
 	procAdjustWindowRectExForDpi = user32.NewProc("AdjustWindowRectExForDpi")
 	procGetWindowLongPtrW        = user32.NewProc("GetWindowLongPtrW")
-	procGlobalFree               = kernel32.NewProc("GlobalFree")
+	procGlobalFree               = procCaller(kernel32.NewProc("GlobalFree"))
 	procRegisterClipboardFormatW = user32.NewProc("RegisterClipboardFormatW")
 	procSetWindowPos             = user32.NewProc("SetWindowPos")
 	procSetClassLongPtrW         = user32.NewProc("SetClassLongPtrW")

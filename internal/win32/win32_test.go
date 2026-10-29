@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -26,7 +27,7 @@ import (
 // 前提不成立时**本机**跳过并写明读到了什么, 不改断言放水; **CI 里一律红** —— runner
 // 是干净环境, 那里的"剪贴板不可用"要么是真回归(这两条是全仓唯一真实的剪贴板读写
 // 往返), 要么是环境真坏了, 两种都该让人看见, 不能被一个 SKIP 掩盖过去
-func clipboardExclusive(t *testing.T, cb Clipboard, why string) {
+func clipboardExclusive(t *testing.T, cb Clipboard, snap []typing.ClipboardFormat, why string) {
 	t.Helper()
 	const probe = "Type::ClipboardProbe"
 	deadline := time.Now().Add(2 * time.Second)
@@ -39,7 +40,7 @@ func clipboardExclusive(t *testing.T, cb Clipboard, why string) {
 			probe, got, why)
 	}
 	for attempt := 1; ; attempt++ {
-		if cb.SetText(probe) {
+		if written, _ := cb.SetText(probe, snap); written {
 			if got := cb.GetText(); got == probe {
 				return // 前提成立
 			} else if attempt >= 3 || time.Now().After(deadline) {
@@ -94,8 +95,6 @@ func TestUtf16Units(t *testing.T) {
 
 // TestClipboardSnapshotRoundtrip 验证快照/恢复保留全部格式(文本 + 注册格式),
 // 使用真实系统剪贴板: 先保存原状态, 测试结束还原。
-// 恢复守卫(剪贴板被用户改动时跳过恢复)属于业务层判断, 用例在 internal/typing
-// (fake 剪贴板); 这里只验证真剪贴板的快照与写回本身
 func TestClipboardSnapshotRoundtrip(t *testing.T) {
 	cb := Clipboard{}
 	orig := cb.Snapshot()
@@ -103,9 +102,9 @@ func TestClipboardSnapshotRoundtrip(t *testing.T) {
 		skipOrFailInCI(t, "剪贴板被占用或读不全, 无法保存原始状态")
 	}
 	defer cb.RestoreSnapshotRaw(orig.Formats)
-	clipboardExclusive(t, cb, "快照/恢复往返")
+	clipboardExclusive(t, cb, orig.Formats, "快照/恢复往返")
 
-	if !cb.SetText("快照测试文本") {
+	if written, _ := cb.SetText("快照测试文本", orig.Formats); !written {
 		t.Fatal("SetText 失败")
 	}
 	name, _ := syscall.UTF16PtrFromString("Type::UnitTest")
@@ -117,8 +116,12 @@ func TestClipboardSnapshotRoundtrip(t *testing.T) {
 	if !openClipboardWithRetry() {
 		t.Fatal("打开剪贴板失败")
 	}
-	writeClipboardFormats([]typing.ClipboardFormat{{Fmt: uint32(reg), Data: marker}})
+	written := writeClipboardFormats([]typing.ClipboardFormat{{Fmt: uint32(reg), Data: marker}})
+	markerReadback, markerOK := readClipboardFormat(uint32(reg))
 	procCloseClipboard.Call()
+	if !written || !markerOK || !bytes.Equal(markerReadback, marker) {
+		t.Fatalf("注册格式写入或读回失败: written=%v readable=%v", written, markerOK)
+	}
 
 	snap := cb.Snapshot()
 	if snap.UnsafeToRestore() {
@@ -140,13 +143,15 @@ func TestClipboardSnapshotRoundtrip(t *testing.T) {
 	}
 
 	// 覆盖破坏后恢复
-	if !cb.SetText("覆盖后的内容") {
+	if written, _ := cb.SetText("覆盖后的内容", snap.Formats); !written {
 		t.Fatal("覆盖剪贴板失败")
 	}
-	restored := cb.RestoreSnapshotRaw(snap.Formats)
+	if !cb.RestoreSnapshot(snap.Formats, "覆盖后的内容") {
+		t.Fatal("RestoreSnapshot 失败")
+	}
 
 	if got := cb.GetText(); got != "快照测试文本" {
-		t.Errorf("恢复后文本 = %q, want %q (RestoreSnapshotRaw 返回 %v)", got, "快照测试文本", restored)
+		t.Errorf("恢复后文本 = %q, want %q", got, "快照测试文本")
 	}
 	if !openClipboardWithRetry() {
 		t.Fatal("打开剪贴板失败")
@@ -183,8 +188,7 @@ func TestEncodedText(t *testing.T) {
 	}
 }
 
-// TestClipboardHoldsTextNul 内嵌 NUL 的文本必须被 holdsText 精确识别。
-// 旧实现用 GetText 的字符串比较, 会在 NUL 处截断而误判为"用户已改动", 跳过恢复
+// TestClipboardHoldsTextNul 旧实现用 GetText 的字符串比较, 会在 NUL 处截断而误判。
 func TestClipboardHoldsTextNul(t *testing.T) {
 	cb := Clipboard{}
 	orig := cb.Snapshot()
@@ -192,17 +196,456 @@ func TestClipboardHoldsTextNul(t *testing.T) {
 		skipOrFailInCI(t, "剪贴板被占用或读不全, 无法保存原始状态")
 	}
 	defer cb.RestoreSnapshotRaw(orig.Formats)
-	clipboardExclusive(t, cb, "内嵌 NUL 的 holdsText 比对")
+	clipboardExclusive(t, cb, orig.Formats, "内嵌 NUL 的恢复守卫")
 
 	const text = "A\x00B"
-	if !cb.SetText(text) {
+	const restored = "恢复后的内容"
+	snap := []typing.ClipboardFormat{{Fmt: cfUnicodeText, Data: encodedText(restored)}}
+	if written, _ := cb.SetText(text, orig.Formats); !written {
 		t.Fatal("SetText 失败")
 	}
-	if holds, known := cb.HoldsText(text); !known || !holds {
-		t.Errorf("HoldsText(%q) = (holds=%v, known=%v), 内嵌 NUL 被误判为用户改动", text, holds, known)
+	if !cb.RestoreSnapshot(snap, "A") {
+		t.Fatal("非完整前缀应跳过恢复并返回 true")
 	}
-	if holds, _ := cb.HoldsText("A"); holds {
-		t.Error(`HoldsText("A") 的 holds = true: 截断后的比较不应通过`)
+	if !openClipboardWithRetry() {
+		t.Fatal("打开剪贴板失败")
+	}
+	got, ok := readClipboardFormat(cfUnicodeText)
+	procCloseClipboard.Call()
+	if !ok || !bytes.Equal(got, encodedText(text)) {
+		t.Fatalf("非完整前缀触发了恢复: ok=%v got=% x", ok, got)
+	}
+	if !cb.RestoreSnapshot(snap, text) {
+		t.Fatal("完整 NUL 文本应允许恢复")
+	}
+	if got := cb.GetText(); got != restored {
+		t.Errorf("恢复后文本 = %q, want %q", got, restored)
+	}
+}
+
+type clipboardProcFunc func(...uintptr) uintptr
+
+func (f clipboardProcFunc) Call(args ...uintptr) (uintptr, uintptr, error) {
+	return f(args...), 0, syscall.Errno(0)
+}
+
+type clipboardFaults struct {
+	open, empty, alloc, lock int
+	set                      []int
+}
+
+type clipboardTransaction struct {
+	opened  bool
+	calls   []string
+	formats map[uint32]uintptr
+	memory  map[uintptr]bool
+	lock    procCaller
+}
+
+func newClipboardTransaction(t *testing.T, current, afterClose []typing.ClipboardFormat, fail clipboardFaults) *clipboardTransaction {
+	t.Helper()
+	oldOpen, oldClose, oldEmpty := procOpenClipboard, procCloseClipboard, procEmptyClipboard
+	oldSet, oldGet := procSetClipboardData, procGetClipboardData
+	oldAlloc, oldLock, oldFree := procGlobalAlloc, procGlobalLock, procGlobalFree
+	s := &clipboardTransaction{memory: make(map[uintptr]bool), lock: oldLock}
+	t.Cleanup(func() {
+		procOpenClipboard, procCloseClipboard, procEmptyClipboard = oldOpen, oldClose, oldEmpty
+		procSetClipboardData, procGetClipboardData = oldSet, oldGet
+		procGlobalAlloc, procGlobalLock, procGlobalFree = oldAlloc, oldLock, oldFree
+		if s.opened {
+			t.Error("剪贴板未关闭")
+		}
+		for h, systemOwned := range s.memory {
+			if !systemOwned {
+				t.Errorf("调用方内存泄漏: %#x", h)
+			}
+			if ret, _, err := oldFree.Call(h); ret != 0 {
+				t.Errorf("清理内存 %#x 失败: %v", h, err)
+			}
+		}
+	})
+	seed := func(formats []typing.ClipboardFormat) map[uint32]uintptr {
+		out := make(map[uint32]uintptr)
+		for _, cf := range formats {
+			var h uintptr
+			if len(cf.Data) == 0 {
+				h, _, _ = oldAlloc.Call(ghnd, 0)
+			} else {
+				h = prepareClipboardData(cf.Data)
+			}
+			if h == 0 {
+				t.Fatal("构造模拟剪贴板内存失败")
+			}
+			out[cf.Fmt], s.memory[h] = h, true
+		}
+		return out
+	}
+	s.formats = seed(current)
+	var next map[uint32]uintptr
+	if afterClose != nil {
+		next = seed(afterClose)
+	}
+	clearFormats := func() {
+		for format, h := range s.formats {
+			if ret, _, err := oldFree.Call(h); ret != 0 {
+				t.Fatalf("模拟系统释放内存 %#x 失败: %v", h, err)
+			}
+			delete(s.memory, h)
+			delete(s.formats, format)
+		}
+	}
+	requireOpen := func(name string) {
+		t.Helper()
+		s.calls = append(s.calls, name)
+		if !s.opened {
+			t.Fatalf("%s 在剪贴板未打开时调用", name)
+		}
+	}
+	var opens, empties, sets, allocs, locks int
+	procOpenClipboard = clipboardProcFunc(func(...uintptr) uintptr {
+		s.calls = append(s.calls, "open")
+		if s.opened {
+			t.Fatal("剪贴板重复打开")
+		}
+		opens++
+		if opens <= fail.open {
+			return 0
+		}
+		s.opened = true
+		return 1
+	})
+	procCloseClipboard = clipboardProcFunc(func(...uintptr) uintptr {
+		requireOpen("close")
+		s.opened = false
+		if next != nil {
+			clearFormats()
+			s.formats, next = next, nil
+		}
+		return 1
+	})
+	procEmptyClipboard = clipboardProcFunc(func(...uintptr) uintptr {
+		requireOpen("empty")
+		empties++
+		if empties == fail.empty {
+			return 0
+		}
+		clearFormats()
+		return 1
+	})
+	procSetClipboardData = clipboardProcFunc(func(args ...uintptr) uintptr {
+		requireOpen("set")
+		format, h := uint32(args[0]), args[1]
+		if systemOwned, live := s.memory[h]; !live || systemOwned {
+			t.Fatalf("SetClipboardData 未收到调用方持有的内存: %#x", h)
+		}
+		sets++
+		for _, n := range fail.set {
+			if sets == n {
+				return 0
+			}
+		}
+		if s.formats[format] != 0 {
+			t.Fatalf("格式 %#x 未先清空", format)
+		}
+		s.formats[format], s.memory[h] = h, true
+		return h
+	})
+	procGetClipboardData = clipboardProcFunc(func(args ...uintptr) uintptr {
+		requireOpen("get")
+		return s.formats[uint32(args[0])]
+	})
+	procGlobalAlloc = clipboardProcFunc(func(args ...uintptr) uintptr {
+		s.calls = append(s.calls, "alloc")
+		allocs++
+		if allocs == fail.alloc {
+			return 0
+		}
+		h, _, err := oldAlloc.Call(args...)
+		if h == 0 {
+			t.Fatalf("GlobalAlloc 失败: %v", err)
+		}
+		s.memory[h] = false
+		return h
+	})
+	procGlobalLock = clipboardProcFunc(func(args ...uintptr) uintptr {
+		s.calls = append(s.calls, "lock")
+		locks++
+		if locks == fail.lock {
+			return 0
+		}
+		ptr, _, err := oldLock.Call(args...)
+		if ptr == 0 {
+			t.Fatalf("GlobalLock 失败: %v", err)
+		}
+		return ptr
+	})
+	procGlobalFree = clipboardProcFunc(func(args ...uintptr) uintptr {
+		s.calls = append(s.calls, "free")
+		h := args[0]
+		if systemOwned, live := s.memory[h]; !live || systemOwned {
+			t.Fatalf("释放了系统持有或已释放的内存: %#x", h)
+		}
+		ret, _, err := oldFree.Call(args...)
+		if ret != 0 {
+			t.Fatalf("GlobalFree 失败: %v", err)
+		}
+		delete(s.memory, h)
+		return ret
+	})
+	return s
+}
+
+func (s *clipboardTransaction) check(t *testing.T, want []typing.ClipboardFormat, calls string) {
+	t.Helper()
+	if got := strings.Join(s.calls, " "); got != calls {
+		t.Errorf("调用顺序 = %q, want %q", got, calls)
+	}
+	if len(s.formats) != len(want) {
+		t.Errorf("格式数 = %d, want %d", len(s.formats), len(want))
+	}
+	for _, cf := range want {
+		h := s.formats[cf.Fmt]
+		if h == 0 {
+			t.Errorf("缺少格式 %#x", cf.Fmt)
+			continue
+		}
+		size, _, _ := procGlobalSize.Call(h)
+		got := make([]byte, int(size))
+		if size != 0 {
+			ptr, _, err := s.lock.Call(h)
+			if ptr == 0 {
+				t.Fatalf("读回模拟内存失败: %v", err)
+			}
+			procRtlMoveMemory.Call(uintptr(unsafe.Pointer(unsafe.SliceData(got))), ptr, size)
+			procGlobalUnlock.Call(h)
+		}
+		if !bytes.Equal(got, cf.Data) {
+			t.Errorf("格式 %#x = % x, want % x", cf.Fmt, got, cf.Data)
+		}
+	}
+}
+
+func TestClipboardWriteTransaction(t *testing.T) {
+	const text = "A\x00B"
+	original := []typing.ClipboardFormat{
+		{Fmt: cfUnicodeText, Data: encodedText("原内容")},
+		{Fmt: 0xc001, Data: []byte{0xde, 0xad, 0xbe, 0xef}},
+	}
+	injected := []typing.ClipboardFormat{{Fmt: cfUnicodeText, Data: encodedText(text)}}
+	user := []typing.ClipboardFormat{{Fmt: cfUnicodeText, Data: encodedText("用户新内容")}}
+	empty := []typing.ClipboardFormat{}
+	cases := []struct {
+		name               string
+		fail               clipboardFaults
+		current, snap      []typing.ClipboardFormat
+		afterClose, want   []typing.ClipboardFormat
+		written, preserved bool
+		calls              string
+	}{
+		{
+			name: "准备分配失败保留原内容", fail: clipboardFaults{alloc: 1},
+			current: original, snap: original, want: original, preserved: true,
+			calls: "alloc",
+		},
+		{
+			name: "准备锁定失败保留用户新内容", fail: clipboardFaults{lock: 1},
+			current: user, snap: original, want: user, preserved: true,
+			calls: "alloc lock free",
+		},
+		{
+			name: "打开失败保留用户新内容", fail: clipboardFaults{open: clipboardAttempts},
+			current: user, snap: original, want: user, preserved: true,
+			calls: "alloc lock open open open open free",
+		},
+		{
+			name: "首次清空失败保留用户新内容", fail: clipboardFaults{empty: 1},
+			current: user, snap: original, want: user, preserved: true,
+			calls: "alloc lock open empty close free",
+		},
+		{
+			name: "写入失败同次打开回滚全格式", fail: clipboardFaults{set: []int{1}},
+			current: original, snap: original, want: original, preserved: true,
+			calls: "alloc lock open empty set empty alloc lock set alloc lock set close free",
+		},
+		{
+			name: "写入失败回滚空快照", fail: clipboardFaults{set: []int{1}},
+			current: empty, snap: empty, want: empty, preserved: true,
+			calls: "alloc lock open empty set empty close free",
+		},
+		{
+			name: "写入失败无快照不可回滚", fail: clipboardFaults{set: []int{1}},
+			current: original, snap: nil, want: empty,
+			calls: "alloc lock open empty set close free",
+		},
+		{
+			name: "回滚清空失败", fail: clipboardFaults{set: []int{1}, empty: 2},
+			current: original, snap: original, want: empty,
+			calls: "alloc lock open empty set empty close free",
+		},
+		{
+			name: "回滚分配失败继续写其余格式", fail: clipboardFaults{set: []int{1}, alloc: 2},
+			current: original, snap: original, want: original[1:],
+			calls: "alloc lock open empty set empty alloc alloc lock set close free",
+		},
+		{
+			name: "回滚锁定失败释放内存", fail: clipboardFaults{set: []int{1}, lock: 2},
+			current: original, snap: original, want: original[1:],
+			calls: "alloc lock open empty set empty alloc lock free alloc lock set close free",
+		},
+		{
+			name: "回滚首格式写入失败", fail: clipboardFaults{set: []int{1, 2}},
+			current: original, snap: original, want: original[1:],
+			calls: "alloc lock open empty set empty alloc lock set free alloc lock set close free",
+		},
+		{
+			name: "回滚末格式写入失败", fail: clipboardFaults{set: []int{1, 3}},
+			current: original, snap: original, want: original[:1],
+			calls: "alloc lock open empty set empty alloc lock set alloc lock set free close free",
+		},
+		{
+			name:    "写入成功转交内存所有权",
+			current: original, snap: original, want: injected, written: true, preserved: true,
+			calls: "alloc lock open empty set close",
+		},
+		{
+			name: "打开重试后写入成功", fail: clipboardFaults{open: 1},
+			current: original, snap: original, want: injected, written: true, preserved: true,
+			calls: "alloc lock open open empty set close",
+		},
+		{
+			name: "回滚不覆盖关闭后用户复制的内容", fail: clipboardFaults{set: []int{1}},
+			current: original, snap: original, afterClose: user, want: user, preserved: true,
+			calls: "alloc lock open empty set empty alloc lock set alloc lock set close free",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newClipboardTransaction(t, c.current, c.afterClose, c.fail)
+			written, preserved := (Clipboard{}).SetText(text, c.snap)
+			if written != c.written || preserved != c.preserved {
+				t.Errorf("SetText = (%v, %v), want (%v, %v)", written, preserved, c.written, c.preserved)
+			}
+			s.check(t, c.want, c.calls)
+		})
+	}
+}
+
+func TestClipboardRestoreTransaction(t *testing.T) {
+	const text = "A\x00B"
+	original := []typing.ClipboardFormat{
+		{Fmt: cfUnicodeText, Data: encodedText("原内容")},
+		{Fmt: 0xc001, Data: []byte{0xde, 0xad, 0xbe, 0xef}},
+	}
+	injected := []typing.ClipboardFormat{{Fmt: cfUnicodeText, Data: encodedText(text)}}
+	user := []typing.ClipboardFormat{{Fmt: cfUnicodeText, Data: encodedText("用户新内容")}}
+	zeroSize := []typing.ClipboardFormat{{Fmt: cfUnicodeText, Data: []byte{}}}
+	empty := []typing.ClipboardFormat{}
+	cases := []struct {
+		name             string
+		fail             clipboardFaults
+		current, snap    []typing.ClipboardFormat
+		afterClose, want []typing.ClipboardFormat
+		injected         string
+		ok               bool
+		calls            string
+	}{
+		{
+			name:    "未改动的完整NUL文本恢复全格式",
+			current: injected, snap: original, want: original, ok: true,
+			calls: "open get lock empty alloc lock set alloc lock set close",
+		},
+		{
+			name:    "用户改动跳过恢复",
+			current: user, snap: original, want: user, ok: true,
+			calls: "open get lock close",
+		},
+		{
+			name: "非完整NUL前缀跳过恢复", injected: "A",
+			current: injected, snap: original, want: injected, ok: true,
+			calls: "open get lock close",
+		},
+		{
+			name:    "用户移除文本格式跳过恢复",
+			current: original[1:], snap: original, want: original[1:], ok: true,
+			calls: "open get close",
+		},
+		{
+			name: "读取锁定失败不能视为用户改动", fail: clipboardFaults{lock: 1},
+			current: injected, snap: original, want: injected,
+			calls: "open get lock close",
+		},
+		{
+			name:    "零大小内存不能视为用户改动",
+			current: zeroSize, snap: original, want: zeroSize,
+			calls: "open get close",
+		},
+		{
+			name:    "nil快照不打开剪贴板",
+			current: injected, snap: nil, want: injected,
+		},
+		{
+			name:    "空快照恢复为空",
+			current: injected, snap: empty, want: empty, ok: true,
+			calls: "open get lock empty close",
+		},
+		{
+			name:    "空快照仍保护用户新内容",
+			current: user, snap: empty, want: user, ok: true,
+			calls: "open get lock close",
+		},
+		{
+			name: "空快照使用恢复档最后一次重试", fail: clipboardFaults{open: clipboardRestoreTries - 1},
+			current: injected, snap: empty, want: empty, ok: true,
+			calls: strings.Repeat("open ", clipboardRestoreTries) + "get lock empty close",
+		},
+		{
+			name: "恢复档打开失败", fail: clipboardFaults{open: clipboardRestoreTries},
+			current: injected, snap: original, want: injected,
+			calls: strings.TrimSpace(strings.Repeat("open ", clipboardRestoreTries)),
+		},
+		{
+			name: "清空失败保留注入内容", fail: clipboardFaults{empty: 1},
+			current: injected, snap: original, want: injected,
+			calls: "open get lock empty close",
+		},
+		{
+			name: "写回分配失败继续其余格式", fail: clipboardFaults{alloc: 1},
+			current: injected, snap: original, want: original[1:],
+			calls: "open get lock empty alloc alloc lock set close",
+		},
+		{
+			name: "写回锁定失败释放内存", fail: clipboardFaults{lock: 2},
+			current: injected, snap: original, want: original[1:],
+			calls: "open get lock empty alloc lock free alloc lock set close",
+		},
+		{
+			name: "写回设置失败释放内存", fail: clipboardFaults{set: []int{1}},
+			current: injected, snap: original, want: original[1:],
+			calls: "open get lock empty alloc lock set free alloc lock set close",
+		},
+		{
+			name: "写回全部失败", fail: clipboardFaults{set: []int{1, 2}},
+			current: injected, snap: original, want: empty,
+			calls: "open get lock empty alloc lock set free alloc lock set free close",
+		},
+		{
+			name:    "检查与恢复之间不释放剪贴板",
+			current: injected, snap: original, afterClose: user, want: user, ok: true,
+			calls: "open get lock empty alloc lock set alloc lock set close",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newClipboardTransaction(t, c.current, c.afterClose, c.fail)
+			injectedText := text
+			if c.injected != "" {
+				injectedText = c.injected
+			}
+			if got := (Clipboard{}).RestoreSnapshot(c.snap, injectedText); got != c.ok {
+				t.Errorf("RestoreSnapshot = %v, want %v", got, c.ok)
+			}
+			s.check(t, c.want, c.calls)
+		})
 	}
 }
 
