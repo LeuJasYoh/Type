@@ -7,7 +7,7 @@
 
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 
-/** 基准宽度: 内宽 540 时缩放为 1。必须等于宿主窗口下限 MinWindowW(契约测试核对) */
+/** 基准宽度: 内宽 540 时缩放为 1。基准值来自 mygo 的 WindowOptions.MinWidth */
 export const BASE_WIDTH = 540;
 /** 上限: 窗口内宽上限是 648, 648/540 = 1.2, 所以这个 1.25 正常路径取不到 */
 export const MAX_SCALE = 1.25;

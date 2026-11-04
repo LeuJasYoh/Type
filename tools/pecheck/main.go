@@ -163,8 +163,17 @@ func checkManifest(rs *winres.ResourceSet) error {
 }
 
 func checkIcon(rs *winres.ResourceSet) error {
-	if data := firstResource(rs, winres.RT_GROUP_ICON); data == nil {
-		return errors.New("图标资源(RT_GROUP_ICON)缺失或为空: assets/icon.ico 没被 mkres 写进 .syso?")
+	found := false
+	rs.WalkType(winres.RT_GROUP_ICON, func(id winres.Identifier, _ uint16, d []byte) bool {
+		if len(d) > 0 && id == winres.ID(1) {
+			found = true
+			return false
+		}
+		return true
+	})
+	if !found {
+		return errors.New("图标组(RT_GROUP_ICON)缺失, 或资源 ID 不是数字 1: " +
+			"mygo 用 LoadIconW(instance(), 1) 取应用图标, 写成名字会让窗口与任务栏退回系统默认图标")
 	}
 	return nil
 }

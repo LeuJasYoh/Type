@@ -58,7 +58,7 @@ writing-style）、知识（invariants）、工具手册（tooling）、规划�
 - 失败路径修复：空剪贴板快照语义（并防住"只有位图格式时被当成空剪贴板清掉"的数据丢失）；
   5 处 t.Skip 统一为"本机跳过、CI 必红"；注入失败且恢复失败时上报剪贴板可能丢失；
   6 处 Bind error 走启动提示；等让位上界字段化（internal/typing 测试 8.4s → 1.5s）。
-- 前端与契约：healPolling 不在页面隐藏时重启链；版式探针补齐第 6 个绑定；
+- 前端与契约：healPolling 不在页面隐藏时重启链；版式探针补齐第 6 个绑定（该绑定已随 mygo 迁移退役）；
   toggleTopmost/getTopmost 返回签名与 TypingStatus json tag 选项进闸门；删除与 tsconfig 重复的
   src/env.d.ts 并重建入库产物。
 
@@ -84,10 +84,10 @@ writing-style）、知识（invariants）、工具手册（tooling）、规划�
 | # | 事项 | 理由 | 规模 |
 |---|---|---|---|
 | 1 | 文档指针细化：把仍指向父节「其它不变量」的 29 处 Go 注释与 6 处前端注释改到具体小节 | 拆节后父节仍是入口，但精确指路能减少二次搜索 | S |
-| 2 | win32 副作用外移：PromptWebView2Unusable 的 os.Exit、GuardSingleInstance 的模态框改成返回 error，由 cmd/type 决定退出与文案 | 平台层可测、装配层职责完整 | S/M |
-| 3 | Status() 返回值化、viewfit.Fixed 导出面收敛 | 去掉共享可变状态与测试专用导出 | S |
+| 2 | win32 副作用外移：把 PromptWebView2Unusable 的 os.Exit 改成返回 error，由 cmd/type 决定退出（单实例模态框已随 mygo 迁移消失） | 平台层可测、装配层职责完整 | S/M |
+| 3 | Status() 返回值化（viewfit 已随窗口几何移交 mygo 而删除） | 去掉共享可变状态 | S |
 | 4 | App.vue 纯函数测试：iconSize / charCount / 置顶回读 | 当前 0 行为覆盖，抽成纯函数后零成本可测 | S |
-| 5 | 极端小屏的 PlanForDisplay 整窗越界边界 | 现在只夹客户区；补一条边界用例即可 | XS |
+| 5 | 极端小屏下 FitContent 的工作区兜界 | 补一条真机边界用例即可 | XS |
 | 6 | 依赖与 CI 治理：dependabot（go/npm/actions）评估、actions 是否固定 SHA | 减少手工升级与供应链风险 | M |
 | 7 | release-notes 历史缺口：写一句"v1.5.3 前无说明文件" | 避免"每版都有说明"的误读 | XS |
 | 8 | 语言构成与精确数字：需要时由脚本现场统计，不写进文档 | 已从 architecture 删除会漂的字节表 | XS |

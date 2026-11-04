@@ -1,8 +1,8 @@
 //go:build windows && (amd64 || arm64)
 
 // ─── Win32 清单页 ─────────────────────────────────────
-// 集中声明全部 Win32 DLL 入口: 一页即可看清整个平台接触面,
-// 未来若评估移植, 此处即待替换清单
+// 集中声明本包用到的 Win32 DLL 入口。窗体由 MyGo 管理, 这里只处理
+// 外部窗口的输入注入、系统剪贴板、前台窗口探测与原生启动提示。
 
 package win32
 
@@ -37,34 +37,14 @@ var (
 	procGlobalUnlock             = kernel32.NewProc("GlobalUnlock")
 	procGlobalSize               = kernel32.NewProc("GlobalSize")
 	procRtlMoveMemory            = kernel32.NewProc("RtlMoveMemory")
-	procGetModuleHandleW         = kernel32.NewProc("GetModuleHandleW")
-	procRedrawWindow             = user32.NewProc("RedrawWindow")
-	procSHGetFileInfoW           = shell32.NewProc("SHGetFileInfoW")
+	procGlobalFree               = procCaller(kernel32.NewProc("GlobalFree"))
+	procRegisterClipboardFormatW = user32.NewProc("RegisterClipboardFormatW")
 	procGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
 	procGetWindowTextW           = user32.NewProc("GetWindowTextW")
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
 	procGetGUIThreadInfo         = user32.NewProc("GetGUIThreadInfo")
-	procGetDpiForWindow          = user32.NewProc("GetDpiForWindow")
-	procMonitorFromWindow        = user32.NewProc("MonitorFromWindow")
-	procGetMonitorInfoW          = user32.NewProc("GetMonitorInfoW")
-	procGetClientRect            = user32.NewProc("GetClientRect")
-	// GetWindowRect: 窗口矩形(含边框), "右下角是不是缩放边框"必须按它取点 ——
-	// 按客户区取点会落在客户区里面, 任何带边框的窗口都答 HTCLIENT(见
-	// hitTestBottomRight 的说明)
-	procGetWindowRect    = user32.NewProc("GetWindowRect")
-	procAdjustWindowRect = user32.NewProc("AdjustWindowRect")
-	// DPI 版本: 非 DPI 版在"系统 DPI 与显示器 DPI 不同"的机器上按错的那个算边框,
-	// 客户区会差十几个物理像素(客户区同时决定 WebView2 的渲染表面大小)
-	procAdjustWindowRectExForDpi = user32.NewProc("AdjustWindowRectExForDpi")
-	procGetWindowLongPtrW        = user32.NewProc("GetWindowLongPtrW")
-	procGlobalFree               = procCaller(kernel32.NewProc("GlobalFree"))
-	procRegisterClipboardFormatW = user32.NewProc("RegisterClipboardFormatW")
-	procSetWindowPos             = user32.NewProc("SetWindowPos")
-	procSetClassLongPtrW         = user32.NewProc("SetClassLongPtrW")
 	procMessageBoxW              = user32.NewProc("MessageBoxW")
 	procShellExecuteW            = shell32.NewProc("ShellExecuteW")
-	procCreateMutexW             = kernel32.NewProc("CreateMutexW")
-	procCloseHandle              = kernel32.NewProc("CloseHandle")
 )
 
 // 三个平台实现与业务层接口的绑定在编译期核对: 签名一旦漂移立即构建失败,

@@ -82,10 +82,10 @@
 git 历史提交 a881117（2026-10-04），工作区只留 docs/comment-ledger/README.md 指针。
 重写期间确认过的三条硬约束仍有效（删了必然回归，重写后信息密度不得降低）：
 
-- cmd/type/main.go 的窗口尺寸与样式段（WM_DPICHANGED / HintFixed / SetSize 与
-  SetWindowClientRect 的先后）；
+- cmd/type/main.go 的装配段（BindAs 早于 App.Run、窗口到 WhenReady 才存在、
+  OnSecondInstance 不抢前台）；
 - internal/typing/typing.go 的"SendPaste 返回后立刻复检"段；
-- internal/win32/win32_instance.go 的"事后 GetLastError 已被运行时清零"段。
+- internal/win32/win32_clipboard.go 的"快照完整才允许恢复"段。
 
 ## 红线
 

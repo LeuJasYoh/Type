@@ -9,17 +9,20 @@
 
 - `internal/typing/contract_test.go`：冻结文案逐字表 + `TypingStatus` 的 JSON 键集合
   与六个 phase 取值 + 初始状态的整体 JSON；
-- `cmd/type/contract_test.go`：六个 Bind 函数名、`startTyping` 的四个参数与类型、
-  `reportViewport` 的一个参数与类型、`Status`/`Cancel` 的签名，并读 `frontend/src/ipc.ts`
-  核对前端那份镜像。
+- `cmd/type/contract_test.go`：五个绑定名、`startTyping` 的四个参数与类型、
+  `Status`/`Cancel` 的签名，并读 `frontend/src/ipc.ts` 核对前端那份镜像。
 
 文案断言刻意写成**字面量**而不是引用常量（看着像自我复读，但那正是它的用途：
 别处断言用的是同名常量，改了常量测试照样绿）。新增文案请一并登记进下面两张清单与表。
 
-- webview Bind 函数名：`startTyping` / `cancelTyping` / `toggleTopmost` / `getTopmost` /
-  `getTypingStatus` / `reportViewport`
-  （`startTyping` 参数：text, delay, forceRaw, textDirect（`forceRaw` 是前端与冻结契约的名字，Go 侧 `Start` 的同位参数叫 `forceSendInput`）；`reportViewport` 参数：dpr，
-  前端启动时报上来的真实内容缩放，宿主据此让窗口适配内容，见 docs/invariants.md「内容缩放与界面几何」）
+- 冻结的 `window.*` 全局函数（5 个）：`startTyping` / `cancelTyping` / `toggleTopmost` /
+  `getTopmost` / `getTypingStatus`。它们由 `PageOptions.PreloadScript` 注入的 shim 定义，把调用
+  转发到 `window.mygo.call("Type.Xxx", ...)`；Go 侧以 `mygo.BindAs("Type", svc)` 注册同名服务
+  方法（`StartTyping` / `CancelTyping` / `ToggleTopmost` / `GetTopmost` / `GetTypingStatus`），
+  因此 `frontend/src/ipc.ts` 的全局函数签名与冻结文案一字节未改。
+  （`startTyping` 参数：text, delay, forceRaw, textDirect（`forceRaw` 是前端与冻结契约的名字，
+  Go 侧 `Start` 的同位参数叫 `forceSendInput`）。原第 6 个绑定 `reportViewport`（dpr 上报）随
+  窗口适配改由 mygo 接管而退役，见 docs/invariants.md「内容缩放与界面几何」）
 - `TypingStatus` JSON 字段与 phase 枚举值（`frontend/src/types.ts` 是其镜像）
 - 状态机用户可见文案逐字符保持，它们是发布语言的一部分
 - 已冻结文案清单：`剩余 N 秒 — 请聚焦目标窗口...` / `检测到中文，正在操作剪贴板...` /
@@ -64,7 +67,7 @@
   `WebView2 初始化失败，Type 的界面无法创建。…`（运行时查得到但起不来）。
   读者是从没听说过"运行时"的人，正文只承载三件事：缺什么、点哪里、然后做什么，
   别往里加技术细节；按钮文案跟随系统语言（中文系统显示"是/否"）。
-  前后端绑定失败（`Bind` 返回 error）时复用同一个提示框，正文为
+  前后端绑定失败（`mygo.BindAs` 出错为 panic，由 recover 接住）时复用同一个提示框，正文为
   `界面初始化失败，Type 无法把界面与后台接起来。`（点"是"打开下载页重新安装）
 - **失败终态必须携带具体原因**，`输入失败` 只在无处可归时兜底：剪贴板路径的原因由
   `typeTextViaClipboard` 返回（`剪贴板操作失败` = 剪贴板本身不可用，`粘贴未生效：...`

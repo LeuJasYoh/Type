@@ -1,167 +1,210 @@
 //go:build windows && (amd64 || arm64)
 
-// 仅 64 位: INPUT 结构体的手工填充(40 字节)仅匹配 64 位 ABI, 386 下
-// SendInput 会静默注入乱码(见 internal/win32/win32_keyboard.go),
-// 因此直接禁止 32 位编译
+// 装配层: MyGo 接管窗口与页面, 平台能力注入业务层。
+// 仅 64 位: INPUT 结构体的手工填充(40 字节)仅匹配 64 位 ABI, 386 下 SendInput
+// 会静默注入乱码, 因此直接禁止 32 位编译。
 package main
 
 import (
-	"sync/atomic"
+	"fmt"
+	"sync"
 
 	"github.com/LeuJasYoh/type/internal/typing"
-	"github.com/LeuJasYoh/type/internal/viewfit"
 	"github.com/LeuJasYoh/type/internal/web"
 	"github.com/LeuJasYoh/type/internal/win32"
 
-	"github.com/jchv/go-webview2"
+	"github.com/egoist/mygo"
 )
 
-var version = "1.7.4"
+var version = "2.0.0"
 
-// maxViewportFixes 内容缩放最多校正几次。正常只有一次(页面报回来的第一个比值),
-// 留第二次是给"创建初期读到一个错的比值、随后自行修正"的兜底; 再往上就不跟了,
-// 免得某个一直在变的读数把窗口摆来摆去
-const maxViewportFixes = 2
+// 窗口的设计尺寸(DIP)。Width/Height 是客户区尺寸, Min/Max 给 FitContent 兜界。
+// minWindowW 同时是前端 --ui-scale 的基准宽度, 由契约测试双端核对。
+const (
+	minWindowW = 540
+	minWindowH = 480
+	maxWindowW = 648
+	maxWindowH = 540
+)
 
-var topmostFlag atomic.Bool // 窗口置顶开关(与输入任务无关, 归装配层)
+// preloadShim 把 MyGo 的 Service.Method 调用映射回冻结的 window.* 全局函数。
+// 注入发生在 document start、window.mygo 就绪之后, 前端产物因此一字节不改。
+const preloadShim = `
+window.startTyping = function(){ return window.mygo.call.apply(window.mygo, ["Type.StartTyping"].concat(Array.prototype.slice.call(arguments))); };
+window.cancelTyping = function(){ return window.mygo.call("Type.CancelTyping"); };
+window.toggleTopmost = function(){ return window.mygo.call("Type.ToggleTopmost"); };
+window.getTopmost = function(){ return window.mygo.call("Type.GetTopmost"); };
+window.getTypingStatus = function(){ return window.mygo.call("Type.GetTypingStatus"); };
+`
 
-// ─── 主程序 ───────────────────────────────────────────
+// typeService 是前端可调用的绑定服务。Bind 必须早于 App.Run, 而窗口到
+// WhenReady 才存在, 所以依赖在 attach 里补齐, 方法先查就绪再转发。
+type typeService struct {
+	mu  sync.Mutex
+	svc *typing.TypingService
+	win *mygo.Window
+}
+
+func (s *typeService) attach(win *mygo.Window) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.win = win
+	// 前台探测带自身窗口句柄, 用于"焦点仍在 Type 自身"的判定。
+	s.svc = typing.NewTypingService(win32.Injector{}, win32.Clipboard{},
+		win32.Foreground{HWND: win.NativeHandle()})
+}
+
+func (s *typeService) service() (*typing.TypingService, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.svc == nil {
+		return nil, fmt.Errorf("界面尚未就绪")
+	}
+	return s.svc, nil
+}
+
+func (s *typeService) window() (*mygo.Window, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.win == nil {
+		return nil, fmt.Errorf("界面尚未就绪")
+	}
+	return s.win, nil
+}
+
+// 以下五个方法对应冻结的跨端绑定名, 参数顺序与返回类型由 contract_test.go 钉住。
+
+func (s *typeService) StartTyping(text string, delay int, forceRaw bool, textDirect bool) (string, error) {
+	svc, err := s.service()
+	if err != nil {
+		return "", err
+	}
+	return svc.Start(text, delay, forceRaw, textDirect)
+}
+
+func (s *typeService) CancelTyping() (string, error) {
+	svc, err := s.service()
+	if err != nil {
+		return "", err
+	}
+	return svc.Cancel()
+}
+
+func (s *typeService) GetTypingStatus() (*typing.TypingStatus, error) {
+	svc, err := s.service()
+	if err != nil {
+		return nil, err
+	}
+	return svc.Status(), nil
+}
+
+func (s *typeService) ToggleTopmost() (bool, error) {
+	win, err := s.window()
+	if err != nil {
+		return false, err
+	}
+	win.SetAlwaysOnTop(!win.IsAlwaysOnTop())
+	return win.IsAlwaysOnTop(), nil
+}
+
+func (s *typeService) GetTopmost() (bool, error) {
+	win, err := s.window()
+	if err != nil {
+		return false, err
+	}
+	return win.IsAlwaysOnTop(), nil
+}
 
 func main() {
-	// 单实例: 多开会让两个实例争抢剪贴板与键盘焦点, 先挡在门口
-	if !win32.GuardSingleInstance() {
+	// 单实例: 第二个实例把参数交给这里之后自行退出, 避免两个实例争抢
+	// 剪贴板与键盘焦点。回调只闪任务栏, 不抢前台窗口。
+	if !mygo.App.RequestSingleInstanceLock() {
 		return
 	}
 
-	// 界面由 WebView2 渲染: 运行时缺失时连窗口都建不出来, 而 GUI 子系统没有
-	// 控制台, 库里的报错没人看得见。先预检再创建, 缺什么就说什么
-	// (见 internal/win32/win32_webview2.go), 不让用户面对一片死寂
-	if !win32.WebView2Available() {
-		win32.PromptWebView2Unusable(win32.MsgWebView2Missing) // 提示后退出, 不返回
+	// GUI 子系统没有控制台, WebView2 起不来时先给用户一句能看懂的提示。
+	if !webViewAvailable() {
+		win32.PromptWebView2Unusable(win32.MsgWebView2Missing)
 	}
 
-	// Debug 打开 WebView2 的默认右键菜单与 DevTools; 正式构建两者皆关 —— 发布版留
-	// DevTools 没有意义, 而右键菜单里的"重新加载"会让前端复位、与仍在跑的后端任务脱钩。
-	// 见 docs/architecture.md「布局与单一来源」
-	w := createWebView2()
-	// 判空必须在 defer 之前: 失败时 New 返回 nil 接口, defer 求值 receiver 就 panic
-	// 见 docs/invariants.md「其它不变量」
-	if w == nil {
-		win32.PromptWebView2Unusable(win32.MsgWebView2InitFailed) // 提示后退出, 不返回
-	}
-	defer w.Destroy()
-	w.SetTitle("Type " + version)
+	svc := &typeService{}
+	bindService(svc)
 
-	// 先取窗口句柄: 尺寸要按该窗口所在显示器的 DPI 与工作区换算
-	// (manifest 声明了 PerMonitorV2, 见 internal/win32 的 ScaledForDPI)
-	hw := uintptr(w.Window())
-
-	// 尺寸与位置只在启动时算一次, 之后固定: 按该显示器的工作区定尺寸并在其中居中
-	// (上下限与取舍见 docs/invariants.md「其它不变量」)
-
-	// 刻意不做的两件事, 别顺手加回来:
-	//   ① 不响应 WM_DPICHANGED(把窗口拖到缩放比例不同的显示器上重新适配)。用户明确
-	//      不要; 窗口侧改尺寸与内容侧 Chromium 改缩放不同步, 就会变成"渲染缩放 ≠
-	//      显示器缩放", 那才是真正的位图拉伸发虚;
-	//   ② 不放宽窗口样式。HintFixed 去掉 WS_THICKFRAME|WS_MAXIMIZEBOX 是"不可拖大"的
-	//      唯一来源(internal/win32 的 TestWindowSizeIsFixed 读回样式位与命中测试钉着),
-	//      只调 SetWindowClientRect 的话窗口仍可拖大
-
-	// 顺序也是刻意的: 先让库 SetSize 拿到 HintFixed 并设一次 bounds, 再用
-	// SetWindowClientRect 把客户区精确摆到目标 —— 反过来库会用非 DPI 版的边框再摆一次,
-	// 把客户区带回偏差(见 internal/win32 的 windowRectForClient)
-
-	// lw/lh 是设计逻辑尺寸(内容缩放为 1 时的基准), 留给下面的内容缩放校正:
-	// 客户区 = 设计逻辑尺寸 × 真实内容缩放, CSS 视口才等于设计尺寸
-	lw, lh := win32.MinWindowW, win32.MinWindowH
-	if plan, ok := win32.PlanForDisplay(hw); ok {
-		lw, lh = plan.LogicalW, plan.LogicalH
-		w.SetSize(plan.ClientW, plan.ClientH, webview2.HintFixed)
-		win32.SetWindowClientRect(hw, plan.X, plan.Y, plan.ClientW, plan.ClientH)
-	} else {
-		// 取不到显示器信息: 退回默认尺寸, 位置交给系统
-		cw, ch := win32.ScaledForDPI(hw, lw, lh)
-		w.SetSize(cw, ch, webview2.HintFixed)
-	}
-
-	win32.RetrySetIcon(hw)
-
-	// 平台能力以接口注入(Win32 实现见 internal/win32); 前台探测带上自身窗口句柄,
-	// 用于目标窗口的"非自身"判定
-	svc := typing.NewTypingService(win32.Injector{}, win32.Clipboard{}, win32.Foreground{HWND: hw})
-
-	// 绑定须在加载页面前完成: 注入脚本只对随后创建的文档生效
-	mustBind(w, "startTyping", svc.Start)
-	mustBind(w, "cancelTyping", svc.Cancel)
-
-	mustBind(w, "toggleTopmost", func() (bool, error) {
-		on := !topmostFlag.Load()
-		if hw != 0 && !win32.SetTopmost(hw, on) {
-			// 置顶失败: 保持原来的状态, 别让按钮与窗口实际状态相反
-			return topmostFlag.Load(), nil
+	mygo.App.OnSecondInstance(func(args []string, workingDir string) {
+		// Type 靠前台窗口锁定注入目标, 此刻把已有窗口顶到前台会触发
+		// 漂移中止或"焦点仍在 Type"; 只闪一下任务栏即可。
+		if win, err := svc.window(); err == nil {
+			win.FlashFrame(true)
 		}
-		topmostFlag.Store(on)
-		return on, nil
 	})
 
-	// 读回当前置顶状态。窗口的置顶不随页面重载复位, 而按钮每次都从"未置顶"起:
-	// 不读回来的话, 重载后(Ctrl+R、渲染进程崩溃后自动重载)按钮显示"置顶"而窗口
-	// 仍钉在最上层, 用户点一下反而是把置顶取消, 按钮与窗口正好相反
-	mustBind(w, "getTopmost", func() (bool, error) { return topmostFlag.Load(), nil })
-
-	// 前端轮询读取当前输入状态
-	mustBind(w, "getTypingStatus", svc.Status)
-
-	// CSS 视口 = 客户区物理像素 ÷ 内容缩放; 内容缩放由 WebView2 自己定、不等于窗口 DPI 缩放,
-	// 实测 125% 那台机器上内容按约 1.75 倍渲染、视口缩到 411×343, 输入框(195px 下限)压住选项行。
-	// "该不该再校正一次"的规则在 internal/viewfit, 这里只把"怎么摆窗口"接上去
-	// 见 docs/invariants.md「其它不变量」
-	viewportFit := viewfit.NewFitter(maxViewportFixes)
-	mustBind(w, "reportViewport", func(dpr float64) error {
-		viewportFit.Report(dpr, func() bool {
-			cw, ch, x, y, ok := win32.WindowClientForScale(hw, lw, lh, dpr)
-			if !ok {
-				// 比值非法, 或按它算出的窗口装不进工作区: 保持原尺寸, 由前端滚动兜底。
-				// 返回 false 即"没摆成", 节流器据此不记账 —— 同一个值以后可能就
-				// 装得下了(工作区变了), 记账会把那次机会吃掉
-				return false
+	mygo.App.WhenReady(func() {
+		// 控制器异步创建失败时框架可能 panic; 接住后走原生提示框。
+		defer func() {
+			if recover() != nil {
+				win32.PromptWebView2Unusable(win32.MsgWebView2InitFailed)
 			}
-			w.SetSize(cw, ch, webview2.HintFixed)
-			win32.SetWindowClientRect(hw, x, y, cw, ch)
-			return true
+		}()
+
+		pageOpts := mygo.PageOptions{
+			DevTools:             devTools(),
+			BackgroundThrottling: mygo.ThrottlingOff,
+			PreloadScript:        preloadShim,
+		}
+		if u := devURL(); u != "" {
+			pageOpts.TrustedOrigins = []string{u}
+		}
+
+		win := mygo.NewWindow(mygo.WindowOptions{
+			Title:          "Type " + version,
+			Width:          minWindowW,
+			Height:         minWindowH,
+			UseContentSize: true,
+			MinWidth:       minWindowW,
+			MinHeight:      minWindowH,
+			MaxWidth:       maxWindowW,
+			MaxHeight:      maxWindowH,
+			FitContent:     true,
+			DisableResize:  true,
+			Page:           pageOpts,
+			// 页面绘制前窗口显示的颜色: 不给的话是白色, 暗色主题下会先闪一段白。
+			// 两值取自 style.css 的 --bg (oklch 96.5%/16.5%), 框架按系统深浅色选一个,
+			// 与页面里 prefers-color-scheme 的判定同源
+			BackgroundColor: "light-dark(#edf4fd, #0c0f12)",
 		})
-		return nil
+		svc.attach(win)
+		win.OnClosed(func() { mygo.App.Quit() })
+
+		page := win.Page()
+		if u := devURL(); u != "" {
+			_ = page.LoadURL(u)
+		} else {
+			page.LoadHTML(web.IndexHTML, "")
+		}
 	})
 
-	// 加载界面: 开发构建(-tags dev)指向 Vite dev server 支持 HMR,
-	// 正式构建不含这段代码, 恒加载嵌入的自包含页面
-	if url := devServerURL(); url != "" {
-		w.Navigate(url)
-	} else {
-		w.SetHtml(web.IndexHTML)
+	if err := mygo.App.Run(); err != nil {
+		win32.PromptWebView2Unusable(win32.MsgWebView2InitFailed)
 	}
-
-	w.Run()
 }
 
-// createWebView2 建 WebView2; 建不出来时返回 nil, 由调用方给出"界面起不来"的提示。
-// **recover 不能删**: 控制器异步创建失败时 go-webview2 的 HRESULT 判断永不成立、接着
-// 解引用 nil panic; GUI 子系统没有控制台, 不接住就是"双击之后窗口一闪就没了"。
-// 见 docs/invariants.md「其它不变量」
-func createWebView2() (w webview2.WebView) {
+// webViewAvailable 包住框架预检: 后端初始化异常时不让 GUI 进程静默退出。
+func webViewAvailable() (ok bool) {
 	defer func() {
 		if recover() != nil {
-			w = nil
+			ok = false
 		}
 	}()
-	return webview2.NewWithOptions(webview2.WebViewOptions{Debug: devMode()})
+	return mygo.WebViewAvailable()
 }
 
-// mustBind 注册一个前端可调用的绑定, 失败就走启动提示框退出。
-// Bind 的 error 以前被丢弃: 失败时前端拿到的是 undefined, 按钮点了没反应, 而 GUI
-// 子系统没有控制台, 用户与日志都看不到任何线索。go vet 不含 errcheck, 也抓不到。
-func mustBind(w webview2.WebView, name string, fn interface{}) {
-	if err := w.Bind(name, fn); err != nil {
-		win32.PromptWebView2Unusable(win32.MsgBindFailed)
-	}
+// bindService 复用原来的"绑定失败也要有提示"语义。Bind 出错是 panic,
+// 没有 error 可判, 只能 recover。
+func bindService(s *typeService) {
+	defer func() {
+		if recover() != nil {
+			win32.PromptWebView2Unusable(win32.MsgBindFailed)
+		}
+	}()
+	mygo.BindAs("Type", s)
 }

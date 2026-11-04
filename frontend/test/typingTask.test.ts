@@ -46,7 +46,7 @@ let seq = 0;
 let calls = 0;
 let starts = 0;
 let startBlocked = false; // 置位后 startTyping 挂起, 由用例手动放行(模拟"等待后端返回")
-let startError: string | null = null; // 非空时后端拒绝启动, 以字符串 reject(go-webview2 的真实形态)
+let startError: string | null = null; // 非空时后端拒绝启动, 以字符串 reject(兼容历史绑定的字符串形态)
 let pendingStart: ((v: string) => void) | null = null;
 let reply: TypingStatus | null = null; // 非空即立即应答; 为空则把请求挂起, 由用例手动放行
 let timers: Map<number, { at: number; fn: Handler }>;
@@ -417,7 +417,7 @@ test('⑮ 后端拒绝启动时, 界面显示后端给的原因', async () => {
 });
 
 test('⑯ errMsg 认得后端的两种 reject 形态', () => {
-  // go-webview2 是以字符串 reject 的(见其 msgcb), Error 形态也得能读
+  // 绑定可能以字符串 reject(历史形态), Error 形态也得能读
   assert.equal(
     errMsg('已有输入任务在运行中，请先取消或等待完成'),
     '已有输入任务在运行中，请先取消或等待完成',

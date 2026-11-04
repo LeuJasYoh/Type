@@ -33,9 +33,11 @@ const (
 const (
 	// langID 对应旧 .rc 的 Translation 0x409, 1200
 	langID = 0x409
-	// iconName 沿用旧 .rc 的图标组名 "IDI_ICON1": 该符号未被任何头文件定义, 旧 windres
-	// 按"名字"记录, 显式同名才能让资源树与旧产物一致
-	iconName = "IDI_ICON1"
+	// iconID 必须是数字 1: mygo 注册窗口类时以 LoadIconW(instance(), 1) 取应用图标,
+	// 只有 RT_GROUP_ICON 的 ID 为 1, 窗口与任务栏才会用上它。旧 .rc 按名字
+	// "IDI_ICON1" 记录, 那是 go-webview2 时代靠 RetrySetIcon 从 exe 重新提取的写法;
+	// 窗体已交给 mygo 托管, 资源 ID 必须与框架约定对齐
+	iconID = winres.ID(1)
 )
 
 // versionRe 与 build.ps1 / ci.yml 同款: 数字部分 + 可选预发布后缀
@@ -123,9 +125,9 @@ func buildResourceSet(ver, iconPath string) (*winres.ResourceSet, error) {
 	}
 
 	rs := &winres.ResourceSet{}
-	// 图标组语言取 langID, 图像条目由 winres 记为 neutral(0) —— Windows 按语言回退取用,
-	// 资源树与旧产物等价
-	if err := rs.SetIconTranslation(winres.Name(iconName), langID, ico); err != nil {
+	// 图标组用数字 ID 1, 让 mygo 的 LoadIconW(instance(), 1) 直接取到;
+	// 语言取 langID, 图像条目由 winres 记为 neutral(0), Windows 按语言回退取用
+	if err := rs.SetIconTranslation(iconID, langID, ico); err != nil {
 		return nil, err
 	}
 	rs.SetVersionInfo(vi)

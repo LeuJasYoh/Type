@@ -20,9 +20,9 @@
 
 ## 功能
 
-- **窗口随显示器自适应**（v1.6.0）：窗口尺寸在启动时按当前显示器的可用工作区算一次（占工作区高度约一半，小屏 576×480 起、大屏最多 648×540），并在工作区居中，4K 或缩放比例较高的显示器上不会缩成一小块；输入框会吃下多出来的高度，界面拉伸后不留大块空白。窗口尺寸固定，不用手动拖边
-- **窗口按内容缩放校正**（v1.6.1）：启动时界面把真实的像素缩放比报回程序，窗口按这个比值校正一次尺寸并重新居中，界面能用的宽度与高度就等于设计尺寸；缩放比例偏高的机器上不会再出现输入框盖住选项行。按这个比值算出的窗口如果装不进显示器可用工作区，程序保持原尺寸，界面可以滚动，控件不会被挤没
-- **窗口置顶**：标题栏右侧的「置顶」按钮把窗口钉在所有窗口之上，方便一边看着 Type 一边在目标窗口里定位插入点；按钮显示的是窗口的真实状态，界面重载（Ctrl+R、崩溃后自动恢复）之后不会反过来
+- **窗口随显示器自适应**（v1.6.0）：窗口尺寸在启动时按当前显示器的可用工作区与缩放算一次并居中，4K 或缩放比例较高的显示器上不会缩成一小块；输入框会吃下多出来的高度，界面拉伸后不留大块空白。窗口尺寸固定，不用手动拖边；这层尺寸与 DPI 换算现在由 mygo 框架接管
+- **窗口按内容自动适配**（v1.6.1）：界面能用的宽度与高度等于设计尺寸，缩放比例偏高的机器上不会再出现输入框盖住选项行；算出的窗口装不进显示器可用工作区时，界面可以滚动，控件不会被挤没。现在由 mygo 按内容尺寸调整，不再需要前端把缩放比报回程序
+- **窗口置顶**：标题栏右侧的「置顶」按钮把窗口钉在所有窗口之上，方便一边看着 Type 一边在目标窗口里定位插入点；按钮显示的是窗口的真实状态，界面重载（Ctrl+R、崩溃后自动恢复）之后不会反过来；状态由 mygo 窗口提供并读回
 - **多行文本输入**：支持中文、英文、符号、换行
 - **两种输入模式**：
   - **逐字符模拟**：纯英文用 `SendInput` 快速注入，含中文时自动切换为剪贴板
@@ -35,7 +35,7 @@
 - **实时状态**：空闲时状态栏显示「就绪」，运行中显示倒计时、输入进度与完成提示；底部的进度条只在任务进行中出现，任务结束就收回，空闲时不占位也不显示
 - **可靠的剪贴板操作**：占用时自动重试（恢复这一步等得更久，因为恢复失败后原内容可能已丢失）；粘贴前保存可按字节复制的格式（文本/图片/文件等，特殊格式见「已知限制」），写入准备失败不改剪贴板，部分写入失败时在释放剪贴板前尝试回滚；粘贴后在同一次打开剪贴板期间核对内容并恢复快照，内容已变就跳过恢复，避免在检查与恢复之间覆盖新复制的数据；读不到或没能恢复时，状态栏会说明"剪贴板未恢复"，不会让你以为原内容还在
 - **明暗主题**：默认跟随系统深浅色，标题栏右侧的按钮可随时切换；受界面加载方式所限，手动选择只对本次运行有效（见「已知限制」）
-- **现代液态玻璃界面**：WebView2 + Vue 3 渲染，明暗双主题与半透明玻璃质感；玻璃与流动光晕只画在窗口内部，不依赖系统透明效果
+- **现代液态玻璃界面**：由 mygo 托管的 WebView2 + Vue 3 渲染，明暗双主题与半透明玻璃质感；玻璃与流动光晕只画在窗口内部，不依赖系统透明效果
 
 ---
 
@@ -85,12 +85,12 @@
 - **文本直投取不到输入焦点时会退化成按键注入**：文字要发到目标窗口内部的焦点框里，程序会先问系统"焦点框是哪个"，问不到就改用模拟按键（这一步不会把内容发给外层窗口，那样它会被直接丢掉，而系统仍回报成功）。退化之后"不产生按键事件"这个特性就不成立了，补全弹窗劫持与括号自动配对会重新生效；个别不处理文本消息的目标（如部分游戏）不适用，关掉即可。
 - **杀毒软件误报**：键盘模拟（SendInput）与剪贴板操作是杀软启发式扫描的常见敏感组合，若下载或运行时被误报，请添加信任或自行编译。
 - **目录的完整性标签**：若 Type.exe 所在目录被沙箱或安全工具标记为 Low 完整性级别（某些代理、下载或隔离环境会这样做），Windows 会以低完整性启动它，WebView2 会拒绝创建界面并提示「WebView2 初始化失败」。在自己的终端执行 `icacls "<目录路径>" /setintegritylevel Medium`，让目录及其产物继承 Medium 后再运行；从 Releases 下载的 exe 不受影响。
-- **单实例**：同时只允许运行一个实例（第二个实例会提示并退出），避免两个实例争抢剪贴板与键盘焦点。
+- **单实例**：同时只允许运行一个实例，避免两个实例争抢剪贴板与键盘焦点。第二个实例把命令行参数转交给已经在跑的实例后自行退出，由第一个实例闪一下任务栏提醒；不会再弹「已有实例」提示框，也不会把已有窗口抢到前台（Type 靠前台窗口锁定注入目标，抢前台会触发漂移中止）。
 - **主题选择不跨启动保留**：界面以 `about:blank` 加载（这种文档没有可用的源），浏览器不给它本地存储，所以手动切换的主题只对本次运行有效，重启后仍按系统深浅色显示。这一条是刻意的取舍：界面在首帧绘制前就要定好主题才能不闪白，而那一刻只有系统深浅色可问。
 - **焦点仍在 Type 自身时不输入**：倒计时结束时若焦点仍停留在 Type 窗口（未切换到目标窗口），程序会明确报错并放弃输入，不会把内容打进自己的输入框。
 - **键入中途切换目标窗口会立即停止**：逐字符输入时每个字符注入前都确认目标窗口仍是倒计时结束时锁定的那一个，一旦切走（含切回 Type 自身）就停下，终态说明已输入多少字；剪贴板路径在写入剪贴板前、粘贴前各确认一次，粘贴瞬间发生切换则报“粘贴结果无法确认”。检查与注入之间还有毫秒级间隙，切换恰好发生在其中时最多漏进一两个字。
 - **上面那条的判定只到“窗口”这一层**：判据是顶层窗口标识而不是标题，目标程序自己弹出的模态窗口（如“另存为”）会改变顶层窗口，因而会中止；但窗口**内部**的目标变化看不到，输入会继续落到新的位置。具体包括：在网页或编辑器里点到另一个输入框、浏览器切换标签页（标签页不是窗口，多个标签页共用同一个内容窗口，切换时窗口层面完全不变）、输入法候选窗与补全弹窗（这些本来就不该中止）。要看住这一层需改用系统辅助功能接口逐元素比对，代价与稳定性风险都高，故未做。
-- **多显示器与缩放**：界面按显示器缩放渲染（已声明 PerMonitorV2 DPI 感知，缩放非 100% 时文字清晰不虚），窗口尺寸在启动时按所在显示器的可用工作区与缩放换算。窗口尺寸是**固定的**（不能拖动边框缩放），并且只在启动时算一次：把窗口拖到**缩放比例不同**的另一台显示器上不会重新适配（重启即可恢复），这时界面会退化为可滚动，控件不会被挤没。单显示器无感。
+- **多显示器与缩放**：界面按显示器缩放渲染（DPI 感知仍由 `tools/mkres` 生成的 manifest 声明为 PerMonitorV2，缩放非 100% 时文字清晰不虚），窗口尺寸与内容缩放由 mygo 窗口框架按所在显示器的工作区与缩放接管。窗口尺寸是**固定的**（不能拖动边框缩放），并且只在启动时算一次：把窗口拖到**缩放比例不同**的另一台显示器上不会重新适配（重启即可恢复），这时界面会退化为可滚动，控件不会被挤没。单显示器无感。
 - **文本直投的边界**：该开关只作用于逐字符路径，**含中文（非 ASCII）的文本默认仍走剪贴板粘贴**，不受它影响；要让中文也走文本层，需同时勾选"绕过粘贴检测"（此时全角标点不再需要 WM_CHAR 绕行，直接经文本层注入）。补全弹窗无法从外部探测，回车前会无条件注入 `Esc`（弹窗开着则被关闭，没开则基本无操作）；目标处于浏览器全屏（Esc 会退出全屏）或 Vim 等 Esc 是功能键的场景请勿开启。个别不处理文本消息的目标（如部分游戏）不适用，关掉即可。
 
 ---
@@ -101,13 +101,13 @@
 
 | 项 | 内容 |
 |---|---|
-| 语言 | Go 1.26 |
-| GUI | WebView2（Edge Chromium） |
+| 语言 | Go 1.27 |
+| GUI | WebView2（Edge Chromium）；窗口 / DPI / 尺寸 / 置顶 / 单实例 / 绑定由 [mygo](https://github.com/egoist/mygo) 框架托管（纯 Go，无 cgo） |
 | 前端 | Vue 3 + TypeScript，Vite 构建为单文件 HTML（无其他运行时依赖） |
-| 构建 | vue-tsc 类型检查 + Vite（vite-plugin-singlefile）+ `go run ./tools/mkres` + `go build` |
+| 构建 | vue-tsc 类型检查 + Vite（vite-plugin-singlefile）+ `go run ./tools/mkres` + `go build`（mygo 纯 Go，构建链仍不需要 C 工具链） |
 | CI | GitHub Actions（windows-latest）：gofmt / go vet / `go test -race`（含 `tools/repo-check` 的仓库治理闸门）/ 依赖漏洞扫描（govulncheck）/ go build + 前端格式检查（`npm run format:check`，Prettier 的 `--check` 非改写模式）+ 前端类型检查（`npm run typecheck`，src 与 test 两份配置）+ 前端单测（`npm test`）+ 前端产物漂移检查 + 版本同步检查 + build.ps1 的 BOM 检查；另按 amd64/arm64 矩阵做发布构建，并用 `tools/pecheck` 读回校验图标、版本与 DPI 声明确实已链入产物，amd64 一档还会跑一次完整的 `scripts/build.ps1`。发版走的是同一套检查（`verify.yml`），不会比平时松 |
 | 发布 | 打 `v<版本>` 标签即由 GitHub Actions 自动发行：校验版本与发布说明一致 → 双架构构建 + 读回校验 → 打包 → 建 Release；说明文字取自入库的 `release-notes/v<版本>.md` |
-| Win32 API | SendInput（KEYEVENTF_UNICODE）+ WM_CHAR 文本直投（SendMessageTimeoutW 直投焦点窗口）+ 剪贴板（CF_UNICODETEXT、EnumClipboardFormats 全格式快照、RtlMoveMemory）+ 前台窗口检测（GetForegroundWindow）+ 单实例互斥体（CreateMutexW） |
+| Win32 API | 输入内核保留自研：SendInput（KEYEVENTF_UNICODE）+ WM_CHAR 文本直投（SendMessageTimeoutW 直投焦点窗口）+ 剪贴板（CF_UNICODETEXT、EnumClipboardFormats 全格式快照、RtlMoveMemory）+ 前台窗口检测（GetForegroundWindow）+ 原生提示框（MessageBoxW）；窗口、DPI、单实例、置顶、图标改由 mygo 接管 |
 | 图标 | 圆角多尺寸 ICO（uv + Pillow 生成，`tools/gen-icon/gen_icon.py` 字节级可复现） |
 | 资源 | `tools/mkres`（纯 Go，winres）生成图标 + 版本信息 + manifest（DPI 感知）→ `.syso` |
 
@@ -116,11 +116,11 @@
 ```
 Type/
 ├── Type.exe                 ← 可执行文件 (构建产物, 输出于根目录, 不入库)
-├── cmd/type/                ← 装配层: 开窗、绑定与开发开关
-│   ├── main.go              ← webview 装配与 Bind 绑定 (平台能力在此注入)
-│   ├── devserver_prod.go    ← 正式构建: 加载嵌入页面, WebView2 调试能力(DevTools/右键菜单)一律关闭
-│   ├── devserver_dev.go     ← dev 构建 (`-tags dev`): 指向 Vite dev server, 并打开 DevTools 与右键菜单
-│   ├── contract_test.go     ← 跨端契约: 绑定名/签名与冻结文案, 并核对前端 ipc.ts 的镜像
+├── cmd/type/                ← 装配层: mygo 开窗、BindAs 绑定与开发开关
+│   ├── main.go              ← mygo 装配: 窗口选项 / BindAs 注册服务 / PreloadScript 注入 shim (平台能力在此注入)
+│   ├── devserver_prod.go    ← 正式构建: 加载嵌入页面, DevTools/右键菜单一律关闭 (mygo DevToolsDisabled)
+│   ├── devserver_dev.go     ← dev 构建 (`-tags dev`): 指向 Vite dev server, 并打开 DevTools 与右键菜单 (mygo DevToolsEnabled)
+│   ├── contract_test.go     ← 跨端契约: 5 个绑定名/签名与冻结文案, 并核对前端 ipc.ts 的镜像
 │   └── probe_contract_test.go ← 探针闸门: wmcharprobe 的直投分支与产品保持一致
 ├── internal/typing/         ← 业务层: 输入状态机 (平台无关, 在任意系统上都能编译并跑测试)
 │   ├── typing.go            ← TypingService 输入状态机 + 平台能力接口 + 时序常量
@@ -132,22 +132,14 @@ Type/
 │   ├── win32.go             ← Win32 清单页: DLL 与 API 入口集中声明
 │   ├── win32_keyboard.go    ← 键盘注入 (SendInput / WM_CHAR 全角标点绕行)
 │   ├── win32_clipboard.go   ← 剪贴板全格式快照/恢复
-│   ├── win32_size.go        ← 尺寸与 DPI 换算 / 按显示器定尺寸 / 内容缩放校正
-│   ├── win32_window.go      ← 窗口置顶
-│   ├── win32_icon.go        ← 窗口图标 (从 exe 自身提取, 首设 + 延迟重试)
 │   ├── win32_foreground.go  ← 前台窗口探测与焦点子窗口定位
-│   ├── win32_instance.go    ← 单实例守卫 (具名互斥体)
 │   ├── win32_msgbox.go      ← 原生提示框 (MessageBoxW, 不依赖 WebView2)
 │   ├── win32_webview2.go    ← WebView2 运行时预检与启动提示
-│   ├── win32_test.go        ← 平台用例 (真剪贴板快照/真建窗口读回类图标索引/单实例判定)
-│   ├── win32_forensics_test.go ← 窗口取证手段 (读回样式位 + WM_NCHITTEST 命中测试, 仅用例使用)
+│   ├── win32_test.go        ← 平台用例 (真剪贴板快照 / 注入读回)
 │   └── win32_inject_readback_test.go ← 注入读回: 真建 EDIT 控件, 整串打进去再逐字节读回比对
 ├── internal/web/            ← go:embed 前端产物包
-│   ├── web.go               ← IndexHTML 嵌入声明 (供 cmd/type 经 SetHtml 加载)
+│   ├── web.go               ← IndexHTML 嵌入声明 (供 cmd/type 经 Page.LoadHTML 加载)
 │   └── dist/index.html      ← Vite 构建产物: 自包含单文件 (入库)
-├── internal/viewfit/        ← 内容缩放校正的节流器 (与平台无关, 只认"该不该再校正一次")
-│   ├── viewfit.go           ← Fitter: 同一比值只处理一次 / 装不下不记账 / 上限内才动窗口
-│   └── viewfit_test.go      ← 节流规则的单测 (不带构建约束, 任何系统上都能跑)
 ├── frontend/                ← Vue 前端 (自包含 Vite 项目)
 │   ├── package.json / package-lock.json ← npm 定义 (vue / vite / vue-tsc 等)
 │   ├── vite.config.ts       ← Vite 配置 (单文件打包, 产物输出 ../internal/web/dist)
@@ -158,22 +150,20 @@ Type/
 │   ├── .prettierignore      ← Prettier 忽略清单 (index.html 与 package-lock.json)
 │   ├── test/                ← 前端单测 (Node 自带测试跑器 + 假时钟, 零新依赖)
 │   │   ├── typingTask.test.ts      ← useTypingTask 轮询状态机回归 (npm test)
-│   │   ├── viewportReport.test.ts  ← 内容缩放上报的节拍 (含"生产默认值"用例)
 │   │   ├── statusBarState.test.ts  ← 进度条显隐(-1 哨兵)/相位类名, 以及组件接线
 │   │   ├── uiScale.test.ts         ← --ui-scale 的取值边界
 │   │   └── ts-resolve.mjs          ← 测试期模块解析钩子 (补省略的 .ts 扩展名)
 │   ├── tools/
 │   │   └── layout-probe.mjs ← 版式几何探针 (无头 Edge 逐档量真实尺寸, 见 AGENTS.md)
 │   └── src/
-│       ├── main.ts          ← 应用入口 (createApp + 启动内容缩放上报)
+│       ├── main.ts          ← 应用入口 (createApp)
 │       ├── App.vue          ← 界面骨架
 │       ├── style.css        ← 界面样式（冷调液态玻璃设计系统：中性底色 + 青色强调，明暗双主题）
-│       ├── ipc.ts           ← webview Bind 全局绑定的类型化封装
+│       ├── ipc.ts           ← 冻结全局函数的类型化封装 (由 mygo 的 PreloadScript shim 提供)
 │       ├── types.ts         ← TypingStatus/TypingPhase (与 Go 端结构对应)
-│       ├── viewportReport.ts ← 内容缩放上报 (立刻一拍 + 400ms 一拍)
 │       ├── composables/
 │       │   ├── useTypingTask.ts ← 输入任务状态机 + 状态轮询
-│       │   ├── useUiScale.ts    ← --ui-scale 观感缩放 (基准宽度与宿主 MinWindowW 一致)
+│       │   ├── useUiScale.ts    ← --ui-scale 观感缩放 (基准宽度与 mygo 窗口下限一致)
 │       │   └── useTheme.ts      ← 明暗主题切换
 │       └── components/
 │           ├── StatusBar.vue    ← 状态栏 + 进度条
@@ -183,6 +173,7 @@ Type/
 │   ├── icon.jpg             ← 图标源图
 │   ├── screenshot-light.png ← README 配图（浅色，兜底图）
 │   └── screenshot-dark.png  ← README 配图（深色，随 GitHub 主题自动切换）
+├── third_party/mygo/        ← 自养的精简框架: mygo v0.7.4 的副本 (独立模块, 删掉 Type 用不到的子系统, 见 docs/tooling.md)
 ├── scripts/
 │   └── build.ps1            ← 一键构建脚本（版本号单一来源）
 ├── tools/
@@ -211,10 +202,10 @@ Type/
 # 前置条件
 #   - Windows 10/11 (打包 exe 需要; 业务层 internal/typing 与平台无关,
 #     在别的系统上也能单独 go test ./internal/typing)
-#   - Go 1.26+ (与 go.mod 声明一致; 不需要 C 工具链)
+#   - Go 1.27.3+ (与 go.mod 声明一致; mygo 纯 Go, 不需要 C 工具链)
 #   - Node.js 24 (前端构建期需要, 产物无需; 版本写在 .node-version, CI 同源。
 #     换主版本会改变 vite 的产出字节, CI 的产物漂移检查会报不一致)
-#   - WebView2 库（go mod tidy 自动下载）
+#   - mygo 等 Go 依赖（go mod tidy 自动下载）
 
 cd Type
 go mod tidy
@@ -277,7 +268,8 @@ go build -tags dev -o Type-dev.exe ./cmd/type   # 终端 2: 带 dev 标签构建
 
 ### 后续计划（TODO）
 
-- **用 Wails 托管窗口，继续保留现有 WebView2 UI**：当前由 `go-webview2` 直接装配原生窗口与 WebView2；后续评估改用 Wails 作为窗口与应用壳，Vue 3 + Vite 的单文件界面保持不变。Wails 在 Windows 上也使用 WebView2，因此这是技术栈与壳层演进，不改变 WebView2 的运行时和完整性要求；迁移时同步重做构建、发版与 pecheck 流程。
+- **窗口壳已从 `go-webview2` 迁移到 [mygo](https://github.com/egoist/mygo)（已完成，不再是待办）**：窗口、DPI、显示器工作区、内容缩放、固定尺寸、置顶、图标、DevTools、页面后台节流与单实例都改由 mygo 托管（纯 Go，无 cgo）；跨端绑定从 6 个收敛为 5 个（退役 `reportViewport`），前端由 `PageOptions.PreloadScript` 注入的 shim 把 `window.*` 映射到 `window.mygo.call`，`frontend/src/ipc.ts` 的全局函数签名与冻结文案一字节未改。输入内核仍保留自研 `internal/win32`，业务层 `internal/typing` 零改动；Vue 3 + Vite 的单文件界面与构建、发版、pecheck 流程不变，原先评估的 Wails 方案不再采用。
+- **框架已按需瘦身（已完成）**：`third_party/mygo` 是自养的副本，只留窗口与 WebView2 宿主。摘掉 TS 生成器、更新器/下载器、内容拦截，并把 `mygo://` 的响应从 `http.Handler` 换成整份返回字节之后，`net/http`、`crypto/tls`、`go/parser` 全部出图，发布产物 **10.42 MB → 7.58 MB**。代价是这份副本要自己跟上游同步，步骤与已删清单见 docs/tooling.md「自养的精简框架 third_party/mygo」。
 
 ---
 
@@ -297,6 +289,5 @@ go build -tags dev -o Type-dev.exe ./cmd/type   # 终端 2: 带 dev 标签构建
 
 本项目基于 [MIT License](LICENSE) 开源发布。
 
-发布产物内含第三方组件（go-webview2、go-winloader、golang.org/x/sys 与内嵌的 WebView2Loader.dll；
-界面框架 Vue 的运行时代码也打包进了内嵌页面），
+发布产物内含第三方组件（`third_party/mygo` 及其依赖、界面框架 Vue 的运行时代码也打包进了内嵌页面），
 版权与许可全文见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

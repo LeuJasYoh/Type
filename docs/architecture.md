@@ -5,28 +5,28 @@
 
 ## 布局与单一来源
 
-- 分三层四个包，依赖方向单向：平台层 → 业务层，装配层 → 两者（internal/viewfit 是第四个
-  与平台无关的包，只承接"该不该再校正一次"这条规则）。
+- 分三层四个包，依赖方向单向：平台层 → 业务层，装配层 → 两者。窗口、DPI、显示器工作区、
+  内容缩放、固定尺寸、置顶、图标、DevTools、页面后台节流与单实例全部由 mygo 框架托管，
+  不再有 internal/viewfit 这类平台无关的窗口适配包。
   - internal/typing/：业务层，TypingService 输入状态机 + 平台能力接口（消费方定义）+ 时序
     常量区；刻意不带构建约束，任何系统上都能 go test。一次任务占住槽之后怎么走完在
-    taskrun.go（五个阶段：收尾、开工前置、倒计时与锁定、分流注入、终态）。
-  - internal/viewfit/：内容缩放校正的节流器；只认"这个比值该不该再摆一次窗口"，不含任何
-    Win32 调用，怎么摆窗口由装配层传入。
+    taskrun.go（五个阶段：收尾、开工前置、倒计时与锁定、分流注入、终态）。mygo 迁移对它零改动。
   - internal/win32/：平台层，三个接口的 Win32 实现。win32.go 是 DLL 入口清单页；
-    keyboard / clipboard / foreground / size（尺寸与 DPI）/ window（置顶）/ icon / instance /
-    msgbox / webview2 各管一摊。实现与业务层接口的绑定在 win32.go 末尾以 `var _ typing.X = ...`
-    编译期核对；业务层不得反向依赖本包。
+    keyboard / clipboard / foreground / msgbox / webview2 各管一摊（输入内核与启动提示）；
+    窗口尺寸、DPI、置顶、图标、单实例已移出本包。实现与业务层接口的绑定在 win32.go 末尾以
+    `var _ typing.X = ...` 编译期核对；业务层不得反向依赖本包。
   - internal/web/：go:embed 前端产物包（dist/index.html 入库，免 Node 亦可 go build/test）。
-  - cmd/type/：装配层，main.go 开窗与 Bind 绑定（平台能力在此注入）；devserver_prod.go /
-    devserver_dev.go 由 dev 构建标签二选一（dev server 地址与 WebView2 调试模式）；
-    构建约束 windows && (amd64 || arm64)。
+  - cmd/type/：装配层，main.go 用 mygo 开窗（WindowOptions / PageOptions）、以
+    `mygo.BindAs("Type", svc)` 注册服务、经 `PageOptions.PreloadScript` 注入 shim 把 `window.*`
+    映射到 `window.mygo.call`（平台能力在此注入）；devserver_prod.go / devserver_dev.go 由 dev
+    构建标签二选一（dev server 地址与 mygo DevTools 开关）；构建约束 windows && (amd64 || arm64)。
 - frontend/：自包含 Vite 项目（package.json / node_modules 都在这里）。src 只放产品代码；
   test/ 用 Node 自带测试跑器，零新依赖；tsconfig.json 只含 src，test/** 由 tsconfig.test.json
   收口（node 全局类型不能并进主配置，否则会抢走浏览器侧 setTimeout 的返回值）。
 - tools/：不进产品链路的工具，各自一个目录：mkres（资源生成）、pecheck（产物读回校验）、
   wmcharprobe（注入探针）、equivcheck（重构等价性）、gen-icon（资产管线）、less-ai-tone
   （对外文字规则）、repo-check（仓库治理闸门，test-only 包；go test ./... 会跑到）。
-  操作手册见 docs/tooling.md。
+  操作手册收在 docs/tooling.md。
 - docs/ 分四层：契约（behavior-contract / architecture / comment-style / build-and-release /
   writing-style）、知识（invariants）、工具手册（tooling）、规划（roadmap）。注释重写的
   一次性档案已移出工作区，git 历史保存快照，工作区只留 docs/comment-ledger/README.md 指针。
@@ -36,7 +36,7 @@
 | 事实 | 唯一来源 | 谁校验 |
 |---|---|---|
 | 版本号 | cmd/type/main.go 的 `var version`；提取实现 scripts/version.ps1 | build.ps1 / 三个 workflow 共用；repo-check 断言不许有第二份提取正则 |
-| 冻结文案与跨端契约 | docs/behavior-contract.md | internal/typing 与 cmd/type 的契约测试 |
+| 冻结文案与跨端契约（5 个绑定名 + shim 映射） | docs/behavior-contract.md | internal/typing 与 cmd/type 的契约测试 |
 | 注释规则 | docs/comment-style.md | tools/repo-check 的注释/指针/链接闸门 |
 | README 项目结构树 | README.md | tools/repo-check 双向核对 |
 | 文档指针与链接 | docs/ 标题与真实文件 | tools/repo-check |
@@ -88,14 +88,13 @@ HEAD 产物与新构建产物（套用与 git diff 相同的行尾归一，Windo
 | 构建产物校验（PE 架构 / 资源读回） | Go（tools/pecheck，仅构建期使用） |
 | 图标/图像资产管线 | Python，仅经 uv（tools/gen-icon 是自包含项目，锁定 pillow 版本） |
 
-构建链**不含 C 编译器**：webview 绑定是纯 Go，资源由 mkres 生成，go build / go test 都不需要 cgo；
-新增依赖时别把 cgo 带回来。唯一例外是 `go test -race`：Windows 上竞态检测器要 cgo，需要
-MinGW 的 gcc（测试期依赖，产品构建与发布不需要）。
+构建链**不含 C 编译器**：mygo 框架是纯 Go（无 cgo），资源由 mkres 生成，go build / go test
+都不需要 cgo；新增依赖时别把 cgo 带回来。唯一例外是 `go test -race`：Windows 上竞态检测器
+要 cgo，需要 MinGW 的 gcc（测试期依赖，产品构建与发布不需要）。
 
 ## GitHub 的语言构成只统计产品代码
 
 仓库页的语言条**只代表产品代码**：测试与构建/工具链都不计入（判据是"这文件是不是产品的一部分"，
 不是"它重不重要"）。规则用 Linguist 的 `-linguist-detectable` 开关写在 .gitattributes 里，
-只影响统计与语言条，不影响语法高亮与任何构建。覆盖范围与新增目录的注意事项见
-docs/tooling.md「语言统计与 .gitattributes」；**具体字节数不写进文档**（写过就会漂，需要的
-时候按 .gitattributes 的口径现场统计）。
+只影响统计与语言条，不影响语法高亮与任何构建。覆盖范围与新增目录的注意事项见 docs/tooling.md「语言统计与 .gitattributes」；
+**具体字节数不写进文档**（写过就会漂，需要的时候按 .gitattributes 的口径现场统计）。

@@ -43,14 +43,15 @@ type injectMsg struct {
 }
 
 const (
-	pmRemove      = 0x0001
-	wmSetText     = 0x000C // 0x000B 是 WM_SETREDRAW, 传错会把控件弄成不重绘且不报错
-	wsVisible     = 0x10000000
-	wsChild       = 0x40000000
-	wsBorder      = 0x00800000
-	esMultiLine   = 0x0004
-	esAutoVScroll = 0x0040
-	esWantReturn  = 0x1000
+	pmRemove           = 0x0001
+	wmSetText          = 0x000C // 0x000B 是 WM_SETREDRAW, 传错会把控件弄成不重绘且不报错
+	wsVisible          = 0x10000000
+	wsOverlappedWindow = 0x00CF0000 // 仅为读回夹具建顶层窗口, 与窗口固定尺寸无关
+	wsChild            = 0x40000000
+	wsBorder           = 0x00800000
+	esMultiLine        = 0x0004
+	esAutoVScroll      = 0x0040
+	esWantReturn       = 0x1000
 )
 
 // pumpInput 把线程输入队列里的消息喂给窗口, 直到队列空或时间片用完。

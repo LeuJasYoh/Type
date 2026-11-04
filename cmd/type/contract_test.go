@@ -1,8 +1,7 @@
 //go:build windows && (amd64 || arm64)
 
-// 跨端契约: webview Bind 的函数名与签名, 以及前端 ipc.ts 的镜像。这些名字与参数顺序
-// 是 Go 与 JS 之间唯一的事实来源, 而两边各自的编译器都管不到对方 —— 改个名字、换一下
-// 两个 bool 的先后, 两边都编译通过、界面照常渲染, 只是功能悄悄错位, 要等用户发现。
+// 跨端契约: shim 提供的 window 全局函数名与签名, 以及前端 ipc.ts 的镜像。
+// 这些名字与参数顺序是 Go 与 JS 之间唯一的事实来源, 两边各自的编译器都管不到对方。
 // 见 docs/behavior-contract.md「行为契约（冻结，改动需双端同步）」
 
 package main
@@ -18,16 +17,13 @@ import (
 	"github.com/LeuJasYoh/type/internal/typing"
 )
 
-// contractBindNames 六个绑定名, 前端 window 上必须是同名的这六个
-var contractBindNames = []string{"startTyping", "cancelTyping", "toggleTopmost", "getTopmost", "getTypingStatus", "reportViewport"}
+// contractBindNames 五个绑定名, 前端 window 上必须是同名的这五个
+var contractBindNames = []string{"startTyping", "cancelTyping", "toggleTopmost", "getTopmost", "getTypingStatus"}
 
 var (
-	bindCallRE  = regexp.MustCompile(`mustBind\(w, "([A-Za-z]+)"`)
+	shimDefRE   = regexp.MustCompile(`(?m)^window\.([A-Za-z]+)\s*=`)
+	shimCallRE  = regexp.MustCompile(`"Type\.([A-Za-z]+)"`)
 	ipcExportRE = regexp.MustCompile(`(?m)^export const ([A-Za-z]+) = \(([^)]*)\)`)
-	// reportViewport 是匿名闭包, 反射够不着, 只能在源码上钉: 它只收一个 float64
-	// (devicePixelRatio), 参数个数或类型一变, 内容缩放校正就静默失效 ——
-	// 界面回到"输入框压住选项行"的样子, 而没有任何环节会报错
-	reportViewportRE = regexp.MustCompile(`mustBind\(w, "reportViewport",\s*func\((\w+) float64\) error`)
 )
 
 // mainSource 读装配层源码: 绑定名与前端镜像都要对着它核
@@ -40,17 +36,44 @@ func mainSource(t *testing.T) string {
 	return string(data)
 }
 
-// 装配层绑定的名字必须正好是约定的六个: 少一个前端会拿到 undefined,
-// 多一个说明后端加了能力而前端镜像与文档都没跟上
+// shim 定义的 window 全局函数必须正好是约定的五个: 少一个前端会拿到
+// undefined, 多一个说明后端加了能力而前端镜像与文档都没跟上
 func TestBindNamesMatchContract(t *testing.T) {
 	src := mainSource(t)
-	matches := bindCallRE.FindAllStringSubmatch(src, -1)
+	matches := shimDefRE.FindAllStringSubmatch(src, -1)
 	got := make([]string, 0, len(matches))
 	for _, m := range matches {
 		got = append(got, m[1])
 	}
 	if !reflect.DeepEqual(got, contractBindNames) {
-		t.Fatalf("Bind 名 = %v, want %v", got, contractBindNames)
+		t.Fatalf("shim 的 window 函数 = %v, want %v", got, contractBindNames)
+	}
+}
+
+// 每个 shim 函数都要指向真实存在的服务方法: 名字写错时两边都编译通过,
+// 只有用户点按钮才会发现 Promise 永远 reject
+func TestShimTargetsExist(t *testing.T) {
+	src := mainSource(t)
+	if !strings.Contains(src, `mygo.BindAs("Type", s)`) {
+		t.Error("装配层没有 BindAs(\"Type\", s): shim 的调用名将全部落空")
+	}
+	want := map[string]bool{
+		"StartTyping": true, "CancelTyping": true, "ToggleTopmost": true,
+		"GetTopmost": true, "GetTypingStatus": true,
+	}
+	got := map[string]bool{}
+	for _, m := range shimCallRE.FindAllStringSubmatch(src, -1) {
+		got[m[1]] = true
+	}
+	for name := range want {
+		if !got[name] {
+			t.Errorf("shim 没有调用 Type.%s", name)
+		}
+	}
+	for name := range got {
+		if !want[name] {
+			t.Errorf("shim 调用了未约定的 Type.%s", name)
+		}
 	}
 }
 
@@ -114,83 +137,26 @@ func TestOtherSignaturesFrozen(t *testing.T) {
 	}
 }
 
-// TestToggleTopmostSignaturesFrozen toggleTopmost / getTopmost 的返回签名必须冻结。
-// 以前只钉了绑定名: 把返回类型改成 string 时 Go 编译、vue-tsc、契约测试全绿, 而
-// App.vue 的置顶按钮会拿到非布尔值、状态静默错乱。
+// TestToggleTopmostSignaturesFrozen 置顶两个方法的返回签名必须冻结。
+// 把返回类型改成 string 时 Go 编译、vue-tsc、契约测试全绿, 而 App.vue 的
+// 置顶按钮会拿到非布尔值、状态静默错乱。
 func TestToggleTopmostSignaturesFrozen(t *testing.T) {
-	src := mainSource(t)
-	cases := []struct {
-		name string
-		re   string
-	}{
-		{"toggleTopmost", `mustBind\(w, "toggleTopmost", func\(\) \(bool, error\)`},
-		{"getTopmost", `mustBind\(w, "getTopmost", func\(\) \(bool, error\)`},
-	}
-	for _, c := range cases {
-		if n := regexp.MustCompile(c.re).FindAllString(src, -1); len(n) != 1 {
-			t.Errorf("main.go 里 %s 的绑定形式匹配到 %d 处, want 1: 需要 func() (bool, error)", c.name, len(n))
+	typ := reflect.TypeOf(&typeService{})
+	for _, name := range []string{"ToggleTopmost", "GetTopmost"} {
+		m, ok := typ.MethodByName(name)
+		if !ok {
+			t.Errorf("typeService 缺少 %s 方法", name)
+			continue
+		}
+		if m.Type.NumIn() != 1 || m.Type.NumOut() != 2 ||
+			m.Type.Out(0).Kind() != reflect.Bool ||
+			m.Type.Out(1) != reflect.TypeOf((*error)(nil)).Elem() {
+			t.Errorf("%s 签名 = %v, want () (bool, error)", name, m.Type)
 		}
 	}
 }
 
-// reportViewportBody 取 main.go 里 reportViewport 回调体的源码: 从绑定那行起, 到该行
-// 收尾的 "\n\t})" 为止。用它钉"回调真的去校正了", 光钉签名是不够的
-func reportViewportBody(src string) string {
-	i := strings.Index(src, `mustBind(w, "reportViewport"`)
-	if i < 0 {
-		return ""
-	}
-	rest := src[i:]
-	if j := strings.Index(rest, "\n\t})"); j >= 0 {
-		return rest[:j]
-	}
-	return rest
-}
-
-// reportViewport(dpr float64) 的签名、回调体与前端调用端都要钉: 它是"真实内容缩放"
-// 唯一的传递通道。**只钉签名是假绿** —— 回调体掏空成 `return nil`, 或删掉页面的上报
-// 调用, 整套闸门全绿而校正彻底失效; 所以连回调体与调用点一起钉。
-// 见 docs/invariants.md「其它不变量」
-func TestReportViewportSignatureFrozen(t *testing.T) {
-	src := mainSource(t)
-	if n := len(reportViewportRE.FindAllStringSubmatch(src, -1)); n != 1 {
-		t.Fatalf("main.go 里 reportViewport 的绑定形式匹配到 %d 处, want 1: 需要 `mustBind(w, \"reportViewport\", func(dpr float64) error`", n)
-	}
-	body := reportViewportBody(src)
-	for _, need := range []string{"win32.WindowClientForScale(", "win32.SetWindowClientRect("} {
-		if !strings.Contains(body, need) {
-			t.Errorf("reportViewport 的回调体里没有 %s: 校正被掏空了, 而界面只会重新变挤", need)
-		}
-	}
-
-	ipc := repoFile(t, "frontend", "src", "ipc.ts")
-	m := regexp.MustCompile(`(?m)^export const reportViewport = \(([^)]*)\)`).FindStringSubmatch(ipc)
-	if m == nil {
-		t.Fatal("ipc.ts 里找不到 `export const reportViewport = (...)`")
-	}
-	if args := strings.TrimSpace(m[1]); args != "dpr: number" {
-		t.Errorf("ipc.ts 的 reportViewport 参数 = %q, want %q", args, "dpr: number")
-	}
-	if !strings.Contains(ipc, "reportViewport(dpr: number): Promise<void>;") {
-		t.Error("ipc.ts 的 window 接口里 reportViewport 的声明不是 (dpr: number): Promise<void>")
-	}
-
-	// 调用端: 通道两端都在, 页面不调用等于没上报。上报被抽进 viewportReport.ts,
-	// 所以"有没有真的启动它"要看 main.ts 的调用点 —— 只断言"模块里出现过某个表达式"
-	// 拦不住"调用点被删掉而函数体还在"(独立复核实测: 那样断言照绿)
-	if ts := repoFile(t, "frontend", "src", "main.ts"); !strings.Contains(ts, "startViewportReporting()") {
-		t.Error("main.ts 没有启动内容缩放上报: 缺 startViewportReporting()")
-	}
-	// 默认参数才是真正的接线: 读 window.devicePixelRatio, 交给 ipc 的 reportViewport。
-	// 匹配的是**默认值本身**(`= reportViewport,`), 不是"文件里出现过 reportViewport" ——
-	// 后者在"import 留着、默认值换成空函数"时照样成立(独立复核的变异实测)
-	if vr := repoFile(t, "frontend", "src", "viewportReport.ts"); !strings.Contains(vr, "window.devicePixelRatio") ||
-		!strings.Contains(vr, "= reportViewport,") {
-		t.Error("viewportReport.ts 的默认参数没接上: 需要 window.devicePixelRatio 与 `= reportViewport,`")
-	}
-}
-
-// 前端镜像: ipc.ts 里声明并导出的四个函数名必须与绑定名一一对应。
+// 前端镜像: ipc.ts 里声明并导出的五个函数名必须与绑定名一一对应。
 // 前端重构改了 window 接口或导出名时, 这里会先红
 func TestFrontendMirrorsBindNames(t *testing.T) {
 	path := filepath.Join("..", "..", "frontend", "src", "ipc.ts")
@@ -489,9 +455,8 @@ func TestThemeBootScriptKeepsKeyAndOrder(t *testing.T) {
 
 // ─── 前端镜像: --ui-scale 的基准宽度 ───────────────────
 
-// 前端 --ui-scale 的基准宽度必须等于宿主窗口的宽度下限: 宿主把窗口下限定在 540
-// (internal/win32 的 MinWindowW), 前端说到 540 为止不缩放; 只改一处时两边都不报错,
-// 界面要么开始缩放要么不再缩放(这类"跨端同一个数字"此前漂移过: 旧的 480/720)。
+// 前端 --ui-scale 的基准宽度必须等于 MyGo 窗口的宽度下限: 装配层把
+// WindowOptions.MinWidth 定在 540, 前端说到 540 为止不缩放。
 // 见 docs/invariants.md「内容缩放与界面几何」
 func TestUiScaleBaseMatchesWindowFloor(t *testing.T) {
 	ts := repoFile(t, "frontend", "src", "composables", "useUiScale.ts")
@@ -499,14 +464,12 @@ func TestUiScaleBaseMatchesWindowFloor(t *testing.T) {
 	if m == nil {
 		t.Fatal("useUiScale.ts 里找不到 BASE_WIDTH 的字面量")
 	}
-	goSrc := packageGoSource(t, "internal", "win32")
-	gs := regexp.MustCompile(`MinWindowW\s*=\s*(\d+)`).FindAllStringSubmatch(goSrc, -1)
+	gs := regexp.MustCompile(`(?m)^\s*minWindowW\s*=\s*(\d+)`).FindAllStringSubmatch(mainSource(t), -1)
 	if len(gs) != 1 {
-		t.Fatalf("internal/win32 包里 MinWindowW 的字面量应恰好 1 处, 实际 %d 处: 取到的值不可信", len(gs))
+		t.Fatalf("main.go 里 minWindowW 的字面量应恰好 1 处, 实际 %d 处: 取到的值不可信", len(gs))
 	}
-	g := gs[0]
-	if m[1] != g[1] {
-		t.Errorf("前端缩放基准 BASE_WIDTH = %s, 宿主窗口宽度下限 MinWindowW = %s: 两者必须一致",
-			m[1], g[1])
+	if m[1] != gs[0][1] {
+		t.Errorf("前端缩放基准 BASE_WIDTH = %s, MyGo 窗口宽度下限 minWindowW = %s: 两者必须一致",
+			m[1], gs[0][1])
 	}
 }

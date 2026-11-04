@@ -112,39 +112,30 @@
 ## 其它不变量
 
 ### 窗口尺寸与 DPI
-
-- **窗口尺寸只在启动时算一次，之后固定**：占工作区高度 49%，逻辑尺寸夹在 540×480 ~ 648×540，
-  宽由高按 6:5 推出，工作区内居中。下限是保守取值（最长终态文案 540 宽下仍占一行、可用 470px），
-  别按"刚好放下"的更紧数字往下调。
-- 三条不许顺手加回来：① 不响应 `WM_DPICHANGED`、不做跨显示器跟随（窗口侧改尺寸与内容侧
-  Chromium 改缩放不同步就是位图拉伸发虚）；② 不放宽窗口样式——`SetSize(HintFixed)` 去掉
-  `WS_THICKFRAME|WS_MAXIMIZEBOX` 是"不可拖大"的唯一来源，`TestWindowSizeIsFixed` 以 A/B 形式
-  读回样式位并用 `WM_NCHITTEST` 命中测试钉着；③ 不在运行时调 `SetProcessDpiAwarenessContext`。
-- `SetWindowClientRect` 把客户区反推成窗口矩形（少了这步客户区比目标矮一个标题栏）：走
-  `AdjustWindowRectExForDpi`（5 个参数，漏 dpi 会把 600×400 摆成 1540×941），并读回复核、
-  差 1 像素以上按差额再摆一次。
-- DPI 感知由 `tools/mkres` 生成的 manifest 声明（PerMonitorV2）；窗口坐标一律按物理像素解释，
-  逻辑尺寸必须经 `internal/win32` 的 `ScaledForDPI` 换算，否则固定尺寸窗口会小两成。
-- **`ScaledForDPI` 取整必须四舍五入**（`roundDiv`）：整数截断在非整数倍缩放下稳定少一个物理像素
-  （125% 下 1024 → 1023），而客户区同时决定 WebView2 的渲染表面大小。
+- **窗口尺寸、DPI 与显示器工作区已由 mygo 接管**：装配层用 `WindowOptions` 的
+  `Width/Height`（540×480，DIP）、`UseContentSize`、`Min/MaxWidth/Height`（540×480 ~ 648×540）、
+  `FitContent` 与 `DisableResize` 一次性声明，框架按显示器缩放换算物理像素并居中。
+- `DisableResize` 在 Windows 上同样清掉 `WS_THICKFRAME|WS_MAXIMIZEBOX`，与旧的
+  `SetSize(HintFixed)` 等价；固定尺寸的判据改为 `Window.IsResizable() == false`。
+- DPI 感知仍由 `tools/mkres` 生成的 manifest（PerMonitorV2）声明，mygo 在 Windows 启动
+  时另调 `SetProcessDpiAwarenessContext`；两者一致，装配层不再手工换算逻辑尺寸。
+- 旧的 `ScaledForDPI` / `SetWindowClientRect` 与 `internal/win32/win32_size.go` 已删除：
+  物理像素与 DIP 的换算是框架内部职责，产品代码不再直接调 `SetWindowPos`。
 
 ### 内容缩放与界面几何
-
-- 尺寸等式只有一条：**CSS 视口 = 客户区物理像素 ÷ 内容缩放**。窗口按显示器 DPI、内容缩放由
-  WebView2 自己定，两者不等时视口就不是设计尺寸（实测 125% 机器：窗口 720×600 物理正确，
-  内容按约 1.75 倍渲染、视口缩到 411×343，输入框盖住选项行）。
-- 处置三层，别只做一半：① 前端启动时把 `devicePixelRatio` 经 `reportViewport` 报给宿主
-  （立刻一拍 + 400ms 一拍），宿主按"设计逻辑尺寸 × 比值"重设客户区并在工作区内重新居中，
-  最多校正 2 次（节流规则在 `internal/viewfit`：同一个比值只处理一次、摆不下不记账）；
-  ② 装不进工作区时不校正，由前端兜底滚动（`.section` 下限 217px、各行列 `flex-shrink: 0`）；
-  ③ 跨显示器拖动仍不跟随，界面退化为可滚动。
+- **内容缩放校正已由 mygo 的 `FitContent` 接管**：页面把内容尺寸经 bridge 报给框架，
+  框架按缩放比把客户区摆到设计尺寸并在工作区内居中；`reportViewport` 绑定、
+  `frontend/src/viewportReport.ts` 与 `internal/viewfit` 因此整体退役。
+- 实测（125% 缩放显示器）：`devicePixelRatio = 1.25` 时 CSS 视口恰为 540×480（设计尺寸），
+  窗口加载前后 `ContentBounds` 一致、没有二次摆动。这是迁移前靠"量回来再适配"达到的
+  同一效果，现在由框架保证。
+- 装不进工作区时由 `MaxWidth/MaxHeight` 与框架的工作区约束兜界，界面仍可滚动；
+  `.section` 下限 217px、各行列 `flex-shrink: 0` 的兜底样式保留。
 - 复现配方（不改代码）：`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--force-device-scale-factor=1.75`
-  + dev 构建。`go-webview2` 既不设也不暴露 `RasterizationScale`，"量回来再适配"是当前路线。
-- **契约测试必须连回调体与调用端一起钉**：只钉签名时，把回调体掏空或删掉页面里的上报调用，
-  整套闸门全绿而校正彻底失效。上报节拍由前端测试在行为上钉住（含"生产默认值"用例）。
+  + dev 构建，观察视口是否仍等于设计尺寸。
 - **`--ui-scale` 只缩放数值型细节**：内边距、间距、圆角、控件高度、图标边长；`border-width` 与
   `font-size` 永不参与（小数边框会出虚边，字号是布局输入）。默认与 540 宽档恒为 1；基准宽度
-  540 必须等于宿主窗口下限 `MinWindowW`（跨端契约测试核对）。
+  540 必须等于 `WindowOptions.MinWidth`（跨端契约测试从 `main.go` 的 `minWindowW` 核对）。
 - 状态栏高度写死一行（`37.5px` = `calc(13px * 1.5 + 16px + 2px)`），文案 nowrap + 省略号。
   判断文案是否被截断不能只看 `scrollWidth > clientWidth`（两者都取整，差 1~2px 会假报），以截图为准。
 
@@ -194,27 +185,23 @@
   NUL 处截断而误判）。
 
 ### 启动与单实例
-
-- **启动三道闸门**：① 创建 WebView2 前用依赖自带的 `webviewloader.GetInstalledVersion()` 预检
-  （官方建议"先检测、再引导安装"），缺运行时给 `MsgWebView2Missing`；② 创建后仍要判 `New` 的
-  返回值，且 **nil 判空必须在 `defer w.Destroy()` 之前**（defer 求值 receiver 时就 panic）；
-  ③ 控制器在回调里异步创建，失败时不走 `New` 返回值：`go-webview2` 用 `int64(res) < 0` 判 HRESULT，
-  而负的 32 位值零扩展后反而是正数，判断永不成立并 nil 解引用；`createWebView2` 用 recover 折算成
-  nil。**别把 recover 当多余兜底删掉**：GUI 子系统没有控制台，不接住就是"双击之后窗口一闪就没了"。
+- **启动三道闸门**：① `mygo.WebViewAvailable()` 在创建窗口前预检 WebView2 Runtime，
+  缺失给 `MsgWebView2Missing`；② `NewWindow` 在控制器异步创建失败时可能 panic，
+  `App.WhenReady` 回调里的 recover 接住并给 `MsgWebView2InitFailed`；③ `BindAs` 出错
+  同样是 panic，由 `bindService` 的 recover 给 `MsgBindFailed`。三条提示都走自研
+  `MessageBoxW`：此刻 `App.Run` 尚未开始或刚失败，框架的 `Dialog` 不可用。
 - **宿主进程完整性级别偏低时 WebView2 拒绝创建控制器**：给 exe 所在目录打 Low 完整性标签
   （`icacls <目录> /setintegritylevel Low`）后必崩、拷到别处就正常。排查先看 `icacls` 输出；
-  修复是在用户自己的终端执行 `icacls <目录> /setintegritylevel Medium`，让目录与之后的
-  构建产物都继承 Medium（代理沙箱的受限 token 可能无权修改，需由用户执行）。
+  修复是在用户自己的终端执行 `icacls <目录> /setintegritylevel Medium`。
 - 复现"机器上没有 WebView2"：把 `WEBVIEW2_BROWSER_EXECUTABLE_FOLDER` 指向不存在的目录再启动；
-  期望弹出「Type 无法启动」提示框，进程停在框上，stderr 为空。
-- **单实例守卫认两个错误码**：`CreateMutexW` 对"名字已被占用"有两种回报——有权打开时报
-  `ERROR_ALREADY_EXISTS` 并返回句柄，无权打开时报 `ERROR_ACCESS_DENIED` 并返回 NULL（与"没建成"
-  共用返回值 0 却语义相反）。判定抽在 `mutexAlreadyHeld` 且有单测。漏掉后一支会让"管理员先开、
-  普通权限后开"的两个实例同时跑，互相抢剪贴板与键盘焦点。
+  期望弹出「Type 无法启动」提示框，stderr 为空。
+- **单实例改用 `mygo.App.RequestSingleInstanceLock()`**：第二个实例把命令行参数转发给
+  第一个后自行退出；第一个在 `OnSecondInstance` 里**只 `FlashFrame`，绝不 `Focus`** ——
+  Type 靠前台窗口锁定注入目标，此刻抢焦点会触发「输入中断：目标窗口已切换」或
+  「未切换到目标窗口」。旧的 `CreateMutexW` 加模态提示框方案已删除。
 - 产品仅支持 `windows && (amd64 || arm64)`：386 被刻意禁止（INPUT 结构体手工填充仅匹配 64 位 ABI）。
-  业务层 `internal/typing` 与 `internal/viewfit` 无构建约束，可在任何系统编译；但非 Windows 上
-  `go test ./...` 会**明确失败**（win32 与 cmd 被构建约束排除、typing 的产物不是 Win32 程序），
-  所以产品验证都在 Windows 上。
+  业务层 `internal/typing` 无构建约束，可在任何系统编译；但非 Windows 上
+  `go test ./...` 会**明确失败**（win32 与 cmd 被构建约束排除），所以产品验证都在 Windows 上。
 
 ### 取证与工具边界
 
@@ -228,17 +215,18 @@
   字面量断言；别拿它的"一致"当零行为变化的唯一证据。旧侧一次只读 `--old-file` 一个文件，
   跨多文件重构要逐个跑；取函数体必须用 `go/parser`（旧的正则实现遇函数内行首大括号会提前截断）。
 - **Win32 负常量以 `^uintptr(n)` 表达**（`^` 是按位取反不是取负）：看着像笔误但不是；这地方
-  极易被误读误改，故 `TestApplyWindowIconClassIndex` 会真建窗口读回类图标核对；新增同类常量照此
-  补一条实测用例，别只写"常量等于某值"式的自我复读。
+  极易被误读误改。注入读回夹具里的 `wsOverlappedWindow` 之类常量照此写法，别只写
+  "常量等于某值"式的自我复读。
 - **Win32 怪癖的注释保留在 `internal/win32` 的实现内**（全角标点 WM_CHAR 绕行、GDI 句柄型格式
-  跳过、图标句柄所有权约定），它们是本代码库最有价值的文档，重构时勿删。
+  跳过、剪贴板快照的完整性判据），它们是本代码库最有价值的文档，重构时勿删。
 - **发布构建一律带 `-trimpath`**：少了它产物里嵌着构建机绝对路径（实测 exe 里能搜到仓库路径），
   既漏环境信息，也让"同样源码编出同样文件"做不到。
 - **注入失败必须可见**：`TextInjector` 五个方法都返回 bool（SendInput 被 UIPI 拦截时整体返回 0；
   WM_CHAR 直投的 `SendMessageTimeout` 超时/失败返回 0）。别把返回值改成 void。
-- **界面以 `about:blank` 加载，没有可用的源**：exe 走 `SetHtml`，文档 origin 为 null，
-  `localStorage`/`sessionStorage` 一律抛 `SecurityError`；所以主题的手动选择不跨启动保留
-  （README 已知限制），要"记住偏好"得走宿主侧存储（加 Bind），别直接调 localStorage 靠 try/catch 兜。
+- **界面以 `about:blank` 加载，没有可用的源**：装配层走 `Page.LoadHTML(web.IndexHTML, "")`，
+  文档 origin 为 null，`localStorage`/`sessionStorage` 一律抛 `SecurityError`（实测仍是
+  `blocked:SecurityError`）；所以主题的手动选择不跨启动保留（README 已知限制）。
+  要"记住偏好"得走宿主侧存储并经 shim 暴露给页面，别直接调 localStorage 靠 try/catch 兜。
 - **主题的首帧接线有三处约定**：存储键写在两处（首帧内联脚本读它、`useTheme` 写它）；内联脚本必须
   排在入口脚本之前（挪进 Vue 等于首帧闪白）；"该用哪套主题"的判定只许有一处（契约测试连
   "useTheme 不许读存储"一起钉住）。

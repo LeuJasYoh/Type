@@ -72,6 +72,10 @@ WM_CHAR 文本直投 vs SendInput 按键的 A/B 验证；direct 模式逐字镜�
   不入库）。资源缺失时 go build 不报错，所以发布构建必须配合 pecheck 读回。
 - pecheck：读回校验产物，核对 PE 架构 + 图标/版本/manifest 是否真的链进 exe（发版与 CI 共用）。
   不数图标帧数，那是 assets/icon.ico 的属性，重新生成图标就会变。
+- **图标组的资源 ID 必须是数字 1**：mygo 注册窗口类时用 `LoadIconW(instance(), 1)` 取应用图标。
+  mkres 早期按字符串名 `IDI_ICON1` 写资源（go-webview2 时代靠 `RetrySetIcon` 从 exe 重新提取，
+  不依赖 ID），迁移后 ID 对不上就会让标题栏与任务栏退回系统默认图标。pecheck 会钉住这条，
+  别改回按名字写。
 
 ## 语言统计与 .gitattributes
 
@@ -82,3 +86,35 @@ Linguist 的 `-linguist-detectable` 开关排除，规则写在 .gitattributes�
 覆盖范围：`*_test.go`、`frontend/test/**`、`frontend/tools/**`、`scripts/**`、`tools/**`、
 `*.config.ts`。新增顶层测试或工具目录时，记得让规则覆盖到；否则它会带着自己的字节数重新挤进
 语言条。补丁文件、图标等二进制资产不参与统计。
+
+## 自养的精简框架 third_party/mygo
+
+Type 的窗口壳依赖 [mygo](https://github.com/egoist/mygo)，而框架是"全家桶"：TS 生成器、
+更新器、下载器、内容拦截、i18n、PDF、文件监视全在同一个包里。其中只有窗口与 WebView2
+宿主是 Type 用得到的，其余部分连同它们拖进来的 `net/http`、`crypto/tls`、`go/parser`
+一起进发布产物——那是 10.42 MB 里的 6 MB。
+
+所以本仓保留一份改过的 mygo：`third_party/mygo` 是**独立模块**（自带 go.mod），根的
+`go.mod` 用 `replace github.com/egoist/mygo => ./third_party/mygo` 指过去。独立模块这个
+形态有两个好处：不进根的 `go test ./...`，也不进 `tools/repo-check` 的扫描范围（它的
+目录清单里没有 third_party）。
+
+**已经删掉的**（Type 不用，删了不影响窗口）：
+
+| 部分 | 为什么删 | 省下 |
+|---|---|---|
+| `internal/tsgen` 与 TS 客户端生成 | `BindAs` 会链接 `go/parser` 整套编译器前端，而前端是手写的 ipc.ts | 0.43 MB |
+| `updater.go` / `downloads.go` | 应用不自动更新、页面不产生下载 | 0.17 MB |
+| `protocol.go` 的 `http.Handler` 层 | 换成整份返回字节；Type 只用 `LoadHTML`，`mygo://` 只服务内嵌页面 | 0.96 MB |
+| 内容拦截（`content_rules.go` + `internal/contentrules`） | 没有广告拦截需求；它经 `x/net/publicsuffix` 拖进 `net/http` 与 `cookiejar` | 1.29 MB |
+| 非 Windows 后端（darwin/linux/js）、cmd/mygo、examples、docs、plugins | 本仓只在 Windows 构建 | 仓库 3.8 MB |
+
+**同步上游的方式**（框架升级时照着做）：
+
+1. 把新版本的 mygo 覆盖进 `third_party/mygo`（先 `chmod -R u+w`，模块缓存里的文件是只读的）。
+2. 重放上表的删改。改动处都有 `本仓` 开头的注释，`git grep 本仓 third_party/mygo` 能找到。
+3. 跑 `go mod tidy`，再按下面的清单验证。
+
+**改完必须验证的四件事**：`go build ./...`、`go test ./...`（根的，不含 third_party）、
+`go run ./tools/pecheck`（图标/版本/manifest 仍在），以及**真的启动一次 exe 看界面**——
+scheme 层与页面加载动过之后，编译通过并不能证明页面画得出来。

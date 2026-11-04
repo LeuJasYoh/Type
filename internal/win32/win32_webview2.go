@@ -1,10 +1,9 @@
 //go:build windows && (amd64 || arm64)
 
-// ─── WebView2 运行时预检与启动提示 ────────────────────
-// 界面由 WebView2 渲染, 而 exe 是 GUI 子系统(没有控制台): 运行时缺失或初始化
-// 失败时, 用户看到的只是"双击之后什么都没有"。本文件是启动路径的一道闸门 ——
-// 创建之前预检运行时, 起不来时把原因交由原生提示框说出去, 全貌见
-// docs/invariants.md「启动与单实例」
+// ─── WebView2 启动提示 ────────────────────────────────
+// 界面由 MyGo 托管的 WebView2 渲染, 而 exe 是 GUI 子系统(没有控制台): 运行时
+// 缺失或初始化失败时, 用户看到的只是"双击之后什么都没有"。预检在装配层做,
+// 这里把原因交由原生提示框说出去; 此刻 App.Run 尚未开始, 框架的 Dialog 不可用。
 
 package win32
 
@@ -12,8 +11,6 @@ import (
 	"os"
 	"syscall"
 	"unsafe"
-
-	"github.com/jchv/go-webview2/webviewloader"
 )
 
 // webview2DownloadURL 与 README「系统要求」一栏给用户的下载地址是同一处
@@ -35,14 +32,6 @@ const (
 	MsgBindFailed = "界面初始化失败，Type 无法把界面与后台接起来。\n\n" +
 		"点\"是\"打开下载页重新安装；点\"否\"直接退出。"
 )
-
-// WebView2Available 创建 WebView2 之前预检运行时, 用的是依赖自带的加载器: 没装
-// 时它返回空串且不报错, 查询本身失败时一并按不可用处理。预检通过不等于创建必定
-// 成功(运行时可能损坏或被策略拦下), 故创建后仍要判空
-func WebView2Available() bool {
-	version, err := webviewloader.GetInstalledVersion()
-	return err == nil && version != ""
-}
 
 // PromptWebView2Unusable 把"界面起不来"的原因交到用户手上: 点"是"打开官方
 // 下载页, 然后以非零退出码收尾 —— 这是"没能启动", 不是"用户主动关掉", 便于
