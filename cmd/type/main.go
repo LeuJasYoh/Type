@@ -16,7 +16,7 @@ import (
 	"github.com/egoist/mygo"
 )
 
-var version = "2.0.1"
+var version = "2.0.2"
 
 // 窗口的设计尺寸(DIP)。Width/Height 是客户区尺寸, Min/Max 给 FitContent 兜界。
 // minWindowW 同时是前端 --ui-scale 的基准宽度, 由契约测试双端核对。
