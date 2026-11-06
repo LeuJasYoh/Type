@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"unsafe"
+
+	"github.com/egoist/mygo/internal/tsgen"
 )
 
 // jsonOptions are used for every value crossing the IPC boundary.
@@ -61,6 +63,10 @@ var ipc struct {
 	services []*service
 	methods  map[string]*method
 	events   []*eventInfo
+	// writeClient is WriteTypeScript once the app bound a service or
+	// declared an event, which App.Run calls under MYGO_GENERATE: an app
+	// that binds nothing writes no client, and links no generator.
+	writeClient func(path string) error
 }
 
 var (
@@ -111,6 +117,7 @@ func BindAs(name string, service any) {
 // MyGo, and apps of native UI have no use for.
 func linkClient() {
 	ipc.Lock()
+	ipc.writeClient = WriteTypeScript
 	ipc.Unlock()
 }
 
@@ -130,7 +137,7 @@ func bind(name string, svc any, internal bool) error {
 	if name == "" {
 		return fmt.Errorf("mygo: cannot bind %s: type has no name, use BindAs", t)
 	}
-	if !internal && !isServiceName(name) {
+	if !internal && !tsgen.IsIdentifier(name) {
 		return fmt.Errorf("mygo: service name %q is not a valid identifier", name)
 	}
 	s := &service{name: name, typ: t, internal: internal}
@@ -247,7 +254,7 @@ func validateType(t reflect.Type) error {
 	if hasChannel(t, map[reflect.Type]bool{}) {
 		return fmt.Errorf("type %s holds a Channel, which can only be a parameter", t)
 	}
-	return validateJSONType(t)
+	return tsgen.Validate(t)
 }
 
 // methodPC returns the entry of the method's own code rather than the
@@ -475,6 +482,7 @@ func NewEvent[T any](name string) *Event[T] {
 		}
 	}
 	ipc.events = append(ipc.events, &eventInfo{name: name, typ: t, pc: pc, file: file, line: line})
+	ipc.writeClient = WriteTypeScript
 	return &Event[T]{name: name}
 }
 

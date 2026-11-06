@@ -402,9 +402,8 @@ func (b *Backend) focusedWindow() *window {
 	return b.windows[fg]
 }
 
-// editRole performs the edit roles in the page. The page needs a user
-// gesture for them, which DevTools evaluation provides; paste types the
-// clipboard's text, since pages may not read the clipboard.
+// editRole performs the edit roles in the page, or sends them to native UI.
+// DevTools evaluation gives document.execCommand a user gesture.
 func editRole(w *window, role string) bool {
 	commands := map[string]string{
 		"undo": "undo", "redo": "redo", "cut": "cut", "copy": "copy",
@@ -422,7 +421,23 @@ func editRole(w *window, role string) bool {
 		return true
 	}
 	switch role {
-	case "paste", "pasteAndMatchStyle":
+	case "paste":
+		// Run Chromium's paste command with every clipboard format. The
+		// page sees keydown and keyup, but an Unidentified key without
+		// modifiers avoids invoking its Ctrl+V handlers too.
+		w.withWebView(func() {
+			w.focusWebView() // the menu has closed
+			w.devtools("Input.dispatchKeyEvent", `{"type":"rawKeyDown","key":"Unidentified","commands":["paste"]}`, func(_ string, err error) {
+				if err != nil {
+					return
+				}
+				w.withWebView(func() {
+					w.devtools("Input.dispatchKeyEvent", `{"type":"keyUp","key":"Unidentified"}`, nil)
+				})
+			})
+		})
+		return true
+	case "pasteAndMatchStyle":
 		text := clipboard{w.b}.ReadText()
 		params, _ := json.Marshal(map[string]string{"text": text})
 		w.withWebView(func() { w.devtools("Input.insertText", string(params), nil) })

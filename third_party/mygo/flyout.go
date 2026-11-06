@@ -84,8 +84,20 @@ type FlyoutOptions struct {
 	// at which its text wraps; its height is its content's, the body's
 	// margins included, within MinHeight and MaxHeight, beyond which the
 	// page scrolls. A page that gives html a size of its own, as
-	// height: 100%, keeps the flyout at that size. Native UI (Content)
-	// does not fit.
+	// height: 100%, keeps the flyout at that size.
+	//
+	// Native UI (Content) fits as well: each frame measures the root's
+	// content as it lays it out, at its max-content width within
+	// MinWidth and MaxWidth and its height at that width, within
+	// MinHeight and MaxHeight, beyond which a Scroll in it scrolls; what
+	// is placed Absolute takes none of it. A frame that measures another
+	// size resizes the flyout, and the next lays the content out at that
+	// size: two frames, the first at the size the flyout had. A hidden
+	// flyout draws no frames: content changed while it was hidden lays
+	// out as Show or ShowInactive shows it, which shows the flyout at the
+	// size it takes. A view that sizes its content after the window's
+	// (Context.Size) settles at the size it took, rather than resize back
+	// and forth.
 	FitContent bool
 	// MinWidth, MinHeight, MaxWidth and MaxHeight bound the size
 	// FitContent gives the flyout, in DIPs; 0 is no bound. The work area
@@ -101,7 +113,8 @@ type FlyoutOptions struct {
 	// pointer, but on Anchor, as AppKit's popovers: so a click on the
 	// button that opened it closes it, and does not open it again.
 	// Menus, lists to choose from and popovers are focusable, and handle
-	// their own keys.
+	// their own keys. A window modal to the flyout (WindowOptions.Modal)
+	// keeps it open while it shows: a confirmation the flyout asks for.
 	//
 	// Without it, the flyout never takes the keyboard, which stays in
 	// the parent, and stays until it is closed: tooltips, hover cards,
@@ -173,6 +186,9 @@ func NewFlyout(opts FlyoutOptions) *Window {
 			min: platform.Size{Width: opts.MinWidth, Height: opts.MinHeight},
 			max: platform.Size{Width: opts.MaxWidth, Height: opts.MaxHeight},
 		}
+		if opts.Content != nil {
+			fit.native, fit.show = (*Window).connectFit, (*Window).fitBeforeShow
+		}
 	}
 	return createWindow("NewFlyout", WindowOptions{
 		URL:               opts.URL,
@@ -192,7 +208,7 @@ func NewFlyout(opts FlyoutOptions) *Window {
 		Content:           opts.Content,
 		Hidden:            opts.Hidden,
 		Vibrancy:          opts.Vibrancy,
-	}, nil, &flyoutOptions{fo, opts.Tray, fit})
+	}, nil, nil, &flyoutOptions{fo, opts.Tray, fit})
 }
 
 // flyoutOptions carries what newWindow needs of a flyout: its tray's

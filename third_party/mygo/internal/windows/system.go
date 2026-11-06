@@ -324,26 +324,37 @@ type screen struct{}
 var monitorEnumCallback uintptr
 
 func (screen) Displays() []platform.Display {
-	var mons []uintptr
-	enumMonitors(func(m uintptr) { mons = append(mons, m) })
-	out := make([]platform.Display, 0, len(mons))
-	for _, m := range mons {
-		info := monitorInfo(m)
-		dpi := monitorDPI(m)
-		conv := func(r rect) platform.Rect {
-			return platform.Rect{X: toDIP(r.Left, dpi), Y: toDIP(r.Top, dpi), Width: toDIP(r.Right-r.Left, dpi), Height: toDIP(r.Bottom-r.Top, dpi)}
-		}
+	s := screenSpace()
+	out := make([]platform.Display, 0, len(s.displays))
+	for i, d := range s.displays {
+		info := monitorInfo(d.handle)
+		bounds, work := s.displayDIPs(i)
 		out = append(out, platform.Display{
-			ID:          int64(m),
+			ID:          int64(d.handle),
 			Label:       string(utf16Decode(info.Device[:])),
-			Bounds:      conv(info.Monitor),
-			WorkArea:    conv(info.Work),
-			ScaleFactor: float64(dpi) / 96,
+			Bounds:      bounds,
+			WorkArea:    work,
+			ScaleFactor: float64(d.dpi) / 96,
 			Primary:     info.Flags&monitorInfoPrimary != 0,
 		})
 	}
 	return out
 }
+
+// screenDisplays returns the monitors, in pixels. Main thread only.
+func screenDisplays() []screenDisplay {
+	var displays []screenDisplay
+	enumMonitors(func(m uintptr) {
+		info := monitorInfo(m)
+		displays = append(displays, screenDisplay{bounds: pixelRect(info.Monitor), work: pixelRect(info.Work), dpi: monitorDPI(m), handle: m})
+	})
+	return displays
+}
+
+// screenSpace returns the space of DIPs of the monitors as they are now,
+// which every conversion of a point or a rectangle of the screen between
+// pixels and DIPs goes through. Main thread only.
+func screenSpace() dipSpace { return newDIPSpace(screenDisplays(), dpiOf(0)) }
 
 var monitorSink func(uintptr)
 
@@ -365,8 +376,7 @@ func enumMonitors(fn func(uintptr)) {
 func (screen) CursorPoint() platform.Point {
 	var pt point
 	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
-	dpi := monitorDPI(monitorAt(int(pt.X), int(pt.Y)))
-	return platform.Point{X: toDIP(pt.X, dpi), Y: toDIP(pt.Y, dpi)}
+	return screenSpace().pointToDIP(int(pt.X), int(pt.Y))
 }
 
 // Theme.

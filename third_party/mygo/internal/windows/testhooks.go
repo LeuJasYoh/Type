@@ -81,6 +81,13 @@ func menuCommandAt(hwnd uintptr, path []string) (*window, uint16, error) {
 	return nil, 0, fmt.Errorf("mygo: no menu item")
 }
 
+// TestEditRole runs an edit role, including those the core leaves out of
+// Windows menus, such as pasteAndMatchStyle.
+func TestEditRole(hwnd uintptr, role string) bool {
+	w := theBackend.windows[hwnd]
+	return w != nil && editRole(w, role)
+}
+
 // TestMenuBarShown reports whether a window shows its menu bar.
 func TestMenuBarShown(hwnd uintptr) bool {
 	bar, _, _ := user32.NewProc("GetMenu").Call(hwnd)
@@ -300,6 +307,16 @@ func TestTopNonClient(hwnd uintptr) (px, want int32) {
 		want = 1
 	}
 	return origin.Y - r.Top, want
+}
+
+// TestFrameExtension returns how far a window's frame extends over the top
+// and the bottom of its client area, -1 for all over.
+func TestFrameExtension(hwnd uintptr) (top, bottom int32) {
+	w := theBackend.windows[hwnd]
+	if w == nil {
+		return 0, 0
+	}
+	return w.glass.Top, w.glass.Bottom
 }
 
 // TestClickSurface clicks (x, y), in DIPs, in a window showing native UI,

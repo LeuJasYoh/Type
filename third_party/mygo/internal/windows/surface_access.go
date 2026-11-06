@@ -131,6 +131,9 @@ const (
 	uiaPositionInSetProperty    = 30152
 	uiaSizeOfSetProperty        = 30153
 	uiaLiveSettingProperty      = 30135
+	uiaAriaRoleProperty         = 30101
+	uiaAriaPropertiesProperty   = 30102
+	uiaLandmarkTypeProperty     = 30157
 
 	uiaFocusChangedEvent                = 20005
 	uiaElementAddedToSelectionEvent     = 20010
@@ -168,7 +171,7 @@ var uiaControlTypes = map[platform.AccessRole]int32{
 	platform.RoleToggleButton: 50000, platform.RoleComboBox: 50003, platform.RoleDisclosure: 50000,
 	platform.RoleMeter: 50012, platform.RoleStepper: 50016, platform.RoleColorWell: 50000, platform.RoleAlertDialog: 50033,
 	platform.RoleMenu: 50009, platform.RoleMenuBar: 50010, platform.RoleMenuItem: 50011, platform.RoleMenuItemCheckBox: 50011,
-	platform.RoleMenuItemRadio: 50011, platform.RoleHeading: 50020,
+	platform.RoleMenuItemRadio: 50011, platform.RoleHeading: 50020, platform.RoleNavigation: 50026,
 }
 
 // variant is VARIANT, with the value of the types used here.
@@ -629,6 +632,9 @@ func (e *uiaElement) notifyChanges(prev platform.AccessNode) {
 			procUiaRaiseAutomationEvent.Call(e.ptr(ifaceSimple), uiaTextSelectionChangedEvent)
 		}
 	}
+	if before, after := ariaProperties(prev), ariaProperties(n); before != after {
+		str(uiaAriaPropertiesProperty, before, after)
+	}
 	if e.supports(ifaceExpandCollapse) && prev.States&platform.AccessExpanded != n.States&platform.AccessExpanded {
 		changed(uiaExpandStateProperty, variant{VT: vtI4, Val: uint64(expandState(prev))}, variant{VT: vtI4, Val: uint64(expandState(n))})
 	}
@@ -749,7 +755,7 @@ func initUIA() {
 			if hr, ok := uiaOf(this).pageCall(uiaGetProviderOptions, p); ok {
 				return hr
 			}
-			*(*int32)(native(p)) = 0x1 | 0x20 // ServerSideProvider, UseComThreading
+			*(*int32)(native(p)) = 0x2 | 0x20 // ServerSideProvider, UseComThreading
 			return sOK
 		}),
 		cb(func(this, pattern, p uintptr) uintptr { // GetPatternProvider
@@ -1188,7 +1194,31 @@ func (e *uiaElement) property(id int, v *variant) {
 		if n.Role == platform.RoleStatus || n.ID == announcerID {
 			*v = variant{VT: vtI4, Val: 1} // Polite
 		}
+	case uiaLandmarkTypeProperty:
+		if n.Role == platform.RoleNavigation {
+			*v = variant{VT: vtI4, Val: 80004} // UIA_NavigationLandmarkTypeId
+		}
+	case uiaAriaRoleProperty:
+		if n.Role == platform.RoleNavigation {
+			str("navigation")
+		}
+	case uiaAriaPropertiesProperty:
+		str(ariaProperties(n))
 	}
+}
+
+// ariaProperties returns the ARIA states of a node that UI Automation has
+// no property of, as Chromium gives them in AriaProperties: busy=true for
+// content about to change, and current=page for the current item.
+func ariaProperties(n platform.AccessNode) string {
+	var props []string
+	if n.States&platform.AccessBusy != 0 {
+		props = append(props, "busy=true")
+	}
+	if c := n.Current; c != platform.CurrentNone {
+		props = append(props, "current="+c.String())
+	}
+	return strings.Join(props, ";")
 }
 
 // chosen returns the elements chosen in the element's Selection.

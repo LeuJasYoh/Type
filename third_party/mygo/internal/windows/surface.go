@@ -920,6 +920,16 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 			caret := len(utf16.Decode(units[:min(int(pos), len(units))]))
 			s.composed(platform.SurfaceEvent{Kind: platform.TextComposition, Text: text, Caret: caret})
 		}
+		if lp&(gcsResultStr|gcsCompStr) == 0 && imeString(himc, gcsCompStr) == "" {
+			// Microsoft's Japanese IME gives the composition up (Esc) with
+			// neither, rather than with an empty GCS_COMPSTR, before
+			// WM_IME_ENDCOMPOSITION, which would keep the marked text.
+			if c := s.input.Client; c != nil {
+				s.clientComposition.Cancel(c)
+			} else {
+				s.send(platform.SurfaceEvent{Kind: platform.TextComposition})
+			}
+		}
 		procImmReleaseContext.Call(hwnd, himc)
 		s.placeIME()
 		return 0, true

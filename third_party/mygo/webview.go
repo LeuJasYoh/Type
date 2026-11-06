@@ -110,6 +110,7 @@ func (w *Window) newWebView(opts WebViewOptions, bg *background) (*WebView, erro
 		return nil, fmt.Errorf("mygo: cannot create a web view: %w", err)
 	}
 	pw.native = &webViewNative{Window: w.native, web: nv}
+	startContentRules(nv, opts.Page.ContentRules)
 	v := &WebView{pw}
 	pw.webView = v
 
@@ -186,6 +187,7 @@ func (w *Window) placeWebViews(views []platform.WebViewPlacement) {
 			for _, p := range views {
 				if p.WebView == n.web {
 					n.frame, n.shown = p.Frame, true
+					n.scaleX, n.scaleY = p.Scale()
 				}
 			}
 		}
@@ -221,6 +223,7 @@ func (w *Window) destroyWebView() {
 	cancel := w.pageCancel
 	w.mu.Unlock()
 	cancel()
+	fire(&w.onClosed)
 }
 
 // destroyWebViews closes the web views of a window that closed. Main
@@ -263,11 +266,12 @@ type webViewNative struct {
 	platform.Window
 	web platform.WebView
 	// frame is where the window's view last showed the web view, while
-	// shown; misplaced is set once a view of another window placed it,
-	// which is logged once.
-	frame     platform.RectF
-	shown     bool
-	misplaced bool
+	// shown, scaled by scaleX and scaleY; misplaced is set once a view of
+	// another window placed it, which is logged once.
+	frame          platform.RectF
+	scaleX, scaleY float64
+	shown          bool
+	misplaced      bool
 }
 
 func (n *webViewNative) Surface() platform.Surface   { return nil }
@@ -295,6 +299,7 @@ func (n *webViewNative) Eval(js string)                      { n.web.Eval(js) }
 func (n *webViewNative) SetUserScripts(scripts []platform.UserScript) {
 	n.web.SetUserScripts(scripts)
 }
+func (n *webViewNative) SetContentRules(lists []any) { n.web.SetContentRules(lists) }
 func (n *webViewNative) CallAsyncFunction(body string, cb func(string, error)) {
 	n.web.CallAsyncFunction(body, cb)
 }

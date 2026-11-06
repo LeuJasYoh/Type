@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"image/color"
 	"image/png"
+	"log"
 	"math"
 	"path/filepath"
 	"runtime"
@@ -77,6 +78,24 @@ func (ShellModule) FileIcon(path string, size int) ([]byte, error) {
 	var png []byte
 	err := onMainValue(func() (err error) {
 		png, err = backend().Shell().FileIcon(path, size)
+		return err
+	})
+	return png, err
+}
+
+// TypeIcon returns the icon the file manager shows for files with the
+// extension ext, such as "pdf" or ".pdf", as a PNG image of size by size
+// pixels, as FileIcon does, though no such file needs to exist: the icon
+// of an attachment not yet downloaded. It fails in browsers.
+func (ShellModule) TypeIcon(ext string, size int) ([]byte, error) {
+	needsApp("Shell.TypeIcon")
+	if size <= 0 {
+		return nil, errors.New("mygo: Shell.TypeIcon: size must be positive")
+	}
+	ext = strings.TrimPrefix(ext, ".")
+	var png []byte
+	err := onMainValue(func() (err error) {
+		png, err = backend().Shell().TypeIcon(ext, size)
 		return err
 	})
 	return png, err
@@ -510,6 +529,48 @@ func (t *ThemeModule) apply() {
 	}
 }
 
+// SetGTKCSS styles the widgets GTK draws for the app on Linux with css, a
+// GTK 3 style sheet: the decorations GTK draws around windows, the title
+// buttons of hidden title bars (TitleBarStyle), menus and dialogs, for a
+// frame that matches the rest of the desktop, as GTK 4's flat header bars
+// and round title buttons. Pages and native UI, which MyGo draws, never
+// see it. GTK takes the sheet at the user's priority
+// (GTK_STYLE_PROVIDER_PRIORITY_USER), above the theme's rules and MyGo's
+// own. A later call replaces the sheet, and "" removes it. A sheet that
+// does not parse returns GTK's error, and the sheet set before stays. On
+// other platforms it does nothing and returns nil.
+//
+// It is safe from any goroutine, and may be called before App.Run: other
+// goroutines wait for Run to load the sheet, and the main goroutine keeps
+// it for Run, which logs a parse error, as no call is left to return it.
+func (t *ThemeModule) SetGTKCSS(css string) error {
+	if _, ok := backend().(platform.StyleBackend); !ok {
+		return nil
+	}
+	if isMainThread() && !App.initialized {
+		pendingGTKCSS = func() {
+			if err := setGTKCSS(css); err != nil {
+				log.Print(err)
+			}
+		}
+		return nil
+	}
+	return onMainValue(func() error { return setGTKCSS(css) })
+}
+
+// pendingGTKCSS loads the sheet main gave Theme.SetGTKCSS last before Run,
+// which calls it once it has initialized the backend; nil without one.
+// Main thread only.
+var pendingGTKCSS func()
+
+// setGTKCSS loads a sheet of Theme.SetGTKCSS. Main thread only.
+func setGTKCSS(css string) error {
+	if err := backend().(platform.StyleBackend).SetStyleSheet(css); err != nil {
+		return fmt.Errorf("mygo: Theme.SetGTKCSS: %w", err)
+	}
+	return nil
+}
+
 // OnUpdated is called when the effective appearance, or the desktop's
 // preferences (Preferences), change.
 func (t *ThemeModule) OnUpdated(fn func()) (off func()) { return t.onUpdated.add(fn, false) }
@@ -844,6 +905,14 @@ type NotificationOptions struct {
 	// Notification Center (macOS), such as the messages of a conversation.
 	// Empty leaves them in the app's.
 	Group string
+	// Image is an encoded image, PNG or JPEG, that the notification shows
+	// with its text, such as the cover of the track that started playing:
+	// an attachment on macOS, whose thumbnail grows as the notification
+	// expands, the notification's image on Linux, and the balloon's large
+	// icon on Windows. An image the system cannot decode leaves the
+	// notification without one. MyGo does not fetch remote images.
+	// NewNotification copies it.
+	Image []byte
 	// Sender describes the sender of an incoming direct message. macOS 12+
 	// can show its avatar with the app's small icon when the signed app has
 	// the Communication Notifications capability. Otherwise, or if preparing
@@ -917,6 +986,10 @@ func NewNotification(opts NotificationOptions) *Notification {
 		// Unique across runs too, as notifications outlive them.
 		id = "mygo-" + randomText()
 	}
+	opts.Image = slices.Clone(opts.Image)
+	if len(opts.Image) > 0 {
+		linkNotificationImages()
+	}
 	if opts.Sender != nil {
 		sender := *opts.Sender
 		sender.Name = cmp.Or(sender.Name, opts.Title)
@@ -981,6 +1054,7 @@ func (n *Notification) ShowContext(ctx context.Context) error {
 			Body:     n.opts.Body,
 			Silent:   n.opts.Silent,
 			Group:    n.opts.Group,
+			Image:    n.opts.Image,
 		}
 		if s := n.opts.Sender; s != nil {
 			note.Sender = &platform.NotificationSender{ID: s.ID, Name: s.Name, Avatar: s.Avatar}

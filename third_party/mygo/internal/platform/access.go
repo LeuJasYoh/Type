@@ -43,6 +43,9 @@ type AccessNode struct {
 	// Level is how deep an item of a tree is, or the rank of a heading,
 	// from 1; 0 for other nodes.
 	Level int
+	// Current says which item the element is the current one of, as the
+	// page the user is on.
+	Current AccessCurrent
 	// PosInSet is the place of an item in its set, from 1, and SetSize
 	// the size of the set, 0 when not given: a list's rows say which of
 	// all they are, whether or not the others are built, and the list how
@@ -147,6 +150,10 @@ const (
 	// RoleHeading is the title of a section, Level its rank: 1 for the
 	// highest.
 	RoleHeading
+	// RoleNavigation is a landmark holding links that move around the app
+	// or a document, as a breadcrumb trail or a navigation bar: ARIA's
+	// navigation.
+	RoleNavigation
 )
 
 // Ranged reports whether nodes of a role have a value in a range (Min,
@@ -194,7 +201,52 @@ const (
 	AccessExpandable
 	// AccessVertical is set on a slider going up.
 	AccessVertical
+	// AccessBusy is set on an element whose content is about to change,
+	// as a region loading, which assistive technology waits for before
+	// reading it: ARIA's aria-busy.
+	AccessBusy
 )
+
+// AccessCurrent is the item an element is the current one of among those
+// around it, as ARIA's aria-current says.
+type AccessCurrent uint8
+
+const (
+	// CurrentNone is not current.
+	CurrentNone AccessCurrent = iota
+	// CurrentItem is the current item of a set, aria-current="true".
+	CurrentItem
+	// CurrentPage is the page the user is on, as the last crumb of a
+	// breadcrumb trail or the link of a navigation bar to it.
+	CurrentPage
+	// CurrentStep is the step of a process the user is at.
+	CurrentStep
+	// CurrentLocation is the place shown, as in a flow chart.
+	CurrentLocation
+	// CurrentDate is today in a calendar, and CurrentTime now in a
+	// timetable.
+	CurrentDate
+	CurrentTime
+)
+
+// String returns the value of aria-current that c is, "" for CurrentNone.
+func (c AccessCurrent) String() string {
+	switch c {
+	case CurrentItem:
+		return "true"
+	case CurrentPage:
+		return "page"
+	case CurrentStep:
+		return "step"
+	case CurrentLocation:
+		return "location"
+	case CurrentDate:
+		return "date"
+	case CurrentTime:
+		return "time"
+	}
+	return ""
+}
 
 // AccessActions are the actions an element of an AccessTree takes.
 type AccessActions uint8

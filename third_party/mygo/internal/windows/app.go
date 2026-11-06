@@ -454,6 +454,10 @@ func (b *Backend) appMessage(m uint32, wp, lp uintptr) (uintptr, bool) {
 			b.recompose()
 			return 0, true
 		}
+		if wp == timerCookieView && checkCookieViews != nil {
+			checkCookieViews(b)
+			return 0, true
+		}
 	case wmAppDeviceRemoved:
 		b.deviceRemoved(wp)
 		return 0, true

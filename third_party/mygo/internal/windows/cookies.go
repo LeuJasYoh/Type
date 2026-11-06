@@ -45,11 +45,16 @@ var iidICoreWebView2_2 = guid("9e8f0cf8-e670-4b5e-b2bc-73e061e3184c")
 
 // cookieStore gives the cookie calls the cookie manager of a profile:
 // the one the app's web views share, or a session's (session.go). WebView2
-// has one only through a web view: a call takes that of a window of the
-// profile showing a page, or, before there is one, that of a hidden web
-// view of the app's own window, made for it and closed once windows show
-// pages and no call needs it. A window's first navigation waits for the
-// calls under way when its web view is made, so that a cookie set
+// has one only through a web view: a call takes that of a web view of the
+// profile showing a page, in a window or in native UI, or, while there is
+// none, that of a hidden web view of the app's own window, made for it.
+// The hidden one closes once such a web view shows pages and no call
+// needs it, or, in an app showing none, once no call has needed it for
+// cookieViewIdle, unless it alone keeps cookies that closing it would
+// lose (checkCookieView): WebView2's processes, which it keeps running,
+// exit with the last web view, and session cookies, or all of an
+// InPrivate profile's, with them. A window's first navigation waits for
+// the calls under way when its web view is made, so that a cookie set
 // meanwhile goes along. All of it is main-thread only.
 type cookieStore struct {
 	controller uintptr // the hidden web view's, once made
@@ -60,6 +65,11 @@ type cookieStore struct {
 	requests   map[*cookieRequest]struct{}
 	next       uint64       // the number of the next request
 	held       []heldWindow // windows waiting for requests to finish
+	// checked is next after the request of checkCookieView, and lossless
+	// whether that found that closing the hidden web view loses no
+	// cookie: while checked is next, no call came since.
+	checked  uint64
+	lossless bool
 
 	data *dataStore // the session's profile, nil for the default one
 }
@@ -141,16 +151,25 @@ func (b *Backend) holdForCookies(w *window) bool {
 	return true
 }
 
-// pageWebView returns a window whose web view shows pages of the profile
-// of s, or nil.
+// pageWebView returns a web view showing pages of the profile of s, a
+// window's or one in its native UI (webview_embed.go), or nil: that of
+// the window first in order of handles, its own before those in it.
 func (b *Backend) pageWebView(s *cookieStore) *window {
 	var selected *window
-	for hwnd, w := range b.windows {
-		if w.closed || w.surface != nil || !w.ready || w.webview == 0 || b.cookiesOf(w.opts.DataStore) != s {
+	var at uintptr
+	for hwnd, top := range b.windows {
+		if selected != nil && hwnd > at {
 			continue
 		}
-		if selected == nil || hwnd < selected.hwnd {
-			selected = w
+		for i := -1; i < len(top.webViews); i++ {
+			w := top
+			if i >= 0 {
+				w = top.webViews[i]
+			}
+			if !w.closed && w.surface == nil && w.ready && w.webview != 0 && b.cookiesOf(w.opts.DataStore) == s {
+				selected, at = w, hwnd
+				break
+			}
 		}
 	}
 	return selected
@@ -196,6 +215,9 @@ func (a appController) withCookieManager(store platform.DataStore, done func([]p
 		begin(w.webview)
 		return
 	}
+	// Only apps making cookie calls link the check of idle hidden web
+	// views, which the application window's timer runs.
+	checkCookieViews = (*Backend).checkCookieViews
 	b.cookieView(s, func(err error) {
 		if r.finished {
 			return
@@ -264,8 +286,9 @@ func (b *Backend) cookieView(s *cookieStore, done func(error)) {
 	})
 }
 
-// closeCookieView closes the hidden web view of s once windows of its
-// profile show pages, or its session's store closed, and no call needs
+// closeCookieView closes the hidden web view of s once web views of its
+// profile show pages, or its session's store closed, or checkCookieView
+// found it idle and keeping no cookie only it keeps, and no call needs
 // it. It does so from the message loop, not here: a call finishes in a
 // completion handler of the hidden web view, and closing the view from
 // inside one crashes the message loop.
@@ -278,8 +301,9 @@ func (b *Backend) closeCookieView(s *cookieStore) {
 }
 
 // closeCookieViewNow closes the hidden web views, as closeCookieView
-// asks, that no call needs by now, of profiles whose windows show pages or
-// whose sessions' stores closed.
+// asks, that no call needs by now, of profiles whose web views show pages
+// or whose sessions' stores closed, or that checkCookieView found it can
+// close; it has timerCookieView check the others again.
 func (b *Backend) closeCookieViewNow() {
 	b.closeCookieViewOf(&b.cookies)
 	for _, d := range b.stores {
@@ -293,13 +317,83 @@ func (b *Backend) closeCookieViewOf(s *cookieStore) {
 		return
 	}
 	s.closing = false
-	if s.controller == 0 || len(s.requests) > 0 || b.pageWebView(s) == nil && (s.data == nil || !s.data.closed) {
+	if s.controller == 0 || len(s.requests) > 0 {
 		return
+	}
+	if b.pageWebView(s) == nil && (s.data == nil || !s.data.closed) {
+		if s.checked != s.next {
+			// A call came since the last check: check again once none
+			// has for cookieViewIdle (SetTimer restarts the timer).
+			procSetTimer.Call(b.appHwnd, timerCookieView, uintptr(cookieViewIdle/time.Millisecond), 0)
+			return
+		}
+		if !s.lossless {
+			return // until a call changes the cookies, or a web view shows pages
+		}
 	}
 	comCall(s.controller, ctlClose)
 	release(s.webview)
 	release(s.controller)
 	s.controller, s.webview = 0, 0
+}
+
+const (
+	// cookieViewIdle is how long a hidden web view stays once no call
+	// needs it, in an app with no web view showing pages of its profile:
+	// calls coming one after the other use the same one, rather than
+	// each starting WebView2's processes again.
+	cookieViewIdle = 5 * time.Second
+	// timerCookieView is the application window's timer that checks the
+	// hidden web views idle for cookieViewIdle (checkCookieViews).
+	timerCookieView = 4
+)
+
+// checkCookieViews is (*Backend).checkCookieViews once the app made a
+// cookie call, which the application window's timerCookieView runs.
+var checkCookieViews func(*Backend)
+
+// checkCookieViews checks the hidden web views that no call needed for
+// cookieViewIdle.
+func (b *Backend) checkCookieViews() {
+	procKillTimer.Call(b.appHwnd, timerCookieView)
+	b.checkCookieView(&b.cookies)
+	for _, d := range b.stores {
+		b.checkCookieView(&d.cookies)
+	}
+}
+
+// checkCookieView lists, through the idle hidden web view of s, the
+// cookies its profile keeps only while a web view runs: session cookies,
+// and every cookie of an InPrivate profile. The request finishing has
+// closeCookieView close the view when there is none and no call came
+// since. When there are some, the view stays until a call or a web view
+// showing pages of the profile comes.
+func (b *Backend) checkCookieView(s *cookieStore) {
+	if s.controller == 0 || s.closing || len(s.requests) > 0 || s.checked == s.next {
+		return
+	}
+	var store platform.DataStore
+	if s.data != nil {
+		store = s.data
+	}
+	private := s.data != nil && s.data.private
+	n, lossless := s.next, true
+	appController{b}.withCookieManager(store, func(_ []platform.Cookie, err error) {
+		s.checked, s.lossless = n+1, err == nil && lossless
+	}, func(r *cookieRequest) {
+		r.enumerate("", func(list uintptr) error {
+			err := cookieEach(list, func(c uintptr) error {
+				var session int32
+				if hr := comCall(c, cookieGetSession, uintptr(unsafe.Pointer(&session))); failed(hr) {
+					return hresultError("cookies: get_IsSession", hr)
+				}
+				lossless = lossless && !private && session == 0
+				return nil
+			})
+			r.finish(nil, err)
+			return nil
+		})
+	})
 }
 
 // enumerate gets the cookies a request to uri sends, every cookie when

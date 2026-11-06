@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -211,8 +212,6 @@ func (w *window) setUp(controller uintptr) {
 		release(s3)
 	}
 	comCall(s, setPutAreDefaultContextMenusEnabled, 1)
-	// Keep the user's zoom: the page handles a smaller CSS viewport itself.
-	// Startup resets ZoomFactor so a leftover per-origin zoom cannot persist.
 	comCall(s, setPutIsZoomControlEnabled, 1)
 	// WebView2 has a touchscreen's pinch zoom and swipe navigation on:
 	// they are off unless the page asks, as in WKWebView.
@@ -230,6 +229,9 @@ func (w *window) setUp(controller uintptr) {
 	w.applyWebViewBackground()
 
 	w.addUserScripts()
+	if w.host != nil {
+		forwardKeys(w)
+	}
 
 	// The add methods write a registration token. Its address is taken in
 	// each call (go:uintptrescapes), as a uintptr saved earlier goes stale
@@ -294,6 +296,7 @@ func (w *window) setUp(controller uintptr) {
 		w.addFilter("http://" + scheme + ".localhost/*")
 		w.addFilter("http://*." + scheme + ".localhost/*") // its other hosts
 	}
+	w.filterAllRequests()
 	withHandler(w.acceleratorKeyPressed, func(h uintptr) uintptr {
 		return comCall(controller, ctlAddAcceleratorKeyPressed, h, uintptr(unsafe.Pointer(&tok)))
 	})
@@ -308,9 +311,7 @@ func (w *window) setUp(controller uintptr) {
 		w.resizeWebView()
 	}
 	w.layoutControls() // above the webview's window
-	// Set even at 1: a profile can keep a per-origin zoom from an earlier run,
-	// and this value is what FitContent converts the page's CSS pixels with.
-	if o.Zoom > 0 {
+	if o.Zoom > 0 && o.Zoom != 1 {
 		w.SetZoom(o.Zoom)
 	}
 	w.b.applyWebViewTheme(w)
@@ -631,7 +632,7 @@ func (w *window) acceleratorKeyPressed(_, args uintptr) {
 // pageAccelerator returns the menu command a key pressed in a page runs,
 // if any. A page keeps the keys of the edit roles, as in a browser and in
 // native UI: WebView2 cuts, copies and pastes with the page's own events
-// and every format of the clipboard, where editRole pastes text alone.
+// and every format of the clipboard.
 func (w *window) pageAccelerator(key accelKey) (uint16, bool) {
 	cmd, ok := w.accels[key]
 	if !ok {
@@ -669,7 +670,7 @@ func (w *window) LoadURL(raw string) {
 func (w *window) LoadHTML(html, baseURL string) {
 	w.withWebView(func() {
 		w.programmatic = true
-		if baseURL == "" {
+		if !servedAtBase(baseURL) {
 			comCall(w.webview, wvNavigateToString, uintptr(unsafe.Pointer(u16(html))))
 			return
 		}
@@ -683,6 +684,15 @@ func (w *window) LoadHTML(html, baseURL string) {
 		}
 		comCall(w.webview, wvNavigate, uintptr(unsafe.Pointer(u16(target))))
 	})
+}
+
+// servedAtBase reports whether LoadHTML serves its document at baseURL,
+// answering the navigation's request for it. WebView2 requests no about:
+// URL, about:blank among them, so their documents, as those without a base
+// URL, go through NavigateToString, which shows them at about:blank.
+func servedAtBase(baseURL string) bool {
+	scheme, _, _ := strings.Cut(baseURL, ":")
+	return baseURL != "" && !strings.EqualFold(scheme, "about")
 }
 
 func (w *window) LoadFile(path, _ string) {
@@ -1191,7 +1201,7 @@ func (w *window) resourceRequested(_, args uintptr) {
 	}
 
 	if html, ok := w.htmlFor[uri]; ok && resource == document {
-		w.respond(args, 0, 200, map[string][]string{"Content-Type": {"text/html; charset=utf-8"}}, []byte(html))
+		w.respond(args, 0, http.StatusOK, http.Header{"Content-Type": {"text/html; charset=utf-8"}}, []byte(html))
 		return
 	}
 	target := w.appURL(uri)
@@ -1216,8 +1226,8 @@ func (w *window) resourceRequested(_, args uintptr) {
 	w.h.SchemeRequest(sreq)
 }
 
-func requestHeaders(req uintptr) map[string][]string {
-	h := map[string][]string{}
+func requestHeaders(req uintptr) http.Header {
+	h := http.Header{}
 	var headers, iter uintptr
 	if comCall(req, reqGetHeaders, uintptr(unsafe.Pointer(&headers))) != sOK || headers == 0 {
 		return h
@@ -1233,10 +1243,9 @@ func requestHeaders(req uintptr) map[string][]string {
 		if has == 0 {
 			return h
 		}
-		var rawName, rawValue uintptr
-		comCall(iter, iterGetCurrentHeader, uintptr(unsafe.Pointer(&rawName)), uintptr(unsafe.Pointer(&rawValue)))
-		name, value := takeWstr(rawName), takeWstr(rawValue)
-		h[name] = append(h[name], value)
+		var name, value uintptr
+		comCall(iter, iterGetCurrentHeader, uintptr(unsafe.Pointer(&name)), uintptr(unsafe.Pointer(&value)))
+		h.Add(takeWstr(name), takeWstr(value))
 		var more int32
 		comCall(iter, iterMoveNext, uintptr(unsafe.Pointer(&more)))
 		if more == 0 {
@@ -1247,7 +1256,7 @@ func requestHeaders(req uintptr) map[string][]string {
 
 // respond answers a WebResourceRequested event; deferral is 0 for a
 // synchronous answer.
-func (w *window) respond(args, deferral uintptr, status int, header map[string][]string, body []byte) {
+func (w *window) respond(args, deferral uintptr, status int, header http.Header, body []byte) {
 	var raw strings.Builder
 	for k, vs := range header {
 		for _, v := range vs {
@@ -1257,7 +1266,7 @@ func (w *window) respond(args, deferral uintptr, status int, header map[string][
 	stream := memStream(body)
 	var resp uintptr
 	hr := comCall(w.b.env, envCreateWebResourceResponse, stream, uintptr(status),
-		uintptr(unsafe.Pointer(u16(statusText(status)))), uintptr(unsafe.Pointer(u16(raw.String()))), uintptr(unsafe.Pointer(&resp)))
+		uintptr(unsafe.Pointer(u16(http.StatusText(status)))), uintptr(unsafe.Pointer(u16(raw.String()))), uintptr(unsafe.Pointer(&resp)))
 	release(stream)
 	if !failed(hr) && resp != 0 {
 		comCall(args, resReqPutResponse, resp)
@@ -1277,7 +1286,7 @@ type schemeResponse struct {
 	url      string
 	document bool // a page loads, rather than a resource of one
 	status   int
-	header   map[string][]string
+	header   http.Header
 	body     bytes.Buffer
 	done     bool
 }
@@ -1290,9 +1299,9 @@ func (r *schemeResponse) Write(p []byte) { r.body.Write(p) }
 
 // isDownload reports whether a page response is a file to save: an
 // attachment, or plain bytes.
-func isDownload(h map[string][]string) bool {
-	disposition := strings.ToLower(strings.TrimSpace(headerGet(h, "Content-Disposition")))
-	return strings.HasPrefix(disposition, "attachment") || strings.HasPrefix(headerGet(h, "Content-Type"), "application/octet-stream")
+func isDownload(h http.Header) bool {
+	disposition := strings.ToLower(strings.TrimSpace(h.Get("Content-Disposition")))
+	return strings.HasPrefix(disposition, "attachment") || strings.HasPrefix(h.Get("Content-Type"), "application/octet-stream")
 }
 
 func (r *schemeResponse) Finish() {
@@ -1301,12 +1310,12 @@ func (r *schemeResponse) Finish() {
 	}
 	r.done = true
 	if r.status == 0 {
-		r.status = 200
+		r.status = http.StatusOK
 	}
 	if r.document && r.status < 300 && isDownload(r.header) && !r.w.closed {
 		// WebView2 does not download what it gets from here: the page
 		// stays, and the app serves the URL again into a download.
-		r.w.respond(r.args, r.deferral, 204, nil, nil)
+		r.w.respond(r.args, r.deferral, http.StatusNoContent, nil, nil)
 		r.w.h.SchemeDownload(r.url)
 		r.release()
 		return
@@ -1325,7 +1334,7 @@ func (r *schemeResponse) Fail(err error) {
 	}
 	r.done = true
 	if !r.w.closed {
-		r.w.respond(r.args, r.deferral, 502, map[string][]string{"Content-Type": {"text/plain; charset=utf-8"}}, []byte(err.Error()))
+		r.w.respond(r.args, r.deferral, http.StatusBadGateway, http.Header{"Content-Type": {"text/plain; charset=utf-8"}}, []byte(err.Error()))
 	} else {
 		comCall(r.deferral, deferralComplete)
 	}
@@ -1357,36 +1366,4 @@ func (w *window) openScript() string {
 		return open.call(this, url, ...rest);
 	};
 })();`
-}
-
-// headerGet reads a header of a map, case-insensitively, as http.Header did.
-func headerGet(h map[string][]string, key string) string {
-	for k, vs := range h {
-		if strings.EqualFold(k, key) && len(vs) > 0 {
-			return vs[0]
-		}
-	}
-	return ""
-}
-
-// statusText is the reason phrase WebView2 puts in a response: the codes this
-// fork answers with, and "" for the rest.
-func statusText(status int) string {
-	switch status {
-	case 200:
-		return "OK"
-	case 204:
-		return "No Content"
-	case 307:
-		return "Temporary Redirect"
-	case 403:
-		return "Forbidden"
-	case 404:
-		return "Not Found"
-	case 500:
-		return "Internal Server Error"
-	case 502:
-		return "Bad Gateway"
-	}
-	return ""
 }

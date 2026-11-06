@@ -33,6 +33,7 @@ const (
 	mimBackground          = 0x0002
 	dtCalcRect             = 0x400
 	dtRight                = 0x002
+	dtNoClip               = 0x100
 	srcCopy                = 0x00CC0020
 	spiGetNonClientMetrics = 0x0029
 	layoutRTL              = 0x1
@@ -527,7 +528,12 @@ func (b *Backend) drawItem(hwnd uintptr, l *menuLook, d *drawItemStruct) {
 		}
 		old, _, _ := procSelectObject.Call(dc, f.text)
 		defer procSelectObject.Call(dc, old)
-		flags := uintptr(dtSingleLine | dtVCenter)
+		// The text goes as far as its advance, which the item is measured
+		// by, but some glyphs' ink reaches past it: Microsoft YaHei UI's,
+		// the menu font of Chinese Windows, by a pixel (#1028). DrawText
+		// would cut that off at the end of the text's rectangle; the
+		// padding past it has room for it.
+		flags := uintptr(dtSingleLine | dtVCenter | dtNoClip)
 		if state&odsNoAccel != 0 {
 			flags |= dtHidePrefix
 		}
@@ -538,7 +544,7 @@ func (b *Backend) drawItem(hwnd uintptr, l *menuLook, d *drawItemStruct) {
 		if l.accel != "" {
 			procSetTextColor.Call(dc, uintptr(secondary))
 			s := u16(l.accel)
-			procDrawTextW.Call(dc, uintptr(unsafe.Pointer(s)), ^uintptr(0), uintptr(unsafe.Pointer(&text)), dtSingleLine|dtVCenter|dtRight|dtNoPrefix)
+			procDrawTextW.Call(dc, uintptr(unsafe.Pointer(s)), ^uintptr(0), uintptr(unsafe.Pointer(&text)), dtSingleLine|dtVCenter|dtRight|dtNoPrefix|dtNoClip)
 		}
 	})
 	// Windows draws the arrow of a submenu after the item, in its colors:

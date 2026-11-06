@@ -61,6 +61,7 @@ func (w *Window) attachContent() {
 			}
 			return w.native.TitleBar()
 		},
+		Active: func() bool { return w.active },
 		OpenURL: func(url string, done func(error)) {
 			// The system may take a while, as Windows' shell does: not
 			// in the frame.
@@ -97,6 +98,9 @@ func (w *Window) attachContent() {
 				}
 			})
 		},
+	}
+	if f := w.fit; f != nil && f.native != nil && w.flyout != nil {
+		f.native(w, w.conn)
 	}
 	w.content.AttachContent(w.conn)
 }
@@ -168,7 +172,18 @@ func (w *Window) Invalidate() {
 //		win.Update(func() { app.items = items })
 //	}()
 //
-// It returns without waiting for fn.
+// It returns without waiting for fn. The Content builds again after every
+// call, whether fn changed the state or not. A goroutine that polls data
+// that rarely changes, as a counter or a status, compares it on the main
+// thread with RunOnMain, which redraws nothing, and calls Invalidate when
+// it changed:
+//
+//	mygo.RunOnMain(func() {
+//		if n != app.connections {
+//			app.connections = n
+//			win.Invalidate()
+//		}
+//	})
 func (w *Window) Update(fn func()) {
 	postMain(func() {
 		fn()
@@ -215,9 +230,15 @@ func (w *Window) captureContent() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// SurfaceEvent passes the surface's events to the Content. Files the
-// Content does not take go to OnFileDrop, when it has listeners.
+// SurfaceEvent passes the surface's events to the Content, noting while it
+// draws a frame (framing). Files the Content does not take go to
+// OnFileDrop, when it has listeners.
 func (h *windowHandler) SurfaceEvent(ev platform.SurfaceEvent) bool {
+	if ev.Kind == platform.SurfaceFrame {
+		framing := h.w.framing
+		h.w.framing = true
+		defer func() { h.w.framing = framing }()
+	}
 	resolveDataDrag(ev.Drag)
 	c := h.w.conn
 	if c == nil || c.Event == nil {

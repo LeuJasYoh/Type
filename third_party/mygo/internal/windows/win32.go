@@ -210,6 +210,8 @@ var (
 	procShellNotifyIconGetRect      = shell32.NewProc("Shell_NotifyIconGetRect")
 	procSHCreateItemFromParsingName = shell32.NewProc("SHCreateItemFromParsingName")
 	procSHAddToRecentDocs           = shell32.NewProc("SHAddToRecentDocs")
+	procSHSimpleIDListFromPath      = shell32.NewProc("SHSimpleIDListFromPath")
+	procSHCreateItemFromIDList      = shell32.NewProc("SHCreateItemFromIDList")
 
 	// shlwapi
 	procSHCreateMemStream = shlwapi.NewProc("SHCreateMemStream")

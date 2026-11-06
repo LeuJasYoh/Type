@@ -81,6 +81,36 @@ type WideGamutSurface interface {
 	WideGamut() bool
 }
 
+// GlassPlacement is where a surface shows the system's glass
+// (Surface.PlaceGlass), under its content, in DIPs from its top left.
+type GlassPlacement struct {
+	// ID identifies the element showing the glass from one frame to the
+	// next.
+	ID uint64
+	// Frame is the glass's box; Clip the part of it that shows.
+	Frame, Clip RectF
+	// Radii are the corners of the hole the content leaves, clockwise
+	// from the top left, and CornerRadius the one the glass view takes,
+	// where it takes one.
+	Radii        [4]float64
+	CornerRadius float64
+	// Style is NSGlassEffectView's style: 0 regular, 1 clear.
+	Style int
+	// Tint colors the glass, nil for none.
+	Tint *Color
+}
+
+// GlassSurface is a Surface that draws the system's glass under its
+// content, as macOS 26's NSGlassEffectView does, where the content leaves a
+// hole.
+type GlassSurface interface {
+	// NativeGlassSupported reports whether the system's glass is available.
+	NativeGlassSupported() bool
+	// PlaceGlass shows the glass where the content's last frame shows it,
+	// and hides the rest.
+	PlaceGlass(places []GlassPlacement)
+}
+
 // MaterialSurface is a Surface whose window can show a material
 // (vibrancy) behind the content, wherever its frames are transparent.
 type MaterialSurface interface {
@@ -309,6 +339,13 @@ const (
 	// the surface has the keyboard again, and the content moves the focus
 	// on from the web view's element.
 	WebViewTabOut
+	// WebViewKey reports Key with Mods, pressed in the page of WebView,
+	// which has the keyboard, and which the page left unhandled: it did
+	// not cancel it, type it into an editable element or compose with it,
+	// and it is neither Tab nor a modifier key on its own. The content
+	// takes it as if the web view's element had the focus, and the
+	// keyboard stays with the page.
+	WebViewKey
 )
 
 // EditCommands are the menu roles of edit commands, which native UI takes as
@@ -355,7 +392,7 @@ type SurfaceEvent struct {
 	// ID and Action are AccessAction's.
 	ID     uint64
 	Action AccessActionKind
-	// WebView is WebViewTabOut's.
+	// WebView is WebViewTabOut's and WebViewKey's.
 	WebView WebView
 	// Paced marks a SurfaceFrame of frames following each other at the
 	// display's refreshes (PacedSurface): the content may draw it later,

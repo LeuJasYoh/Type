@@ -46,9 +46,10 @@ const (
 	nifInfo    = 0x10
 	nifShowTip = 0x80
 
-	niifNone    = 0x00
-	niifUser    = 0x04
-	niifNoSound = 0x10
+	niifNone      = 0x00
+	niifUser      = 0x04
+	niifNoSound   = 0x10
+	niifLargeIcon = 0x20
 
 	ninBalloonTimeout   = wmUser + 4
 	ninBalloonUserClick = wmUser + 5
@@ -71,6 +72,8 @@ type tray struct {
 	// notification is the id of the notification the icon shows, if any.
 	notification string
 	temporary    bool // added only to show a notification
+	// balloon is the icon of the notification's image, if it has one.
+	balloon uintptr
 	// dark is the taskbar's appearance, as last told.
 	dark bool
 	// image is the PNG the icon shows, and template whether it is black
@@ -253,8 +256,7 @@ func (t *tray) Bounds() platform.Rect {
 	if !ok {
 		return platform.Rect{}
 	}
-	dpi := monitorDPI(monitorAt(int(r.Left), int(r.Top)))
-	return platform.Rect{X: toDIP(r.Left, dpi), Y: toDIP(r.Top, dpi), Width: toDIP(r.Right-r.Left, dpi), Height: toDIP(r.Bottom-r.Top, dpi)}
+	return screenSpace().rectToDIP(pixelRect(r))
 }
 
 // rect returns where the icon is on the screen, in physical pixels.
@@ -290,7 +292,15 @@ func (t *tray) Destroy() {
 		procDestroyIcon.Call(t.icon)
 		t.icon = 0
 	}
+	t.destroyBalloonIcon()
 	delete(t.b.trays, t.id)
+}
+
+func (t *tray) destroyBalloonIcon() {
+	if t.balloon != 0 {
+		procDestroyIcon.Call(t.balloon)
+		t.balloon = 0
+	}
 }
 
 // trayMessage handles the callback message of the notification area.
@@ -350,6 +360,11 @@ func (b *Backend) ShowNotification(n *platform.Notification, done func(error)) {
 }
 
 func (b *Backend) showNotification(n *platform.Notification) error {
+	if old := b.notifications[n.ID]; old != nil {
+		// Shown again under its ID: the notification it replaces gives up
+		// its tray, and its balloon's icon, rather than leaving them.
+		b.finishNotification(old.tray)
+	}
 	var t *tray
 	for _, x := range b.trays {
 		if !x.temporary && x.notification == "" && x.added {
@@ -381,6 +396,12 @@ func (b *Backend) showNotification(n *platform.Notification) error {
 	if n.Silent {
 		d.InfoFlags |= niifNoSound
 	}
+	if len(n.Image) > 0 && notificationIcon != nil {
+		if t.balloon = notificationIcon(n.Image, dpiOf(b.appHwnd)); t.balloon != 0 {
+			d.BalloonIcon = t.balloon
+			d.InfoFlags |= niifLargeIcon
+		}
+	}
 	if r, _, _ := procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&d))); r == 0 {
 		b.finishNotification(t)
 		return fmt.Errorf("mygo: cannot show the notification")
@@ -409,6 +430,7 @@ func (b *Backend) finishNotification(t *tray) {
 	}
 	d := t.data(nifInfo) // an empty balloon hides the current one
 	procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&d)))
+	t.destroyBalloonIcon()
 }
 
 // Global shortcuts.
