@@ -129,8 +129,15 @@
 - 实测（125% 缩放显示器）：`devicePixelRatio = 1.25` 时 CSS 视口恰为 540×480（设计尺寸），
   窗口加载前后 `ContentBounds` 一致、没有二次摆动。这是迁移前靠"量回来再适配"达到的
   同一效果，现在由框架保证。
+- **启动缩放为 100%，但不禁用滚轮**：装配层 `PageOptions.ZoomFactor: 1`，框架创建窗口时
+  无条件复位一次 `ZoomFactor`，清掉用户数据目录里残留的 per-origin zoom，保证首帧就是
+  设计尺寸；`IsZoomControlEnabled` 保持开启，Ctrl+滚轮与 Ctrl+± 仍可用。用户主动缩放后
+  CSS 视口会变小，由低视口媒体查询兜住裁切；框架记录的 zoom 仍是 1，但
+  `Min/MaxWidth/Height` 兜住了窗口尺寸，不会乱跳。系统 DPI 仍由框架换算，不受此约束影响。
 - 装不进工作区时由 `MaxWidth/MaxHeight` 与框架的工作区约束兜界，界面仍可滚动；
-  `.section` 下限 217px、各行列 `flex-shrink: 0` 的兜底样式保留。
+  `.section` 下限 217px、各行列 `flex-shrink: 0` 的兜底样式保留。CSS 视口跌破 540×480
+  时 `style.css` 的低视口媒体查询放开根元素下限、把输入区下限收到 120/98px，
+  只在该档生效，540×480 及以上一像素不变。
 - 复现配方（不改代码）：`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--force-device-scale-factor=1.75`
   + dev 构建，观察视口是否仍等于设计尺寸。
 - **`--ui-scale` 只缩放数值型细节**：内边距、间距、圆角、控件高度、图标边长；`border-width` 与

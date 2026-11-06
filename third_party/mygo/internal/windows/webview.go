@@ -211,6 +211,8 @@ func (w *window) setUp(controller uintptr) {
 		release(s3)
 	}
 	comCall(s, setPutAreDefaultContextMenusEnabled, 1)
+	// Keep the user's zoom: the page handles a smaller CSS viewport itself.
+	// Startup resets ZoomFactor so a leftover per-origin zoom cannot persist.
 	comCall(s, setPutIsZoomControlEnabled, 1)
 	// WebView2 has a touchscreen's pinch zoom and swipe navigation on:
 	// they are off unless the page asks, as in WKWebView.
@@ -306,7 +308,9 @@ func (w *window) setUp(controller uintptr) {
 		w.resizeWebView()
 	}
 	w.layoutControls() // above the webview's window
-	if o.Zoom > 0 && o.Zoom != 1 {
+	// Set even at 1: a profile can keep a per-origin zoom from an earlier run,
+	// and this value is what FitContent converts the page's CSS pixels with.
+	if o.Zoom > 0 {
 		w.SetZoom(o.Zoom)
 	}
 	w.b.applyWebViewTheme(w)

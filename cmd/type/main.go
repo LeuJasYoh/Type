@@ -16,7 +16,7 @@ import (
 	"github.com/egoist/mygo"
 )
 
-var version = "2.0.0"
+var version = "2.0.1"
 
 // 窗口的设计尺寸(DIP)。Width/Height 是客户区尺寸, Min/Max 给 FitContent 兜界。
 // minWindowW 同时是前端 --ui-scale 的基准宽度, 由契约测试双端核对。
@@ -146,10 +146,14 @@ func main() {
 			}
 		}()
 
+		// 启动时把页面缩放复位到 100%: 用户数据目录可能残留 per-origin zoom,
+		// 让首帧就不是设计尺寸。Ctrl+滚轮仍可用, 低视口兜底保证放大后不裁切。
+		// 详见 docs/invariants.md「内容缩放与界面几何」。
 		pageOpts := mygo.PageOptions{
 			DevTools:             devTools(),
 			BackgroundThrottling: mygo.ThrottlingOff,
 			PreloadScript:        preloadShim,
+			ZoomFactor:           1,
 		}
 		if u := devURL(); u != "" {
 			pageOpts.TrustedOrigins = []string{u}

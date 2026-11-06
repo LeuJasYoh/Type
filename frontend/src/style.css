@@ -788,3 +788,23 @@ body {
     animation: none;
   }
 }
+
+/* ── 低视口兜底：工作区不足或页面缩放让 CSS 视口跌破 540×480 时，
+   放开 bridge 注入的根元素下限并收紧输入区，正常档不命中 ── */
+@media (max-width: 539.98px), (max-height: 479.98px) {
+  html {
+    width: auto;
+    min-width: 0;
+    min-height: 0;
+  }
+  .app-container {
+    gap: calc(8px * var(--ui-scale));
+    padding: calc(8px * var(--ui-scale)) calc(12px * var(--ui-scale)) calc(10px * var(--ui-scale));
+  }
+  .section {
+    min-height: 120px;
+  }
+  .input-wrap {
+    min-height: 98px;
+  }
+}
